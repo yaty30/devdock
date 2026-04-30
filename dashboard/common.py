@@ -12,6 +12,14 @@ from tkinter import ttk, filedialog, messagebox
 import configparser
 from dataclasses import dataclass, field
 
+@dataclass(frozen=True)
+class DashboardProject:
+    id: str
+    name: str
+    config_path: str = ""
+    asset_path: str = ""
+    build_profile: str = ""
+
 def get_app_dir() -> str:
     """Return the folder users should place/edit app.config in.
 
@@ -35,6 +43,43 @@ def get_bundled_config_path() -> str | None:
 
 APP_DIR = get_app_dir()
 CONFIG_FILE = os.path.join(APP_DIR, "app.config")
+ACTIVE_PROJECT_FILE = os.path.join(APP_DIR, ".dashboard_active_project")
+
+PROJECT_REGISTRY: tuple[DashboardProject, ...] = (
+    DashboardProject(id="iap", name="Project IAP", config_path=os.path.join(APP_DIR, "app.config")),
+    DashboardProject(id="wp", name="Project WP", config_path=os.path.join(APP_DIR, "projects", "wp", "app.config")),
+)
+DEFAULT_PROJECT_ID = "iap"
+
+def get_project_registry() -> tuple[DashboardProject, ...]:
+    return PROJECT_REGISTRY
+
+def get_project_by_id(project_id: str | None) -> DashboardProject:
+    pid = (project_id or "").strip().lower()
+    for project in PROJECT_REGISTRY:
+        if project.id == pid:
+            return project
+    return PROJECT_REGISTRY[0]
+
+def get_active_project_id() -> str:
+    try:
+        with open(ACTIVE_PROJECT_FILE, "r", encoding="utf-8", errors="replace") as f:
+            value = f.read().strip().lower()
+        return get_project_by_id(value).id
+    except Exception:
+        return get_project_by_id(DEFAULT_PROJECT_ID).id
+
+def set_active_project_id(project_id: str) -> str:
+    project = get_project_by_id(project_id)
+    os.makedirs(APP_DIR, exist_ok=True)
+    with open(ACTIVE_PROJECT_FILE, "w", encoding="utf-8") as f:
+        f.write(project.id)
+    return project.id
+
+def get_config_file_for_project(project_id: str | None = None) -> str:
+    project = get_project_by_id(project_id or get_active_project_id())
+    path = project.config_path or CONFIG_FILE
+    return os.path.abspath(path)
 
 DEFAULT_BUILDERS = [
     {"profile": "local", "goal": "clean install", "confirm_before_run": "false"},
@@ -107,23 +152,24 @@ def _default_builder_sections() -> list[dict]:
     return [builder.copy() for builder in DEFAULT_BUILDERS]
 
 
-def ensure_config_file() -> None:
+def ensure_config_file(config_file: str | None = None) -> None:
     """Create external app.config next to the .py/.exe if it does not exist yet."""
-    if os.path.exists(CONFIG_FILE):
+    target_config = config_file or get_config_file_for_project()
+    if os.path.exists(target_config):
         return
 
-    os.makedirs(APP_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(target_config), exist_ok=True)
 
     bundled_config = get_bundled_config_path()
     if bundled_config:
-        with open(bundled_config, "r", encoding="utf-8", errors="replace") as src, open(CONFIG_FILE, "w", encoding="utf-8") as dst:
+        with open(bundled_config, "r", encoding="utf-8", errors="replace") as src, open(target_config, "w", encoding="utf-8") as dst:
             dst.write(src.read())
         return
 
     config = configparser.ConfigParser()
     for section, values in DEFAULT_CONFIG.items():
         config[section] = values
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    with open(target_config, "w", encoding="utf-8") as f:
         f.write("# Dashboard configuration\n")
         f.write("# Users should edit this from the Settings window.\n")
         f.write("# Builder commands are generated from Maven config + build profiles.\n")
@@ -199,24 +245,26 @@ def _load_layout_config(config: configparser.ConfigParser) -> dict:
     return values
 
 
-def _get_existing_layout_config() -> dict:
-    ensure_config_file()
+def _get_existing_layout_config(config_file: str | None = None) -> dict:
+    target_config = config_file or get_config_file_for_project()
+    ensure_config_file(target_config)
     config = configparser.ConfigParser()
-    config.read(CONFIG_FILE, encoding="utf-8")
+    config.read(target_config, encoding="utf-8")
     return _load_layout_config(config)
 
 
-def save_layout_config(layout_values: dict) -> None:
+def save_layout_config(layout_values: dict, config_file: str | None = None) -> None:
     """Persist layout/window sizing without changing user service or builder settings."""
-    ensure_config_file()
+    target_config = config_file or get_config_file_for_project()
+    ensure_config_file(target_config)
     config = configparser.ConfigParser()
-    config.read(CONFIG_FILE, encoding="utf-8")
+    config.read(target_config, encoding="utf-8")
     if not config.has_section("layout"):
         config.add_section("layout")
     for key, default_value in DEFAULT_CONFIG.get("layout", {}).items():
         value = layout_values.get(key, config.get("layout", key, fallback=default_value))
         config.set("layout", key, str(value))
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    with open(target_config, "w", encoding="utf-8") as f:
         f.write("# Dashboard configuration\n")
         f.write("# These values can be edited from the app Settings window.\n")
         f.write("# Builder commands are generated from Maven config + build profiles.\n")
@@ -225,11 +273,12 @@ def save_layout_config(layout_values: dict) -> None:
         config.write(f)
 
 
-def load_config_values_for_edit() -> dict:
+def load_config_values_for_edit(config_file: str | None = None) -> dict:
     """Return editable/raw config values, without expanding paths."""
-    ensure_config_file()
+    target_config = config_file or get_config_file_for_project()
+    ensure_config_file(target_config)
     config = configparser.ConfigParser()
-    config.read(CONFIG_FILE, encoding="utf-8")
+    config.read(target_config, encoding="utf-8")
 
     values = {
         "log_file_path": config.get("paths", "log_file_path", fallback=config.get("paths", "log_path_file", fallback=DEFAULT_CONFIG["paths"]["log_file_path"])).strip(),
@@ -263,10 +312,11 @@ def load_config_values_for_edit() -> dict:
     return _migrate_old_batch_config(config, values)
 
 
-def save_app_config(values: dict) -> None:
+def save_app_config(values: dict, config_file: str | None = None) -> None:
     """Persist dashboard settings to app.config."""
     # Preserve automatically saved layout settings when user saves Settings.
-    existing_layout = _get_existing_layout_config()
+    target_config = config_file or get_config_file_for_project()
+    existing_layout = _get_existing_layout_config(target_config)
     config = configparser.ConfigParser()
     config["paths"] = {
         "log_file_path": values.get("log_file_path", values.get("log_path_file", "")).strip(),
@@ -307,7 +357,7 @@ def save_app_config(values: dict) -> None:
 
     config["layout"] = existing_layout
 
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+    with open(target_config, "w", encoding="utf-8") as f:
         f.write("# Dashboard configuration\n")
         f.write("# These values can be edited from the app Settings window.\n")
         f.write("# Builder commands are generated from Maven config + build profiles.\n")
@@ -335,8 +385,9 @@ def build_maven_command(builder: dict, builder_config: dict) -> str:
     return " ".join(parts)
 
 
-def load_app_config() -> dict:
-    raw = load_config_values_for_edit()
+def load_app_config(project_id: str | None = None) -> dict:
+    target_config = get_config_file_for_project(project_id)
+    raw = load_config_values_for_edit(target_config)
 
     def resolve_path(value: str) -> str:
         value = os.path.expandvars(os.path.expanduser((value or "").strip()))
@@ -389,7 +440,9 @@ def load_app_config() -> dict:
         "layout": raw.get("layout", DEFAULT_CONFIG.get("layout", {}).copy()),
     }
 
-APP_CONFIG = load_app_config()
+ACTIVE_PROJECT_ID = get_active_project_id()
+CONFIG_FILE = get_config_file_for_project(ACTIVE_PROJECT_ID)
+APP_CONFIG = load_app_config(ACTIVE_PROJECT_ID)
 LOG_PATH_FILE = APP_CONFIG["log_path_file"]
 GIT_PROJECT_DIR = APP_CONFIG["git_project_dir"]
 FRONTEND_NAME = APP_CONFIG["frontend_name"]
