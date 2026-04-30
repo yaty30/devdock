@@ -383,6 +383,8 @@ class ConfigEditorDialog:
                 self.status_var.set("Warnings: " + "  ".join(warnings))
                 return
         save_app_config(values)
-        self.app.reload_app_config()
+        self.app.reload_app_config(announce=True)
+        if hasattr(self.app, "_set_project_visible"):
+            self.app._set_project_visible(get_active_project_id())
         self.window.destroy()
-        messagebox.showinfo("Settings Saved", "Settings were saved to app.config.", parent=self.root)
+        messagebox.showinfo("Settings Saved", "Settings were saved for the current project.", parent=self.root)
