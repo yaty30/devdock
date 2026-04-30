@@ -430,6 +430,30 @@ class DashboardApp:
             self.style.layout("Dashboard.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
         except Exception:
             pass
+
+        # Main workspace uses a custom segmented tab bar instead of native
+        # ttk.Notebook tabs. Hiding native tabs also removes the light outer
+        # notebook border that was wrapping the main content area.
+        self.style.configure(
+            "MainHidden.TNotebook",
+            background=BG,
+            borderwidth=0,
+            relief="flat",
+            tabmargins=(0, 0, 0, 0),
+            padding=0,
+            bordercolor=BG,
+            lightcolor=BG,
+            darkcolor=BG,
+        )
+        try:
+            self.style.layout("MainHidden.TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+        except Exception:
+            pass
+        try:
+            # Hide native tabs entirely while keeping Notebook page switching.
+            self.style.layout("MainHidden.TNotebook.Tab", [])
+        except Exception:
+            pass
         self.style.configure(
             "Dashboard.TNotebook.Tab",
             background=PANEL_BG,
@@ -451,6 +475,85 @@ class DashboardApp:
             lightcolor=[("selected", BTN_ACTIVE), ("active", BTN_BG), ("!active", PANEL_BG)],
             darkcolor=[("selected", BTN_ACTIVE), ("active", BTN_BG), ("!active", PANEL_BG)],
         )
+
+    def _create_main_tab_bar(self, parent):
+        """Create a theme-aligned segmented tab selector for the main workspace."""
+        bar = tk.Frame(parent, bg=BG, bd=0, highlightthickness=0)
+        bar.pack(fill="x", padx=(2, 0), pady=(0, 4))
+
+        group = tk.Frame(
+            bar,
+            bg=BORDER,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=BORDER,
+        )
+        group.pack(side="left")
+
+        self._main_tab_buttons = []
+        tab_specs = (("Dashboard", 0), ("Git Terminal", 1))
+
+        def make_tab(label: str, index: int):
+            btn = _StateAwareButton(
+                group,
+                text=label,
+                command=lambda i=index: self._select_main_tab_index(i),
+                bg=PANEL_BG,
+                fg=MUTED,
+                activebackground=BTN_BG,
+                activeforeground=TEXT_FG,
+                relief="flat",
+                bd=0,
+                borderwidth=0,
+                highlightthickness=0,
+                padx=22,
+                pady=7,
+                font=("Calibri", 10, "bold"),
+                normal_cursor="hand2",
+                disabled_cursor="",
+            )
+            btn.pack(side="left", padx=0, pady=0)
+            btn.bind("<Enter>", lambda _e, b=btn, i=index: self._on_main_tab_hover(b, i, True))
+            btn.bind("<Leave>", lambda _e, b=btn, i=index: self._on_main_tab_hover(b, i, False))
+            self._main_tab_buttons.append(btn)
+
+        for label, index in tab_specs:
+            if index:
+                tk.Frame(group, width=1, bg=BORDER, bd=0, highlightthickness=0).pack(side="left", fill="y")
+            make_tab(label, index)
+
+        return bar
+
+    def _main_tab_index(self) -> int:
+        try:
+            selected = self.notebook.select()
+            return self.notebook.index(selected)
+        except Exception:
+            return 0
+
+    def _select_main_tab_index(self, index: int):
+        try:
+            self.notebook.select(index)
+        except Exception:
+            return
+        self._update_main_tab_bar()
+
+    def _on_main_tab_hover(self, button, index: int, entering: bool):
+        if index == self._main_tab_index():
+            return
+        try:
+            button.configure(bg=BTN_BG if entering else PANEL_BG, fg=TEXT_FG if entering else MUTED)
+        except Exception:
+            pass
+
+    def _update_main_tab_bar(self, _event=None):
+        active = self._main_tab_index()
+        for index, button in enumerate(getattr(self, "_main_tab_buttons", [])):
+            if index == active:
+                button.configure(bg=BTN_ACTIVE, fg="#69a8ff", activebackground=BTN_ACTIVE, activeforeground="#69a8ff")
+            else:
+                button.configure(bg=PANEL_BG, fg=MUTED, activebackground=BTN_BG, activeforeground=TEXT_FG)
 
     def reload_app_config(self, announce: bool = False):
         global APP_CONFIG, LOG_PATH_FILE, GIT_PROJECT_DIR
@@ -838,13 +941,16 @@ class DashboardApp:
         self.toggle_left_btn = icon_button(toolbar, "toggle_left", self.toggle_left_panel, "Toggle left panel")
         self.toggle_left_btn.pack(side="right", padx=(4, 0))
 
-        self.notebook = ttk.Notebook(outer, style="Dashboard.TNotebook")
-        self.notebook.pack(fill="both", expand=True, ipadx=0, ipady=0)
+        self._create_main_tab_bar(outer)
 
-        dashboard_tab = tk.Frame(self.notebook, bg=BG)
+        self.notebook = ttk.Notebook(outer, style="MainHidden.TNotebook", padding=0)
+        self.notebook.pack(fill="both", expand=True, ipadx=0, ipady=0)
+        self.notebook.bind("<<NotebookTabChanged>>", self._update_main_tab_bar)
+
+        dashboard_tab = tk.Frame(self.notebook, bg=BG, bd=0, highlightthickness=0)
         self.notebook.add(dashboard_tab, text="Dashboard")
 
-        content = tk.Frame(dashboard_tab, bg=BG)
+        content = tk.Frame(dashboard_tab, bg=BG, bd=0, highlightthickness=0)
         content.pack(fill="both", expand=True, padx=0, pady=(4, 0))
 
         # Three-column dashboard layout:
@@ -852,17 +958,17 @@ class DashboardApp:
         #   center = WildFly
         #   right  = Build Status + Build Log
         self.dashboard_pane = tk.PanedWindow(
-            content, orient="horizontal", bg=BG, bd=0, sashwidth=4,
+            content, orient="horizontal", bg=BG, bd=0, borderwidth=0, sashwidth=4,
             sashrelief="flat", opaqueresize=True, showhandle=False, handlepad=0, handlesize=0,
         )
         self.dashboard_pane.pack(fill="both", expand=True)
 
-        self.left_col = tk.Frame(self.dashboard_pane, bg=BG)
-        self.center_col = tk.Frame(self.dashboard_pane, bg=BG)
-        self.right_col = tk.Frame(self.dashboard_pane, bg=BG)
+        self.left_col = tk.Frame(self.dashboard_pane, bg=BG, bd=0, highlightthickness=0)
+        self.center_col = tk.Frame(self.dashboard_pane, bg=BG, bd=0, highlightthickness=0)
+        self.right_col = tk.Frame(self.dashboard_pane, bg=BG, bd=0, highlightthickness=0)
 
         self.middle_pane = tk.PanedWindow(
-            self.left_col, orient="vertical", bg=BG, bd=0, sashwidth=4,
+            self.left_col, orient="vertical", bg=BG, bd=0, borderwidth=0, sashwidth=4,
             sashrelief="flat", opaqueresize=True, showhandle=False, handlepad=0, handlesize=0,
         )
         self.middle_pane.pack(fill="both", expand=True)
@@ -874,13 +980,13 @@ class DashboardApp:
             self.middle_pane, "Log Tail", self, compact=False,
             actions=[("Open Log File", self.open_current_log_file)],
         )
-        self.middle_pane.add(self.log_pane.frame, minsize=180, stretch="always", padx=0, pady=4)
+        self.middle_pane.add(self.log_pane.frame, minsize=180, stretch="always", padx=0, pady=0)
 
         self.wildfly_pane = TextPane(self.center_col, "WildFly", self)
         self.wildfly_pane.frame.pack(fill="both", expand=True)
 
         self.build_pane = tk.PanedWindow(
-            self.right_col, orient="vertical", bg=BG, bd=0, sashwidth=4,
+            self.right_col, orient="vertical", bg=BG, bd=0, borderwidth=0, sashwidth=4,
             sashrelief="flat", opaqueresize=True, showhandle=False, handlepad=0, handlesize=0,
         )
         self.build_pane.pack(fill="both", expand=True)
@@ -892,13 +998,14 @@ class DashboardApp:
             self.build_pane, "Build Log", self, compact=False, collapsible=True,
             collapsed=True, collapsed_height=42, actions=[("Open Build Log", self.open_build_log_file)],
         )
-        self.build_pane.add(self.build_log_pane.frame, minsize=42, stretch="never", padx=0, pady=4)
+        self.build_pane.add(self.build_log_pane.frame, minsize=42, stretch="never", padx=0, pady=0)
         self._adjusting_build_pane = False
         self.build_pane.bind("<Configure>", self._on_build_pane_configure)
         self._apply_panel_visibility()
 
         self.git_terminal = GitTerminalTab(self.notebook, self)
         self.notebook.add(self.git_terminal.frame, text="Git Terminal")
+        self._update_main_tab_bar()
 
         # Bottom status bar and bottom-right version tag are intentionally hidden.
         # Keep footer_var as a non-visible status sink so existing code can continue
@@ -929,7 +1036,8 @@ class DashboardApp:
             return
         key = (icon_name, "on" if enabled else "off", 24)
         if key not in self._icon_image_cache:
-            fg = BLUE if enabled else MUTED
+            # Keep OFF state visibly dimmer than general muted text.
+            fg = BLUE if enabled else "#5f6877"
             self._icon_image_cache[key] = _make_svg_photo(icon_name, fg, BTN_BG, size=24)
         button.configure(image=self._icon_image_cache[key], state="normal")
 

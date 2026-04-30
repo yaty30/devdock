@@ -127,8 +127,11 @@ class TextPane:
             if widget is None:
                 continue
             widget.bind("<MouseWheel>", self._handle_mousewheel)
+            widget.bind("<Shift-MouseWheel>", self._handle_mousewheel)
             widget.bind("<Button-4>", self._handle_mousewheel)
             widget.bind("<Button-5>", self._handle_mousewheel)
+            widget.bind("<Shift-Button-4>", self._handle_mousewheel)
+            widget.bind("<Shift-Button-5>", self._handle_mousewheel)
         self.text.bind("<KeyRelease>", self._handle_scroll)
         self.text.bind("<ButtonRelease-1>", self._handle_scroll)
         self.text.bind("<Control-f>", self.focus_search)
@@ -167,9 +170,13 @@ class TextPane:
             else:
                 units = int(-1 * (event.delta / 120)) if event else 0
             if units:
-                self.text.yview_scroll(units, "units")
-                if self.line_numbers is not None:
-                    self.line_numbers.yview_scroll(units, "units")
+                shift_pressed = bool(event and (getattr(event, "state", 0) & 0x0001))
+                if shift_pressed:
+                    self.text.xview_scroll(units, "units")
+                else:
+                    self.text.yview_scroll(units, "units")
+                    if self.line_numbers is not None:
+                        self.line_numbers.yview_scroll(units, "units")
             return "break"
         finally:
             self._handle_scroll()
