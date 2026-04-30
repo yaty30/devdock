@@ -16,7 +16,7 @@ def _sync_config_globals():
         "APP_CONFIG", "LOG_PATH_FILE", "GIT_PROJECT_DIR",
         "FRONTEND_NAME", "FRONTEND_DIR", "FRONTEND_COMMAND",
         "WILDFLY_DIR", "WILDFLY_COMMAND", "BUILD_WORK_DIR",
-        "BUILDER_CONFIG", "BUILDERS", "LAYOUT_CONFIG",
+        "BUILDER_CONFIG", "BUILDERS", "LAYOUT_CONFIG", "CONFIG_FILE", "ACTIVE_PROJECT_ID",
     ]
     for module in (common, git_terminal, settings_dialog):
         for name in names:
@@ -141,8 +141,9 @@ class DashboardApp:
     def reload_app_config(self):
         global APP_CONFIG, LOG_PATH_FILE, GIT_PROJECT_DIR
         global FRONTEND_NAME, FRONTEND_DIR, FRONTEND_COMMAND, WILDFLY_DIR, WILDFLY_COMMAND
-        global BUILD_WORK_DIR, BUILDER_CONFIG, BUILDERS, LAYOUT_CONFIG
-        APP_CONFIG = load_app_config()
+        global BUILD_WORK_DIR, BUILDER_CONFIG, BUILDERS, LAYOUT_CONFIG, CONFIG_FILE, ACTIVE_PROJECT_ID
+        CONFIG_FILE = get_config_file_for_project(ACTIVE_PROJECT_ID)
+        APP_CONFIG = load_app_config(ACTIVE_PROJECT_ID)
         LOG_PATH_FILE = APP_CONFIG["log_path_file"]
         GIT_PROJECT_DIR = APP_CONFIG["git_project_dir"]
         FRONTEND_NAME = APP_CONFIG["frontend_name"]
@@ -156,7 +157,7 @@ class DashboardApp:
         LAYOUT_CONFIG = APP_CONFIG.get("layout", LAYOUT_CONFIG)
         _sync_config_globals()
         if hasattr(self, "footer_var"):
-            self.footer_var.set(f"Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
+            self.footer_var.set(f"Project: {self.current_project.name}  |  Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
         if hasattr(self, "vite_pane"):
             self.vite_pane.title_var.set(FRONTEND_NAME or "Frontend")
         if hasattr(self, "build_button_frame"):
@@ -165,6 +166,24 @@ class DashboardApp:
         self.enqueue("log", f"\n[{time.strftime('%H:%M:%S')}] Settings reloaded from app.config.\n")
         if hasattr(self, "git_terminal"):
             self.git_terminal.refresh_config_labels()
+
+    @property
+    def current_project(self) -> DashboardProject:
+        return get_project_by_id(ACTIVE_PROJECT_ID)
+
+    def set_active_project_id(self, project_id: str):
+        global ACTIVE_PROJECT_ID
+        selected = get_project_by_id(project_id)
+        ACTIVE_PROJECT_ID = set_active_project_id(selected.id)
+        self.reload_app_config()
+
+    def on_project_select(self, _event=None):
+        selected_name = self.project_name_var.get().strip()
+        for p in get_project_registry():
+            if p.name == selected_name:
+                self.set_active_project_id(p.id)
+                self.enqueue("log", f"\n[{time.strftime('%H:%M:%S')}] Switched to {p.name}\n")
+                return
 
     def open_settings(self):
         ConfigEditorDialog(self)
@@ -232,6 +251,19 @@ class DashboardApp:
             )
 
         self.toolbar_button_factory = button
+        project_box = tk.Frame(toolbar, bg=BG)
+        project_box.pack(side="left", padx=(0, 10))
+        tk.Label(project_box, text="Project", bg=BG, fg=MUTED, font=("Calibri", 10, "bold")).pack(side="left", padx=(0, 6))
+        self.project_name_var = tk.StringVar(value=self.current_project.name)
+        self.project_selector = ttk.Combobox(
+            project_box,
+            textvariable=self.project_name_var,
+            values=[p.name for p in get_project_registry()],
+            state="readonly",
+            width=16,
+        )
+        self.project_selector.pack(side="left")
+        self.project_selector.bind("<<ComboboxSelected>>", self.on_project_select)
         button(toolbar, "Restart WildFly", lambda: self.restart_service("wildfly", WILDFLY_COMMAND, WILDFLY_DIR, self.wildfly_pane)).pack(side="left", padx=(0, 6))
         button(toolbar, f"Restart {FRONTEND_NAME or 'Frontend'}", lambda: self.restart_service("vite", FRONTEND_COMMAND, FRONTEND_DIR, self.vite_pane)).pack(side="left", padx=6)
 
@@ -343,7 +375,7 @@ class DashboardApp:
 
         footer = tk.Frame(outer, bg=BG)
         footer.pack(fill="x", pady=(8, 0))
-        self.footer_var = tk.StringVar(value=f"Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
+        self.footer_var = tk.StringVar(value=f"Project: {self.current_project.name}  |  Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
         tk.Label(footer, textvariable=self.footer_var, bg=BG, fg=MUTED, anchor="w",
                  font=("Calibri", 10)).pack(fill="x")
 
