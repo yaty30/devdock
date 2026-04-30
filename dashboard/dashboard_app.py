@@ -1012,6 +1012,13 @@ class DashboardApp:
         elif self.vite_pane.status_var.get().startswith("Starting"):
             self.vite_pane.set_status("Stopped", MUTED)
 
+        runtime_state = "Running" if wildfly_running and wildfly_ready else ("Starting" if wildfly_running else "Stopped")
+        self.project_runtime_status[ACTIVE_PROJECT_ID] = {
+            "runtime": runtime_state,
+            "wildfly": "Running" if wildfly_running else "Stopped",
+            "frontend": "Running" if vite_running else "Stopped",
+        }
+
         if not self.stop_event.is_set():
             self.root.after(500, self.refresh_timers)
 

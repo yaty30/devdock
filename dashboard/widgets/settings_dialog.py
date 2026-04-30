@@ -14,6 +14,7 @@ class ConfigEditorDialog:
         self.values = load_config_values_for_edit()
         self.entries: dict[str, tk.StringVar] = {}
         self.builder_rows: list[dict] = []
+        self._observed_project_id = get_active_project_id()
 
         container = tk.Frame(self.window, bg=BG)
         container.pack(fill="both", expand=True, padx=18, pady=16)
@@ -76,6 +77,7 @@ class ConfigEditorDialog:
     def _build_general_tab(self):
         form = tk.Frame(self.general_tab, bg=BG)
         form.pack(fill="both", expand=True, padx=10, pady=12)
+        self._build_current_project_section(form)
         fields = [
             ("log_file_path", "Application Log File Path", "file"),
             ("git_project_dir", "Git Project Directory", "dir"),
@@ -85,9 +87,71 @@ class ConfigEditorDialog:
             ("wildfly_dir", "WildFly Bin Directory", "dir"),
             ("wildfly_command", "WildFly Start Command", "text"),
         ]
-        for idx, (key, label, browse_type) in enumerate(fields):
+        for idx, (key, label, browse_type) in enumerate(fields, start=7):
             self._add_field(form, idx, key, label, browse_type)
         form.grid_columnconfigure(1, weight=1)
+
+    def _build_current_project_section(self, parent):
+        panel = tk.Frame(parent, bg=PANEL_BG, highlightthickness=1, highlightbackground=BORDER)
+        panel.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
+        tk.Label(panel, text="Current Project", bg=PANEL_BG, fg="#f8fafc", font=("Calibri", 12, "bold"), anchor="w").grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 6))
+        self.current_project_vars = {
+            "name": tk.StringVar(value=""),
+            "id": tk.StringVar(value=""),
+            "root": tk.StringVar(value=""),
+            "config": tk.StringVar(value=""),
+            "runtime": tk.StringVar(value=""),
+            "port": tk.StringVar(value=""),
+        }
+        labels = [("Project", "name"), ("Project ID", "id"), ("Root Path", "root"), ("Config", "config"), ("Runtime", "runtime"), ("Port", "port")]
+        for row, (label, key) in enumerate(labels, start=1):
+            tk.Label(panel, text=f"{label}:", bg=PANEL_BG, fg=MUTED, font=("Calibri", 10, "bold"), anchor="w").grid(row=row, column=0, sticky="nw", padx=(10, 8), pady=2)
+            tk.Label(panel, textvariable=self.current_project_vars[key], bg=PANEL_BG, fg=TEXT_FG, font=("Calibri", 10), anchor="w", justify="left", wraplength=620).grid(row=row, column=1, sticky="ew", padx=(0, 10), pady=2)
+        panel.grid_columnconfigure(1, weight=1)
+        self._refresh_current_project_section()
+        self.window.after(800, self._poll_active_project)
+
+    def _extract_wildfly_port(self, command: str) -> str:
+        cmd = (command or "").strip()
+        match = re.search(r"(?:jboss\.socket\.binding\.port-offset|jboss\.http\.port)\s*=?\s*(\d+)", cmd, re.IGNORECASE)
+        if not match:
+            return "Not available"
+        if "port-offset" in cmd.lower():
+            try:
+                return str(8080 + int(match.group(1)))
+            except Exception:
+                return "Not available"
+        return match.group(1)
+
+    def _refresh_current_project_section(self):
+        project_id = get_active_project_id()
+        project = get_project_by_id(project_id)
+        values = self.values or {}
+        if not project:
+            for var in self.current_project_vars.values():
+                var.set("No project selected. Add or select a project to configure settings.")
+            return
+        runtime = "Unknown"
+        if hasattr(self.app, "get_runtime_status_for_project"):
+            runtime = self.app.get_runtime_status_for_project(project.id).get("runtime", "Unknown")
+        self.current_project_vars["name"].set(project.name)
+        self.current_project_vars["id"].set(project.id)
+        self.current_project_vars["root"].set(values.get("git_project_dir", ""))
+        self.current_project_vars["config"].set(get_config_file_for_project(project.id))
+        self.current_project_vars["runtime"].set(runtime)
+        self.current_project_vars["port"].set(self._extract_wildfly_port(values.get("wildfly_command", "")))
+
+    def _poll_active_project(self):
+        if not self.window.winfo_exists():
+            return
+        current = get_active_project_id()
+        if current != self._observed_project_id:
+            self._observed_project_id = current
+            self.values = load_config_values_for_edit()
+            self._refresh_current_project_section()
+        else:
+            self._refresh_current_project_section()
+        self.window.after(800, self._poll_active_project)
 
     def _build_builders_tab(self):
         outer = tk.Frame(self.builders_tab, bg=BG)
