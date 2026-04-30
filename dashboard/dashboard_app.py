@@ -16,7 +16,7 @@ def _sync_config_globals():
         "APP_CONFIG", "LOG_PATH_FILE", "GIT_PROJECT_DIR",
         "FRONTEND_NAME", "FRONTEND_DIR", "FRONTEND_COMMAND",
         "WILDFLY_DIR", "WILDFLY_COMMAND", "BUILD_WORK_DIR",
-        "BUILDER_CONFIG", "BUILDERS", "LAYOUT_CONFIG",
+        "BUILDER_CONFIG", "BUILDERS", "LAYOUT_CONFIG", "CONFIG_FILE", "ACTIVE_PROJECT_ID",
     ]
     for module in (common, git_terminal, settings_dialog):
         for name in names:
@@ -60,6 +60,11 @@ class DashboardApp:
         self.build_lock = threading.Lock()
         self.progress = BuildProgress()
         self.current_log_path = ""
+        self.log_window_size = 1000
+        self.log_history_step = 200
+        self.log_window_start_line = 0
+        self.log_window_end_line = 0
+        self._log_history_loading = False
 
         self._build_ui()
 
@@ -136,8 +141,9 @@ class DashboardApp:
     def reload_app_config(self):
         global APP_CONFIG, LOG_PATH_FILE, GIT_PROJECT_DIR
         global FRONTEND_NAME, FRONTEND_DIR, FRONTEND_COMMAND, WILDFLY_DIR, WILDFLY_COMMAND
-        global BUILD_WORK_DIR, BUILDER_CONFIG, BUILDERS, LAYOUT_CONFIG
-        APP_CONFIG = load_app_config()
+        global BUILD_WORK_DIR, BUILDER_CONFIG, BUILDERS, LAYOUT_CONFIG, CONFIG_FILE, ACTIVE_PROJECT_ID
+        CONFIG_FILE = get_config_file_for_project(ACTIVE_PROJECT_ID)
+        APP_CONFIG = load_app_config(ACTIVE_PROJECT_ID)
         LOG_PATH_FILE = APP_CONFIG["log_path_file"]
         GIT_PROJECT_DIR = APP_CONFIG["git_project_dir"]
         FRONTEND_NAME = APP_CONFIG["frontend_name"]
@@ -151,7 +157,7 @@ class DashboardApp:
         LAYOUT_CONFIG = APP_CONFIG.get("layout", LAYOUT_CONFIG)
         _sync_config_globals()
         if hasattr(self, "footer_var"):
-            self.footer_var.set(f"Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
+            self.footer_var.set(f"Project: {self.current_project.name}  |  Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
         if hasattr(self, "vite_pane"):
             self.vite_pane.title_var.set(FRONTEND_NAME or "Frontend")
         if hasattr(self, "build_button_frame"):
@@ -160,6 +166,24 @@ class DashboardApp:
         self.enqueue("log", f"\n[{time.strftime('%H:%M:%S')}] Settings reloaded from app.config.\n")
         if hasattr(self, "git_terminal"):
             self.git_terminal.refresh_config_labels()
+
+    @property
+    def current_project(self) -> DashboardProject:
+        return get_project_by_id(ACTIVE_PROJECT_ID)
+
+    def set_active_project_id(self, project_id: str):
+        global ACTIVE_PROJECT_ID
+        selected = get_project_by_id(project_id)
+        ACTIVE_PROJECT_ID = set_active_project_id(selected.id)
+        self.reload_app_config()
+
+    def on_project_select(self, _event=None):
+        selected_name = self.project_name_var.get().strip()
+        for p in get_project_registry():
+            if p.name == selected_name:
+                self.set_active_project_id(p.id)
+                self.enqueue("log", f"\n[{time.strftime('%H:%M:%S')}] Switched to {p.name}\n")
+                return
 
     def open_settings(self):
         ConfigEditorDialog(self)
@@ -227,6 +251,19 @@ class DashboardApp:
             )
 
         self.toolbar_button_factory = button
+        project_box = tk.Frame(toolbar, bg=BG)
+        project_box.pack(side="left", padx=(0, 10))
+        tk.Label(project_box, text="Project", bg=BG, fg=MUTED, font=("Calibri", 10, "bold")).pack(side="left", padx=(0, 6))
+        self.project_name_var = tk.StringVar(value=self.current_project.name)
+        self.project_selector = ttk.Combobox(
+            project_box,
+            textvariable=self.project_name_var,
+            values=[p.name for p in get_project_registry()],
+            state="readonly",
+            width=16,
+        )
+        self.project_selector.pack(side="left")
+        self.project_selector.bind("<<ComboboxSelected>>", self.on_project_select)
         button(toolbar, "Restart WildFly", lambda: self.restart_service("wildfly", WILDFLY_COMMAND, WILDFLY_DIR, self.wildfly_pane)).pack(side="left", padx=(0, 6))
         button(toolbar, f"Restart {FRONTEND_NAME or 'Frontend'}", lambda: self.restart_service("vite", FRONTEND_COMMAND, FRONTEND_DIR, self.vite_pane)).pack(side="left", padx=6)
 
@@ -338,7 +375,7 @@ class DashboardApp:
 
         footer = tk.Frame(outer, bg=BG)
         footer.pack(fill="x", pady=(8, 0))
-        self.footer_var = tk.StringVar(value=f"Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
+        self.footer_var = tk.StringVar(value=f"Project: {self.current_project.name}  |  Git directory: {GIT_PROJECT_DIR}  |  Log file: {LOG_PATH_FILE or 'not set'}  |  Builders: {len(BUILDERS)}  |  Config: {CONFIG_FILE}")
         tk.Label(footer, textvariable=self.footer_var, bg=BG, fg=MUTED, anchor="w",
                  font=("Calibri", 10)).pack(fill="x")
 
@@ -820,6 +857,7 @@ class DashboardApp:
                     missing_reported = False
                     self._safe_set_status(self.log_pane, os.path.basename(current_log_path), BLUE)
                     self.enqueue("log", f"[{time.strftime('%H:%M:%S')}] Tailing: {current_log_path}\n")
+                    self._reset_log_window()
 
                 if not os.path.exists(current_log_path):
                     if not missing_reported:
@@ -856,7 +894,10 @@ class DashboardApp:
                     chunk = file_handle.read(to_read)
                     position = file_handle.tell()
                     if chunk:
-                        self.enqueue("log", decode_bytes(chunk))
+                        text_chunk = decode_bytes(chunk)
+                        self.enqueue("log", text_chunk)
+                        self.log_window_end_line += text_chunk.count("\n")
+                        self.log_window_start_line = max(0, self.log_window_end_line - self.log_window_size)
 
                 time.sleep(LOG_TAIL_SLEEP)
             except FileNotFoundError:
@@ -877,6 +918,49 @@ class DashboardApp:
                 file_handle.close()
             except Exception:
                 pass
+
+    def _reset_log_window(self):
+        self.log_window_start_line = 0
+        self.log_window_end_line = 0
+
+    def _read_log_line_window(self, path: str, start_line: int, end_line: int) -> str:
+        if end_line <= start_line:
+            return ""
+        out = []
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for idx, line in enumerate(f):
+                if idx < start_line:
+                    continue
+                if idx >= end_line:
+                    break
+                out.append(line)
+        return "".join(out)
+
+    def on_text_pane_scroll(self, pane: TextPane):
+        if pane is not self.log_pane or self._log_history_loading:
+            return
+        if not pane.is_near_top():
+            return
+        path = self.current_log_path or ""
+        if not path or not os.path.isfile(path):
+            return
+        if self.log_window_end_line <= 0:
+            return
+        new_start = max(0, self.log_window_start_line - self.log_history_step)
+        if new_start == self.log_window_start_line:
+            return
+        self._log_history_loading = True
+        try:
+            text = self._read_log_line_window(path, new_start, self.log_window_end_line)
+            if not text:
+                return
+            self.log_pane.clear()
+            self.log_pane.append(text)
+            self.log_window_start_line = new_start
+            self.enqueue("log", f"[{time.strftime('%H:%M:%S')}] Loaded older log rows {self.log_window_start_line}-{self.log_window_end_line}\n")
+            self.root.after_idle(lambda: self.log_pane.text.yview_moveto(0.12))
+        finally:
+            self._log_history_loading = False
 
     def enqueue(self, key: str, text: str):
         self.queues[key].put(text)
@@ -969,5 +1053,3 @@ class DashboardApp:
             time.sleep(0.12)
 
         self.root.destroy()
-
-
