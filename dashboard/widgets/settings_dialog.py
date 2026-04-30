@@ -163,8 +163,6 @@ class ConfigEditorDialog:
             self._refresh_current_project_section()
         else:
             self._refresh_current_project_section()
-        p = get_project_by_id(current)
-        self.active_project_banner_var.set(f"Current project: {p.name} ({p.id})")
         self.window.after(800, self._poll_active_project)
 
     def _build_builders_tab(self):

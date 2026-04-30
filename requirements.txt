@@ -1,0 +1,10 @@
+# Packaging
+pyinstaller>=6.0
+
+# Image handling for splash/icon assets
+Pillow>=10.0
+
+# Optional embedded web tabs using Microsoft Edge WebView2
+# Required only for Management Console / Key Service Maintenance embedded tabs.
+# If unavailable, the app should fall back to Open Browser buttons.
+tkwebview2>=3.0

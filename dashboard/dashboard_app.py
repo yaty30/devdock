@@ -60,7 +60,6 @@ class DashboardApp:
         self.build_lock = threading.Lock()
         self.progress = BuildProgress()
         self.current_log_path = ""
-        self.project_runtime_status: dict[str, dict[str, str]] = {}
         self.log_window_size = 1000
         self.log_history_step = 200
         self.log_window_start_line = 0
@@ -178,42 +177,13 @@ class DashboardApp:
         ACTIVE_PROJECT_ID = set_active_project_id(selected.id)
         self.reload_app_config()
 
-    def get_runtime_status_for_project(self, project_id: str) -> dict[str, str]:
-        return self.project_runtime_status.get(project_id, {}).copy()
-
     def on_project_select(self, _event=None):
         selected_name = self.project_name_var.get().strip()
         for p in get_project_registry():
             if p.name == selected_name:
                 self.set_active_project_id(p.id)
-                self._clear_log_for_project_switch()
-                self._append_project_switch_context(p)
+                self.enqueue("log", f"\n[{time.strftime('%H:%M:%S')}] Switched to {p.name}\n")
                 return
-
-    def _clear_log_for_project_switch(self):
-        """Immediately clear visible log context when switching projects."""
-        try:
-            self.log_pane.clear()
-        except Exception:
-            pass
-        # Drop pending queued log chunks from the previous project so they are
-        # not rendered after the project switch UI context is shown.
-        try:
-            while True:
-                self.queues["log"].get_nowait()
-        except queue.Empty:
-            pass
-        self.current_log_path = ""
-        self._reset_log_window()
-
-    def _append_project_switch_context(self, project: DashboardProject):
-        msg = (
-            f"\n--- Switched to {project.name} ({project.id}) ---\n"
-            f"Config: {CONFIG_FILE}\n"
-            f"Log: {LOG_PATH_FILE or 'not set'}\n"
-            "Services were not restarted automatically. Restart WildFly/frontend if needed.\n"
-        )
-        self.enqueue("log", msg)
 
     def open_settings(self):
         ConfigEditorDialog(self)
