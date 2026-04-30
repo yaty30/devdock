@@ -23,6 +23,18 @@ class ConfigEditorDialog:
                  font=("Calibri", 14, "bold"), anchor="w").pack(fill="x", pady=(0, 6))
         tk.Label(container, text="Saved to app.config. Builder commands are generated from Maven config + build profiles, so custom wrapper .bat files are not required.",
                  bg=BG, fg=MUTED, font=("Calibri", 10), anchor="w", wraplength=760, justify="left").pack(fill="x", pady=(0, 10))
+        active_project = get_project_by_id(get_active_project_id())
+        self.active_project_banner_var = tk.StringVar(
+            value=f"Current project: {active_project.name} ({active_project.id})"
+        )
+        tk.Label(
+            container,
+            textvariable=self.active_project_banner_var,
+            bg=BG,
+            fg=BLUE,
+            font=("Calibri", 10, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(0, 8))
 
         self.status_var = tk.StringVar(value="")
         tk.Label(container, textvariable=self.status_var, bg=BG, fg=YELLOW,
