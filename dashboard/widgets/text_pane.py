@@ -169,12 +169,24 @@ class TextPane:
 
     def _handle_scroll(self, _event=None):
         self.auto_scroll = self._is_at_bottom()
+        try:
+            callback = getattr(self.app, "on_text_pane_scroll", None)
+            if callback:
+                callback(self)
+        except Exception:
+            pass
 
     def _is_at_bottom(self):
         try:
             return float(self.text.yview()[1]) >= 0.995
         except Exception:
             return True
+
+    def is_near_top(self):
+        try:
+            return float(self.text.yview()[0]) <= 0.03
+        except Exception:
+            return False
 
     def focus_search(self, _event=None):
         if self.enable_search:
@@ -446,5 +458,4 @@ class TextPane:
         self.current_match_index = (self.current_match_index - 1) % len(self.search_matches)
         self._show_current_match()
         return "break"
-
 

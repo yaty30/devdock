@@ -60,6 +60,11 @@ class DashboardApp:
         self.build_lock = threading.Lock()
         self.progress = BuildProgress()
         self.current_log_path = ""
+        self.log_window_size = 1000
+        self.log_history_step = 200
+        self.log_window_start_line = 0
+        self.log_window_end_line = 0
+        self._log_history_loading = False
 
         self._build_ui()
 
@@ -820,6 +825,7 @@ class DashboardApp:
                     missing_reported = False
                     self._safe_set_status(self.log_pane, os.path.basename(current_log_path), BLUE)
                     self.enqueue("log", f"[{time.strftime('%H:%M:%S')}] Tailing: {current_log_path}\n")
+                    self._reset_log_window()
 
                 if not os.path.exists(current_log_path):
                     if not missing_reported:
@@ -856,7 +862,10 @@ class DashboardApp:
                     chunk = file_handle.read(to_read)
                     position = file_handle.tell()
                     if chunk:
-                        self.enqueue("log", decode_bytes(chunk))
+                        text_chunk = decode_bytes(chunk)
+                        self.enqueue("log", text_chunk)
+                        self.log_window_end_line += text_chunk.count("\n")
+                        self.log_window_start_line = max(0, self.log_window_end_line - self.log_window_size)
 
                 time.sleep(LOG_TAIL_SLEEP)
             except FileNotFoundError:
@@ -877,6 +886,49 @@ class DashboardApp:
                 file_handle.close()
             except Exception:
                 pass
+
+    def _reset_log_window(self):
+        self.log_window_start_line = 0
+        self.log_window_end_line = 0
+
+    def _read_log_line_window(self, path: str, start_line: int, end_line: int) -> str:
+        if end_line <= start_line:
+            return ""
+        out = []
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for idx, line in enumerate(f):
+                if idx < start_line:
+                    continue
+                if idx >= end_line:
+                    break
+                out.append(line)
+        return "".join(out)
+
+    def on_text_pane_scroll(self, pane: TextPane):
+        if pane is not self.log_pane or self._log_history_loading:
+            return
+        if not pane.is_near_top():
+            return
+        path = self.current_log_path or ""
+        if not path or not os.path.isfile(path):
+            return
+        if self.log_window_end_line <= 0:
+            return
+        new_start = max(0, self.log_window_start_line - self.log_history_step)
+        if new_start == self.log_window_start_line:
+            return
+        self._log_history_loading = True
+        try:
+            text = self._read_log_line_window(path, new_start, self.log_window_end_line)
+            if not text:
+                return
+            self.log_pane.clear()
+            self.log_pane.append(text)
+            self.log_window_start_line = new_start
+            self.enqueue("log", f"[{time.strftime('%H:%M:%S')}] Loaded older log rows {self.log_window_start_line}-{self.log_window_end_line}\n")
+            self.root.after_idle(lambda: self.log_pane.text.yview_moveto(0.12))
+        finally:
+            self._log_history_loading = False
 
     def enqueue(self, key: str, text: str):
         self.queues[key].put(text)
@@ -969,5 +1021,3 @@ class DashboardApp:
             time.sleep(0.12)
 
         self.root.destroy()
-
-
