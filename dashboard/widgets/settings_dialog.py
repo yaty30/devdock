@@ -62,6 +62,11 @@ class ConfigEditorDialog:
         tk.Button(button_row, text="Validate", command=self.validate_and_report, bg=BTN_BG, fg=BTN_FG,
                   activebackground=BTN_ACTIVE, activeforeground=BTN_FG, relief="flat", padx=14, pady=5,
                   font=("Calibri", 10, "bold")).pack(side="right", padx=(0, 8))
+        tk.Button(button_row, text="Delete Project", command=self.delete_project, bg=PROD_BTN_BG, fg="#ffffff",
+                  activebackground=PROD_BTN_ACTIVE, activeforeground="#ffffff", relief="flat", padx=14, pady=5,
+                  font=("Calibri", 10, "bold")).pack(side="left")
+        tk.Label(button_row, text=f"Version {APP_VERSION}", bg=BG, fg=MUTED,
+                 font=("Calibri", 9)).pack(side="left", padx=(12, 0))
 
         self.window.update_idletasks()
         width = max(860, self.window.winfo_width())
@@ -91,6 +96,7 @@ class ConfigEditorDialog:
         form.pack(fill="both", expand=True, padx=10, pady=12)
         self._build_current_project_section(form)
         fields = [
+            ("project_root_path", "Project Folder", "dir"),
             ("log_file_path", "Application Log File Path", "file"),
             ("git_project_dir", "Git Project Directory", "dir"),
             ("frontend_name", "Frontend Display Name", "text"),
@@ -98,6 +104,8 @@ class ConfigEditorDialog:
             ("frontend_command", "Frontend Command", "text"),
             ("wildfly_dir", "WildFly Bin Directory", "dir"),
             ("wildfly_command", "WildFly Start Command", "text"),
+            ("admin_console_url", "Admin Console URL", "text"),
+            ("kmu_url", "KMU URL", "text"),
         ]
         for idx, (key, label, browse_type) in enumerate(fields, start=7):
             self._add_field(form, idx, key, label, browse_type)
@@ -148,7 +156,7 @@ class ConfigEditorDialog:
             runtime = self.app.get_runtime_status_for_project(project.id).get("runtime", "Unknown")
         self.current_project_vars["name"].set(project.name)
         self.current_project_vars["id"].set(project.id)
-        self.current_project_vars["root"].set(values.get("git_project_dir", ""))
+        self.current_project_vars["root"].set(project.root_path)
         self.current_project_vars["config"].set(get_config_file_for_project(project.id))
         self.current_project_vars["runtime"].set(runtime)
         self.current_project_vars["port"].set(self._extract_wildfly_port(values.get("wildfly_command", "")))
@@ -192,7 +200,8 @@ class ConfigEditorDialog:
 
         labels = tk.Frame(outer, bg=BG)
         labels.pack(fill="x", padx=4)
-        tk.Label(labels, text="Profile name", bg=BG, fg=MUTED, font=("Calibri", 9, "bold"), width=22, anchor="w").pack(side="left", padx=(0, 8))
+        tk.Label(labels, text="Button name", bg=BG, fg=MUTED, font=("Calibri", 9, "bold"), width=18, anchor="w").pack(side="left", padx=(0, 8))
+        tk.Label(labels, text="Profile name", bg=BG, fg=MUTED, font=("Calibri", 9, "bold"), width=18, anchor="w").pack(side="left", padx=(0, 8))
         tk.Label(labels, text="Goal", bg=BG, fg=MUTED, font=("Calibri", 9, "bold"), anchor="w").pack(side="left", fill="x", expand=True)
         tk.Label(labels, text="Confirm", bg=BG, fg=MUTED, font=("Calibri", 9, "bold"), width=10, anchor="center").pack(side="left", padx=(8, 8))
         tk.Label(labels, text="", bg=BG, width=10).pack(side="left")
@@ -218,26 +227,30 @@ class ConfigEditorDialog:
         for builder in self.values.get("builders", []) or _default_builder_sections():
             self.add_builder_row(builder)
 
-        hint = tk.Label(outer, text="Example: profile name = sit, goal = clean package. The dashboard button becomes Run SIT Build.",
+        hint = tk.Label(outer, text="Example: button name = SIT Build, profile name = sit, goal = clean package. The dashboard button uses the custom name.",
                         bg=BG, fg=MUTED, font=("Calibri", 9), anchor="w")
         hint.pack(fill="x", pady=(8, 0))
 
     def add_builder_row(self, builder: dict | None = None):
-        builder = builder or {"profile": "", "goal": "clean package", "confirm_before_run": "false"}
+        builder = builder or {"profile": "", "name": "", "goal": "clean package", "confirm_before_run": "false"}
         row = tk.Frame(self.builder_rows_frame, bg=PANEL_BG, highlightthickness=1, highlightbackground=BORDER)
         row.pack(fill="x", pady=4)
         profile_var = tk.StringVar(value=(builder.get("profile") or "").strip())
+        name_var = tk.StringVar(value=(builder.get("name") or (builder.get("profile") or "").upper()).strip())
         goal_var = tk.StringVar(value=(builder.get("goal") or "clean package").strip())
         confirm_var = tk.BooleanVar(value=_bool_value(builder.get("confirm_before_run", False)))
-        tk.Entry(row, textvariable=profile_var, width=22, bg=TEXT_BG, fg=TEXT_FG, insertbackground=TEXT_FG,
+        tk.Entry(row, textvariable=name_var, width=18, bg=TEXT_BG, fg=TEXT_FG, insertbackground=TEXT_FG,
                  relief="flat", highlightthickness=1, highlightbackground=BORDER, highlightcolor=BLUE,
                  font=("Calibri", 10)).pack(side="left", padx=(8, 8), pady=8)
+        tk.Entry(row, textvariable=profile_var, width=18, bg=TEXT_BG, fg=TEXT_FG, insertbackground=TEXT_FG,
+                 relief="flat", highlightthickness=1, highlightbackground=BORDER, highlightcolor=BLUE,
+                 font=("Calibri", 10)).pack(side="left", padx=(0, 8), pady=8)
         tk.Entry(row, textvariable=goal_var, bg=TEXT_BG, fg=TEXT_FG, insertbackground=TEXT_FG,
                  relief="flat", highlightthickness=1, highlightbackground=BORDER, highlightcolor=BLUE,
                  font=("Calibri", 10)).pack(side="left", fill="x", expand=True, pady=8)
         tk.Checkbutton(row, variable=confirm_var, bg=PANEL_BG, activebackground=PANEL_BG,
                        selectcolor=TEXT_BG).pack(side="left", padx=(8, 8), pady=8)
-        row_data = {"frame": row, "profile": profile_var, "goal": goal_var, "confirm": confirm_var}
+        row_data = {"frame": row, "name": name_var, "profile": profile_var, "goal": goal_var, "confirm": confirm_var}
         tk.Button(row, text="Remove", command=lambda item=row_data: self.remove_builder_row(item),
                   bg=BTN_BG, fg=BTN_FG, activebackground=BTN_ACTIVE, activeforeground=BTN_FG,
                   relief="flat", padx=10, pady=3, font=("Calibri", 9, "bold")).pack(side="left", padx=(0, 8), pady=8)
@@ -282,6 +295,7 @@ class ConfigEditorDialog:
         builders = []
         for row in self.builder_rows:
             builders.append({
+                "name": row["name"].get().strip(),
                 "profile": row["profile"].get().strip(),
                 "goal": row["goal"].get().strip(),
                 "confirm_before_run": _bool_text(row["confirm"].get()),
@@ -307,7 +321,7 @@ class ConfigEditorDialog:
             if not os.path.isfile(resolved_log):
                 warnings.append(f"Application Log File does not exist: {resolved_log}")
 
-        for key, label in (("git_project_dir", "Git Project Directory"), ("frontend_dir", "Frontend Directory"), ("wildfly_dir", "WildFly Bin Directory")):
+        for key, label in (("project_root_path", "Project Folder"), ("git_project_dir", "Git Project Directory"), ("frontend_dir", "Frontend Directory"), ("wildfly_dir", "WildFly Bin Directory")):
             value = values.get(key, "")
             if not value:
                 errors.append(f"{label} is required.")
@@ -366,6 +380,11 @@ class ConfigEditorDialog:
             self.status_var.set("All configured paths and builders look valid.")
             messagebox.showinfo("Settings Valid", "All configured paths and builders look valid.", parent=self.window)
 
+    def delete_project(self):
+        if hasattr(self.app, "delete_active_project"):
+            self.window.destroy()
+            self.app.delete_active_project()
+
     def save(self):
         values = self._collect_values()
         errors, warnings = self._validate_values(values)
@@ -382,6 +401,10 @@ class ConfigEditorDialog:
             if not proceed:
                 self.status_var.set("Warnings: " + "  ".join(warnings))
                 return
+        active_project_id = get_active_project_id()
+        project_root = values.get("project_root_path", "").strip()
+        if project_root:
+            update_project_folder(active_project_id, project_root)
         save_app_config(values)
         self.app.reload_app_config(announce=True)
         if hasattr(self.app, "_set_project_visible"):

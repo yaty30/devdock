@@ -3,7 +3,8 @@ from ..common import *
 class TextPane:
     def __init__(self, master, title, app, font_family="Calibri", compact=False,
                  collapsible=False, collapsed=False, collapsed_height=38,
-                 actions=None, enable_search=True, show_line_numbers=True):
+                 actions=None, enable_search=True, show_line_numbers=True,
+                 read_only=False):
         self.app = app
         self.collapsible = collapsible
         self.collapsed = False
@@ -17,6 +18,7 @@ class TextPane:
         self.search_matches = []
         self.current_match_index = -1
         self._syncing_scroll = False
+        self.read_only = read_only
 
         self.frame = tk.Frame(master, bg=PANEL_BG, highlightthickness=1, highlightbackground=BORDER)
         self.title_var = tk.StringVar(value=title)
@@ -111,6 +113,10 @@ class TextPane:
             wrap="none", yscrollcommand=self._on_yscroll, xscrollcommand=self.h_scrollbar.set,
             font=(font_family, 10), undo=False, height=height
         )
+        if self.read_only:
+            self.text.configure(state="disabled", cursor="arrow", takefocus=0)
+            for sequence in ("<Key>", "<Control-v>", "<Control-V>", "<<Paste>>", "<BackSpace>", "<Delete>"):
+                self.text.bind(sequence, lambda _event: "break")
         self.text.pack(side="left", fill="both", expand=True)
         self.scrollbar.config(command=self._scrollbar_yview)
         self.h_scrollbar.config(command=self.text.xview)
@@ -145,6 +151,7 @@ class TextPane:
                 self.line_numbers.yview_moveto(first)
             finally:
                 self._syncing_scroll = False
+        self.read_only = read_only
 
     def _scrollbar_yview(self, *args):
         self.text.yview(*args)
@@ -341,6 +348,13 @@ class TextPane:
     def append(self, text: str):
         if not text:
             return
+        was_disabled = False
+        if self.read_only:
+            try:
+                was_disabled = str(self.text.cget("state")) == "disabled"
+                self.text.configure(state="normal")
+            except Exception:
+                was_disabled = False
         at_bottom_before = self._is_at_bottom()
 
         # Protect the UI from one very large queued chunk. The queue flusher
@@ -377,8 +391,20 @@ class TextPane:
             self.text.see("end")
             if self.line_numbers is not None:
                 self.line_numbers.see("end")
+        if was_disabled:
+            try:
+                self.text.configure(state="disabled")
+            except Exception:
+                pass
 
     def clear(self):
+        was_disabled = False
+        if self.read_only:
+            try:
+                was_disabled = str(self.text.cget("state")) == "disabled"
+                self.text.configure(state="normal")
+            except Exception:
+                was_disabled = False
         self.text.delete("1.0", "end")
         if self.line_numbers is not None:
             self.line_numbers.configure(state="normal")
@@ -388,6 +414,11 @@ class TextPane:
         self.next_line_number = 1
         self.auto_scroll = True
         self.clear_search(clear_entry=False)
+        if was_disabled:
+            try:
+                self.text.configure(state="disabled")
+            except Exception:
+                pass
 
     def get_text(self) -> str:
         return self.text.get("1.0", "end-1c")

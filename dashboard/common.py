@@ -6,6 +6,7 @@ import threading
 import time
 import queue
 import tempfile
+import json
 import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import ttk, filedialog, messagebox
@@ -19,6 +20,9 @@ class DashboardProject:
     config_path: str = ""
     asset_path: str = ""
     build_profile: str = ""
+    root_path: str = ""
+    created_at: str = ""
+    updated_at: str = ""
 
 def get_app_dir() -> str:
     """Return the folder users should place/edit app.config in.
@@ -42,24 +46,292 @@ def get_bundled_config_path() -> str | None:
 
 
 APP_DIR = get_app_dir()
-CONFIG_FILE = os.path.join(APP_DIR, "app.config")
-ACTIVE_PROJECT_FILE = os.path.join(APP_DIR, ".dashboard_active_project")
+APP_DATA_DIR = os.path.join(APP_DIR, ".dashboard_data")
+APP_DATA_PROJECTS_DIR = os.path.join(APP_DATA_DIR, "projects")
 
-PROJECT_REGISTRY: tuple[DashboardProject, ...] = (
-    DashboardProject(id="iap", name="Project IAP", config_path=os.path.join(APP_DIR, "app.config")),
-    DashboardProject(id="wp", name="Project WP", config_path=os.path.join(APP_DIR, "projects", "wp", "app.config")),
+# Legacy paths from the original single-project dashboard. These are read for
+# compatibility and migration, but new dashboard-owned state is stored under
+# .dashboard_data/.
+LEGACY_CONFIG_FILE = os.path.join(APP_DIR, "app.config")
+LEGACY_ACTIVE_PROJECT_FILE = os.path.join(APP_DIR, ".dashboard_active_project")
+LEGACY_PROJECT_REGISTRY_FILE = os.path.join(APP_DIR, ".dashboard_projects.json")
+
+CONFIG_FILE = os.path.join(APP_DATA_PROJECTS_DIR, "iap", "app.config")
+ACTIVE_PROJECT_FILE = os.path.join(APP_DATA_DIR, "active_project")
+PROJECT_REGISTRY_FILE = os.path.join(APP_DATA_DIR, "projects.json")
+MAX_PROJECTS = 3
+
+BUILTIN_PROJECT_REGISTRY: tuple[DashboardProject, ...] = (
+    DashboardProject(id="iap", name="Project IAP", config_path=os.path.join(APP_DATA_PROJECTS_DIR, "iap", "app.config"), root_path=os.path.join(APP_DATA_PROJECTS_DIR, "iap")),
+    DashboardProject(id="wp", name="Project WP", config_path=os.path.join(APP_DATA_PROJECTS_DIR, "wp", "app.config"), root_path=os.path.join(APP_DATA_PROJECTS_DIR, "wp")),
 )
 DEFAULT_PROJECT_ID = "iap"
+APP_VERSION = "v0.5.0"
+
+def ensure_app_data_dir() -> None:
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    os.makedirs(APP_DATA_PROJECTS_DIR, exist_ok=True)
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
+
+def _migrate_legacy_dashboard_state() -> None:
+    """Move dashboard-owned metadata into .dashboard_data/ without deleting legacy files."""
+    ensure_app_data_dir()
+
+    if not os.path.exists(PROJECT_REGISTRY_FILE):
+        if os.path.exists(LEGACY_PROJECT_REGISTRY_FILE):
+            try:
+                with open(LEGACY_PROJECT_REGISTRY_FILE, "r", encoding="utf-8", errors="replace") as src:
+                    legacy = json.load(src)
+                items = legacy.get("projects", []) if isinstance(legacy, dict) else legacy
+                projects: list[DashboardProject] = []
+                if isinstance(items, list):
+                    for item in items:
+                        if isinstance(item, dict):
+                            project = _project_from_dict(item)
+                            if project:
+                                projects.append(project)
+                if projects:
+                    save_project_registry(projects)
+            except Exception:
+                pass
+
+        elif os.path.exists(LEGACY_CONFIG_FILE):
+            # Legacy single-project fallback: keep using the root app.config, but
+            # register it in the new registry so future projects use .dashboard_data/.
+            legacy_project = DashboardProject(
+                id=DEFAULT_PROJECT_ID,
+                name="Project IAP",
+                root_path=APP_DIR,
+                config_path=LEGACY_CONFIG_FILE,
+                created_at=_now_iso(),
+                updated_at=_now_iso(),
+            )
+            save_project_registry([legacy_project])
+
+    if not os.path.exists(ACTIVE_PROJECT_FILE) and os.path.exists(LEGACY_ACTIVE_PROJECT_FILE):
+        try:
+            with open(LEGACY_ACTIVE_PROJECT_FILE, "r", encoding="utf-8", errors="replace") as src:
+                value = src.read().strip()
+            if value:
+                with open(ACTIVE_PROJECT_FILE, "w", encoding="utf-8") as dst:
+                    dst.write(value)
+        except Exception:
+            pass
+
+def _slugify_project_id(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-")
+    return slug or "project"
+
+def _project_from_dict(raw: dict) -> DashboardProject | None:
+    try:
+        project_id = _slugify_project_id(raw.get("id") or raw.get("name") or "project")
+        name = (raw.get("name") or project_id).strip()
+        raw_config = raw.get("configPath") or raw.get("config_path") or ""
+        raw_root = raw.get("rootPath") or raw.get("root_path") or ""
+        raw_asset = raw.get("assetPath") or raw.get("asset_path") or ""
+        config_path = os.path.abspath(os.path.expanduser(os.path.expandvars(raw_config))) if raw_config else ""
+        root_path = os.path.abspath(os.path.expanduser(os.path.expandvars(raw_root))) if raw_root else ""
+        if not root_path:
+            root_path = os.path.dirname(config_path) if config_path else get_default_project_root(project_id)
+        if not config_path:
+            config_path = get_default_project_config_path(root_path)
+        asset_path = os.path.abspath(os.path.expanduser(os.path.expandvars(raw_asset))) if raw_asset else ""
+        created_at = (raw.get("createdAt") or raw.get("created_at") or "").strip()
+        updated_at = (raw.get("updatedAt") or raw.get("updated_at") or "").strip()
+        return DashboardProject(
+            id=project_id,
+            name=name,
+            config_path=config_path,
+            asset_path=asset_path,
+            build_profile=(raw.get("buildProfile") or raw.get("build_profile") or "").strip(),
+            root_path=root_path,
+            created_at=created_at,
+            updated_at=updated_at,
+        )
+    except Exception:
+        return None
+
+def _project_to_dict(project: DashboardProject) -> dict:
+    return {
+        "id": project.id,
+        "name": project.name,
+        "rootPath": project.root_path,
+        "configPath": project.config_path,
+        "assetPath": project.asset_path,
+        "buildProfile": project.build_profile,
+        "createdAt": project.created_at,
+        "updatedAt": project.updated_at,
+    }
+
+def _dedupe_projects(projects: list[DashboardProject]) -> list[DashboardProject]:
+    seen = set()
+    result: list[DashboardProject] = []
+    for project in projects:
+        if not project or not project.id or project.id in seen:
+            continue
+        seen.add(project.id)
+        result.append(project)
+    return result
 
 def get_project_registry() -> tuple[DashboardProject, ...]:
-    return PROJECT_REGISTRY
+    _migrate_legacy_dashboard_state()
+    projects: list[DashboardProject] = []
+    if os.path.exists(PROJECT_REGISTRY_FILE):
+        try:
+            with open(PROJECT_REGISTRY_FILE, "r", encoding="utf-8", errors="replace") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                data = data.get("projects", [])
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict):
+                        project = _project_from_dict(item)
+                        if project:
+                            projects.append(project)
+        except Exception:
+            projects = []
+    if not projects:
+        projects = list(BUILTIN_PROJECT_REGISTRY)
+        save_project_registry(projects)
+    return tuple(_dedupe_projects(projects))
+
+def save_project_registry(projects: list[DashboardProject] | tuple[DashboardProject, ...]) -> None:
+    ensure_app_data_dir()
+    clean = _dedupe_projects(list(projects))
+    with open(PROJECT_REGISTRY_FILE, "w", encoding="utf-8") as f:
+        json.dump({"projects": [_project_to_dict(p) for p in clean]}, f, indent=2)
+
+def make_unique_project_id(name: str) -> str:
+    base = _slugify_project_id(name)
+    existing = {p.id for p in get_project_registry()}
+    if base not in existing:
+        return base
+    idx = 2
+    while f"{base}-{idx}" in existing:
+        idx += 1
+    return f"{base}-{idx}"
+
+def get_default_project_root(project_id: str) -> str:
+    """Return the dashboard-managed folder for a user-created project."""
+    safe_id = _slugify_project_id(project_id)
+    return os.path.join(APP_DATA_PROJECTS_DIR, safe_id)
+
+
+def get_default_project_config_path(project_root: str) -> str:
+    """Return the conventional app.config path for a project folder."""
+    return os.path.join(project_root, "app.config")
+
+
+def add_project(name: str, root_path: str | None = None, config_path: str | None = None) -> DashboardProject:
+    """Create/register a project.
+
+    The normal UI flow is intentionally name-only: the dashboard generates a
+    stable project id, creates .dashboard_data/projects/<project_id>/, and
+    stores .dashboard_data/projects/<project_id>/app.config internally. Optional
+    root/config arguments are kept for backward-compatible callers and tests.
+    """
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Project name is required.")
+
+    projects = list(get_project_registry())
+    if len(projects) >= MAX_PROJECTS:
+        raise ValueError(
+            f"Project limit reached. This dashboard supports up to {MAX_PROJECTS} projects "
+            "because each project may run its own WildFly and frontend services."
+        )
+
+    project_id = make_unique_project_id(name)
+
+    if root_path:
+        resolved_root = os.path.abspath(os.path.expanduser(os.path.expandvars(root_path.strip().strip('"'))))
+    else:
+        resolved_root = get_default_project_root(project_id)
+
+    if config_path:
+        resolved_config = os.path.abspath(os.path.expanduser(os.path.expandvars(config_path.strip().strip('"'))))
+    else:
+        resolved_config = get_default_project_config_path(resolved_root)
+
+    now = _now_iso()
+    project = DashboardProject(
+        id=project_id,
+        name=name,
+        root_path=resolved_root,
+        config_path=resolved_config,
+        created_at=now,
+        updated_at=now,
+    )
+    projects.append(project)
+    save_project_registry(projects)
+    ensure_config_file(resolved_config)
+    return project
+
+
+def update_project_folder(project_id: str, root_path: str) -> DashboardProject:
+    """Update a project's folder and derive its app.config path from that folder."""
+    root_path = os.path.abspath(os.path.expanduser(os.path.expandvars((root_path or "").strip().strip('"'))))
+    if not root_path:
+        raise ValueError("Project folder is required.")
+
+    projects = list(get_project_registry())
+    updated: DashboardProject | None = None
+    for idx, project in enumerate(projects):
+        if project.id == project_id:
+            updated = DashboardProject(
+                id=project.id,
+                name=project.name,
+                root_path=root_path,
+                config_path=get_default_project_config_path(root_path),
+                asset_path=project.asset_path,
+                build_profile=project.build_profile,
+                created_at=project.created_at,
+                updated_at=_now_iso(),
+            )
+            projects[idx] = updated
+            break
+    if updated is None:
+        raise ValueError(f"Unknown project: {project_id}")
+    save_project_registry(projects)
+    ensure_config_file(updated.config_path)
+    return updated
+
+
+def remove_project(project_id: str) -> tuple[DashboardProject | None, tuple[DashboardProject, ...]]:
+    """Remove a project from the dashboard registry only. Does not delete files."""
+    project_id = (project_id or "").strip().lower()
+    projects = list(get_project_registry())
+    removed: DashboardProject | None = None
+    remaining: list[DashboardProject] = []
+    for project in projects:
+        if project.id == project_id:
+            removed = project
+        else:
+            remaining.append(project)
+    if removed is None:
+        raise ValueError(f"Unknown project: {project_id}")
+    save_project_registry(remaining)
+    if remaining:
+        set_active_project_id(remaining[0].id)
+    else:
+        try:
+            ensure_app_data_dir()
+            with open(ACTIVE_PROJECT_FILE, "w", encoding="utf-8") as f:
+                f.write("")
+        except Exception:
+            pass
+    return removed, tuple(remaining)
+
 
 def get_project_by_id(project_id: str | None) -> DashboardProject:
+    registry = get_project_registry()
     pid = (project_id or "").strip().lower()
-    for project in PROJECT_REGISTRY:
+    for project in registry:
         if project.id == pid:
             return project
-    return PROJECT_REGISTRY[0]
+    return registry[0]
 
 def get_active_project_id() -> str:
     try:
@@ -71,7 +343,7 @@ def get_active_project_id() -> str:
 
 def set_active_project_id(project_id: str) -> str:
     project = get_project_by_id(project_id)
-    os.makedirs(APP_DIR, exist_ok=True)
+    ensure_app_data_dir()
     with open(ACTIVE_PROJECT_FILE, "w", encoding="utf-8") as f:
         f.write(project.id)
     return project.id
@@ -82,9 +354,9 @@ def get_config_file_for_project(project_id: str | None = None) -> str:
     return os.path.abspath(path)
 
 DEFAULT_BUILDERS = [
-    {"profile": "local", "goal": "clean install", "confirm_before_run": "false"},
-    {"profile": "sit", "goal": "clean package", "confirm_before_run": "false"},
-    {"profile": "prod", "goal": "clean package", "confirm_before_run": "true"},
+    {"profile": "local", "name": "Local", "goal": "clean install", "confirm_before_run": "false"},
+    {"profile": "sit", "name": "SIT", "goal": "clean package", "confirm_before_run": "false"},
+    {"profile": "prod", "name": "Production", "goal": "clean package", "confirm_before_run": "true"},
 ]
 
 DEFAULT_CONFIG = {
@@ -98,6 +370,10 @@ DEFAULT_CONFIG = {
         "frontend_command": "npm run dev",
         "wildfly_dir": r"C:\wildfly\bin",
         "wildfly_command": "start-rvdiap.bat",
+    },
+    "links": {
+        "admin_console_url": "",
+        "kmu_url": "",
     },
     "builder": {
         "mvn_cmd": "mvn",
@@ -153,7 +429,7 @@ def _default_builder_sections() -> list[dict]:
 
 
 def ensure_config_file(config_file: str | None = None) -> None:
-    """Create external app.config next to the .py/.exe if it does not exist yet."""
+    """Create a project app.config if it does not exist yet."""
     target_config = config_file or get_config_file_for_project()
     if os.path.exists(target_config):
         return
@@ -207,7 +483,7 @@ def _builder_from_old_command(profile: str, command: str) -> dict:
     if match:
         profile = match.group(1).strip() or profile
         goal = match.group(2).strip() or goal
-    return {"profile": profile, "goal": goal, "confirm_before_run": _bool_text(profile.lower() == "prod")}
+    return {"profile": profile, "name": profile.upper(), "goal": goal, "confirm_before_run": _bool_text(profile.lower() == "prod")}
 
 
 def _load_builders(config: configparser.ConfigParser) -> list[dict]:
@@ -217,9 +493,10 @@ def _load_builders(config: configparser.ConfigParser) -> list[dict]:
             continue
         profile_key = section.split(":", 1)[1].strip()
         profile = config.get(section, "profile", fallback=profile_key).strip() or profile_key
+        name = config.get(section, "name", fallback="").strip()
         goal = config.get(section, "goal", fallback="clean package").strip() or "clean package"
         confirm = _bool_text(config.get(section, "confirm_before_run", fallback=_bool_text(profile.lower() == "prod")))
-        builders.append({"profile": profile, "goal": goal, "confirm_before_run": confirm})
+        builders.append({"profile": profile, "name": name or profile.upper(), "goal": goal, "confirm_before_run": confirm})
 
     if builders:
         return builders
@@ -275,12 +552,14 @@ def save_layout_config(layout_values: dict, config_file: str | None = None) -> N
 
 def load_config_values_for_edit(config_file: str | None = None) -> dict:
     """Return editable/raw config values, without expanding paths."""
-    target_config = config_file or get_config_file_for_project()
+    active_project = get_project_by_id(get_active_project_id())
+    target_config = config_file or get_config_file_for_project(active_project.id)
     ensure_config_file(target_config)
     config = configparser.ConfigParser()
     config.read(target_config, encoding="utf-8")
 
     values = {
+        "project_root_path": active_project.root_path,
         "log_file_path": config.get("paths", "log_file_path", fallback=config.get("paths", "log_path_file", fallback=DEFAULT_CONFIG["paths"]["log_file_path"])).strip(),
         "git_project_dir": _config_get(config, "paths", "git_project_dir"),
         "frontend_name": _config_get(config, "services", "frontend_name"),
@@ -288,6 +567,8 @@ def load_config_values_for_edit(config_file: str | None = None) -> dict:
         "frontend_command": _config_get(config, "services", "frontend_command"),
         "wildfly_dir": _config_get(config, "services", "wildfly_dir"),
         "wildfly_command": _config_get(config, "services", "wildfly_command"),
+        "admin_console_url": config.get("links", "admin_console_url", fallback=DEFAULT_CONFIG.get("links", {}).get("admin_console_url", "")).strip(),
+        "kmu_url": config.get("links", "kmu_url", fallback=DEFAULT_CONFIG.get("links", {}).get("kmu_url", "")).strip(),
         "mvn_cmd": _config_get(config, "builder", "mvn_cmd"),
         "settings_xml": _config_get(config, "builder", "settings_xml"),
         "pom_xml": _config_get(config, "builder", "pom_xml"),
@@ -329,6 +610,10 @@ def save_app_config(values: dict, config_file: str | None = None) -> None:
         "wildfly_dir": values.get("wildfly_dir", "").strip(),
         "wildfly_command": values.get("wildfly_command", "").strip(),
     }
+    config["links"] = {
+        "admin_console_url": values.get("admin_console_url", "").strip(),
+        "kmu_url": values.get("kmu_url", "").strip(),
+    }
     config["builder"] = {
         "mvn_cmd": values.get("mvn_cmd", "").strip(),
         "settings_xml": values.get("settings_xml", "").strip(),
@@ -339,6 +624,7 @@ def save_app_config(values: dict, config_file: str | None = None) -> None:
     seen_sections = set()
     for builder in values.get("builders", []) or []:
         profile = (builder.get("profile") or "").strip()
+        name = (builder.get("name") or "").strip()
         goal = (builder.get("goal") or "").strip()
         if not profile or not goal:
             continue
@@ -351,6 +637,7 @@ def save_app_config(values: dict, config_file: str | None = None) -> None:
         seen_sections.add(section)
         config[section] = {
             "profile": profile,
+            "name": name or profile.upper(),
             "goal": goal,
             "confirm_before_run": _bool_text(builder.get("confirm_before_run", profile.lower() == "prod")),
         }
@@ -413,16 +700,19 @@ def load_app_config(project_id: str | None = None) -> dict:
     builders = []
     for builder in raw.get("builders", []) or []:
         profile = (builder.get("profile") or "").strip()
+        name = (builder.get("name") or "").strip()
         goal = (builder.get("goal") or "").strip()
         if not profile or not goal:
             continue
+        builder_name = (builder.get("name") or "").strip() or profile.upper()
         normalized = {
             "profile": profile,
+            "name": builder_name,
             "goal": goal,
             "confirm_before_run": _bool_text(builder.get("confirm_before_run", profile.lower() == "prod")),
         }
         normalized["command"] = build_maven_command(normalized, builder_config)
-        normalized["label"] = f"Run {profile.upper()} Build"
+        normalized["label"] = f"Run {builder_name} Build"
         builders.append(normalized)
 
     return {
@@ -434,6 +724,8 @@ def load_app_config(project_id: str | None = None) -> dict:
         "frontend_command": raw["frontend_command"],
         "wildfly_dir": wildfly_dir,
         "wildfly_command": raw["wildfly_command"],
+        "admin_console_url": raw.get("admin_console_url", ""),
+        "kmu_url": raw.get("kmu_url", ""),
         "build_work_dir": build_work_dir,
         "builder_config": builder_config,
         "builders": builders,
