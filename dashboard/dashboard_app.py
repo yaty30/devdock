@@ -60,7 +60,6 @@ class DashboardApp:
         self.build_lock = threading.Lock()
         self.progress = BuildProgress()
         self.current_log_path = ""
-        self.project_runtime_status: dict[str, dict[str, str]] = {}
         self.log_window_size = 1000
         self.log_history_step = 200
         self.log_window_start_line = 0
@@ -177,9 +176,6 @@ class DashboardApp:
         selected = get_project_by_id(project_id)
         ACTIVE_PROJECT_ID = set_active_project_id(selected.id)
         self.reload_app_config()
-
-    def get_runtime_status_for_project(self, project_id: str) -> dict[str, str]:
-        return self.project_runtime_status.get(project_id, {}).copy()
 
     def on_project_select(self, _event=None):
         selected_name = self.project_name_var.get().strip()
