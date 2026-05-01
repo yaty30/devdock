@@ -87,6 +87,7 @@ function RecentBuildsPanel(): JSX.Element {
           <tr>
             <th>Build ID</th>
             <th>Branch</th>
+            <th>Commit</th>
             <th>Builder Name</th>
             <th>Status</th>
             <th>Duration</th>
@@ -98,6 +99,7 @@ function RecentBuildsPanel(): JSX.Element {
             <tr key={build.id}>
               <td>{build.id}</td>
               <td>{build.branch}</td>
+              <td>{`@${build.commit}`}</td>
               <td>
                 <span
                   className={`environment-pill ${build.environment.toLowerCase()}`}
