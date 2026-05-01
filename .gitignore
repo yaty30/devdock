@@ -1,67 +1,9 @@
-# Python cache
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
-
-# PyInstaller build output
-build/
+node_modules/
+out/
 dist/
-*.spec
-
-# Logs / temp files
+*.tsbuildinfo
 *.log
-*.tmp
-*.temp
-*.bak
-*.old
 
-# Local app config
-# Keep a sample config in git instead, e.g. app.config.example
-app.config
-
-# Local generated files
-build_log_*.txt
-dashboard_build_log_*.txt
-
-# IDE/editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS files
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# Test/cache tools
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.coverage
-htmlcov/
-
-# Packaging artifacts
-*.zip
-*.7z
-*.tar
-*.tar.gz
-*.whl
-*.egg-info/
-
-# Installer/output artifacts
-*.exe
-*.msi
-
-# Optional: local secrets/credentials
-*.env
-.env
-.env.*
-
-app.config
+dummy/**/node_modules/
+dummy/**/dist/
+dummy/**/logs/
