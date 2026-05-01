@@ -29,6 +29,7 @@ export type MonitorCard = {
 export type RecentBuild = {
   id: string;
   branch: string;
+  commit: string;
   environment: "Production" | "SIT";
   triggeredBy: string;
   status: "Success" | "Failed";

@@ -152,6 +152,7 @@ export const recentBuilds: RecentBuild[] = [
   {
     id: "#10245",
     branch: "main",
+    commit: "a8c42f1",
     environment: "Production",
     triggeredBy: "Caitlyn Kling",
     status: "Success",
@@ -161,6 +162,7 @@ export const recentBuilds: RecentBuild[] = [
   {
     id: "#10244",
     branch: "develop",
+    commit: "b7d9e3c",
     environment: "SIT",
     triggeredBy: "James Patel",
     status: "Success",
@@ -170,6 +172,7 @@ export const recentBuilds: RecentBuild[] = [
   {
     id: "#10243",
     branch: "feature/auth",
+    commit: "c3f1a9d",
     environment: "SIT",
     triggeredBy: "Maya Chen",
     status: "Success",
@@ -179,6 +182,7 @@ export const recentBuilds: RecentBuild[] = [
   {
     id: "#10242",
     branch: "main",
+    commit: "d4e5f6a",
     environment: "Production",
     triggeredBy: "Caitlyn Kling",
     status: "Failed",
@@ -188,6 +192,7 @@ export const recentBuilds: RecentBuild[] = [
   {
     id: "#10241",
     branch: "release/1.8.0",
+    commit: "e5f6g7h",
     environment: "SIT",
     triggeredBy: "James Patel",
     status: "Success",
