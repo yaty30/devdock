@@ -1,0 +1,8 @@
+{
+  "name": "ivs-dashboard-dummy-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.js"
+  }
+}
