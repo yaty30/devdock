@@ -204,13 +204,13 @@ export const recentBuilds: RecentBuild[] = [
 export const activityFeed: ActivityItem[] = [
   {
     title: "Frontend service restarted",
-    meta: "Port 5173 - By Caitlyn Kling",
+    meta: "",
     time: "10:24 AM",
     tone: "success",
     icon: <SquareTerminal size={18} />,
   },
   {
-    title: "WAR deployed to KMU",
+    title: "WAR deployed",
     meta: "iap.war - Build #10245",
     time: "09:41 AM",
     tone: "success",
@@ -231,11 +231,18 @@ export const activityFeed: ActivityItem[] = [
     icon: <Play size={18} />,
   },
   {
-    title: "Logs opened",
-    meta: "WildFly - By James Patel",
+    title: "Wildfly started",
+    meta: "",
+    time: "08:15 AM",
+    tone: "success",
+    icon: <SquareTerminal size={18} />,
+  },
+  {
+    title: "Wildfly stopped",
+    meta: "",
     time: "08:05 AM",
-    tone: "neutral",
-    icon: <FileText size={18} />,
+    tone: "error",
+    icon: <SquareTerminal size={18} />,
   },
 ];
 

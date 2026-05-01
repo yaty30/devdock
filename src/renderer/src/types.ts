@@ -41,7 +41,7 @@ export type ActivityItem = {
   title: string;
   meta: string;
   time: string;
-  tone: "success" | "accent" | "neutral";
+  tone: "success" | "accent" | "neutral" | "error"  ;
   icon: ReactNode;
 };
 
