@@ -1,15 +1,22 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
   type PointerEvent,
 } from "react";
-import { ChevronLeft, ChevronRight, ExternalLink } from "lucide-react";
+import {
+  ArrowDownAZ,
+  ArrowUpDown,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+} from "lucide-react";
 import { ActionLink } from "../../components/common/ActionLink";
 import { Panel } from "../../components/common/Panel";
 import { activityFeed, monitorCards, recentBuilds } from "../../data/mockData";
-import type { MonitorCard } from "../../types";
+import type { MonitorCard, RecentBuild } from "../../types";
 import { clamp } from "../../utils/math";
 
 type MonitorLayout = {
@@ -76,30 +83,172 @@ function MonitorCardView({
 }
 
 function RecentBuildsPanel(): JSX.Element {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"All" | RecentBuild["status"]>(
+    "All",
+  );
+  const [environmentFilter, setEnvironmentFilter] = useState<
+    "All" | RecentBuild["environment"]
+  >("All");
+  const [sortBy, setSortBy] = useState<keyof RecentBuild>("completed");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+
+  const filteredBuilds = useMemo(() => {
+    const search = searchTerm.trim().toLowerCase();
+
+    const nextBuilds = recentBuilds.filter((build) => {
+      const matchesSearch =
+        search.length === 0 ||
+        [
+          build.id,
+          build.branch,
+          build.commit,
+          build.environment,
+          build.triggeredBy,
+          build.status,
+          build.duration,
+          build.completed,
+        ].some((value) => value.toLowerCase().includes(search));
+      const matchesStatus =
+        statusFilter === "All" || build.status === statusFilter;
+      const matchesEnvironment =
+        environmentFilter === "All" || build.environment === environmentFilter;
+
+      return matchesSearch && matchesStatus && matchesEnvironment;
+    });
+
+    return [...nextBuilds].sort((left, right) => {
+      const leftValue = sortValue(left, sortBy);
+      const rightValue = sortValue(right, sortBy);
+      const direction = sortDirection === "asc" ? 1 : -1;
+
+      if (leftValue < rightValue) {
+        return -1 * direction;
+      }
+
+      if (leftValue > rightValue) {
+        return 1 * direction;
+      }
+
+      return 0;
+    });
+  }, [environmentFilter, searchTerm, sortBy, sortDirection, statusFilter]);
+
+  function sortValue(build: RecentBuild, key: keyof RecentBuild): number | string {
+    if (key === "completed") {
+      return new Date(build.completed).getTime();
+    }
+
+    if (key === "duration") {
+      const match = build.duration.match(/(?:(\d+)m)\s+(\d+)s/);
+      if (!match) {
+        return 0;
+      }
+
+      return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    return String(build[key]).toLowerCase();
+  }
+
+  function handleSort(column: keyof RecentBuild): void {
+    if (sortBy === column) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortBy(column);
+    setSortDirection(column === "completed" ? "desc" : "asc");
+  }
+
+  function renderSortLabel(column: keyof RecentBuild, label: string): JSX.Element {
+    const isActive = sortBy === column;
+
+    return (
+      <button
+        className={`table-sort-button${isActive ? " active" : ""}`}
+        type="button"
+        onClick={() => handleSort(column)}
+      >
+        <span>{label}</span>
+        {isActive ? (
+          <span className="table-sort-direction">
+            {sortDirection === "asc" ? "Asc" : "Desc"}
+          </span>
+        ) : null}
+        {isActive ? <ArrowDownAZ size={14} /> : <ArrowUpDown size={14} />}
+      </button>
+    );
+  }
+
   return (
     <Panel
       title="Recent Builds"
       action={<ActionLink>View all</ActionLink>}
       className="recent-builds-panel"
     >
+      <div className="table-controls">
+        <label className="table-filter-field" htmlFor="recent-builds-search">
+          <span>Find</span>
+          <input
+            id="recent-builds-search"
+            type="search"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Build, branch, commit, user"
+          />
+        </label>
+        <label className="table-filter-field" htmlFor="recent-builds-status">
+          <span>Status</span>
+          <select
+            id="recent-builds-status"
+            value={statusFilter}
+            onChange={(event) =>
+              setStatusFilter(event.target.value as "All" | RecentBuild["status"])
+            }
+          >
+            <option value="All">All</option>
+            <option value="Success">Success</option>
+            <option value="Failed">Failed</option>
+          </select>
+        </label>
+        <label className="table-filter-field" htmlFor="recent-builds-environment">
+          <span>Environment</span>
+          <select
+            id="recent-builds-environment"
+            value={environmentFilter}
+            onChange={(event) =>
+              setEnvironmentFilter(
+                event.target.value as "All" | RecentBuild["environment"],
+              )
+            }
+          >
+            <option value="All">All</option>
+            <option value="Production">Production</option>
+            <option value="SIT">SIT</option>
+          </select>
+        </label>
+      </div>
       <table className="recent-builds-table">
         <thead>
           <tr>
-            <th>Build ID</th>
-            <th>Branch</th>
-            <th>Commit</th>
-            <th>Builder Name</th>
-            <th>Status</th>
-            <th>Duration</th>
-            <th>Completed</th>
+            <th>{renderSortLabel("id", "Build ID")}</th>
+            <th>{renderSortLabel("branch", "Branch")}</th>
+            <th>{renderSortLabel("commit", "Commit")}</th>
+            <th>{renderSortLabel("triggeredBy", "Builder Name")}</th>
+            <th>{renderSortLabel("environment", "Environment")}</th>
+            <th>{renderSortLabel("status", "Status")}</th>
+            <th>{renderSortLabel("duration", "Duration")}</th>
+            <th>{renderSortLabel("completed", "Completed")}</th>
           </tr>
         </thead>
         <tbody>
-          {recentBuilds.map((build) => (
+          {filteredBuilds.map((build) => (
             <tr key={build.id}>
               <td>{build.id}</td>
               <td>{build.branch}</td>
               <td>{`@${build.commit}`}</td>
+              <td>{build.triggeredBy}</td>
               <td>
                 <span
                   className={`environment-pill ${build.environment.toLowerCase()}`}
@@ -119,7 +268,11 @@ function RecentBuildsPanel(): JSX.Element {
         </tbody>
       </table>
       <div className="table-footer">
-        <span>Showing 1 to 5 of 25 results</span>
+        <span>
+          {filteredBuilds.length === recentBuilds.length
+            ? `Showing ${filteredBuilds.length} builds`
+            : `Showing ${filteredBuilds.length} of ${recentBuilds.length} builds`}
+        </span>
         <div className="pagination">
           <button
             className="pagination-arrow"

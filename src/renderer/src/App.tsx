@@ -16,6 +16,7 @@ function App(): JSX.Element {
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [selectedProject, setSelectedProject] = useState<Project>(projects[0]);
   const [theme, setTheme] = useState<Theme>("light");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [panelResetVersion, setPanelResetVersion] = useState(0);
   const [projectLoading, setProjectLoading] = useState(false);
@@ -47,14 +48,19 @@ function App(): JSX.Element {
   }
 
   return (
-    <div className="app-shell" data-theme={theme}>
+    <div
+      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      data-theme={theme}
+    >
       <Sidebar
         selectedProjectId={selectedProject.id}
         activeSection={activeSection}
         theme={theme}
+        collapsed={sidebarCollapsed}
         onProjectChange={switchProject}
         onSectionChange={setActiveSection}
         onAddProject={() => setAddProjectOpen(true)}
+        onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
         onThemeToggle={() =>
           setTheme((current) => (current === "light" ? "dark" : "light"))
         }
