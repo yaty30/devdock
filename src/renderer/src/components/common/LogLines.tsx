@@ -41,18 +41,27 @@ function colorizeMessage(message: string): ReactNode[] {
 export function LogLines({
   lines,
   dense = false,
+  highlight = "",
 }: {
   lines: string[];
   dense?: boolean;
+  highlight?: string;
 }): JSX.Element {
+  const term = highlight.trim();
+
   return (
     <div className={`log-lines${dense ? " dense" : ""}`}>
       {lines.map((line, index) => {
         const time = line.slice(0, 8);
         const message = line.slice(9);
+        const matched =
+          term.length > 0 && line.toLowerCase().includes(term.toLowerCase());
 
         return (
-          <div className="log-line" key={`${line}-${index}`}>
+          <div
+            className={`log-line${matched ? " log-line-matched" : ""}`}
+            key={`${line}-${index}`}
+          >
             <span className="log-number">{index + 1}</span>
             <span className="log-time">{time}</span>
             <span className="log-message">{colorizeMessage(message)}</span>

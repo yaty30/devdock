@@ -4,6 +4,7 @@ type PanelProps = {
   title: string;
   titleMeta?: ReactNode;
   action?: ReactNode;
+  findBar?: ReactNode;
   children: ReactNode;
   className?: string;
 };
@@ -12,11 +13,14 @@ export function Panel({
   title,
   titleMeta,
   action,
+  findBar,
   children,
   className = "",
 }: PanelProps): JSX.Element {
   return (
-    <section className={`panel ${className}`}>
+    <section
+      className={`panel ${className}${findBar ? " panel--with-find" : ""}`}
+    >
       <div className="panel-header">
         <div className="panel-title-group">
           {title ? <h2>{title}</h2> : null}
@@ -24,6 +28,7 @@ export function Panel({
         </div>
         {action ? <div className="panel-action">{action}</div> : null}
       </div>
+      {findBar ? <div className="panel-find-bar">{findBar}</div> : null}
       {children}
     </section>
   );

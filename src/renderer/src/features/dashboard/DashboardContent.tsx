@@ -51,9 +51,34 @@ function LogPanel({
   className?: string;
   dense?: boolean;
 }): JSX.Element {
+  const [findTerm, setFindTerm] = useState("");
+  const id = `find-${title.toLowerCase().replace(/\s+/g, "-")}`;
+
+  const findBar = (
+    <div className="log-find-row">
+      <label htmlFor={id}>Find</label>
+      <input
+        id={id}
+        type="text"
+        value={findTerm}
+        onChange={(e) => setFindTerm(e.target.value)}
+      />
+      <button type="button">Prev</button>
+      <button type="button">Next</button>
+      <button type="button" onClick={() => setFindTerm("")}>
+        Clear
+      </button>
+    </div>
+  );
+
   return (
-    <Panel title={title} action={<LiveStatus />} className={className}>
-      <LogLines lines={lines} dense={dense} />
+    <Panel
+      title={title}
+      action={<LiveStatus />}
+      className={className}
+      findBar={findBar}
+    >
+      <LogLines lines={lines} dense={dense} highlight={findTerm} />
       <div className="panel-footer">
         <ActionLink>{footer}</ActionLink>
       </div>
@@ -106,9 +131,28 @@ function BuildStatusPanel(): JSX.Element {
 }
 
 function BuildLogPanel(): JSX.Element {
+  const [findTerm, setFindTerm] = useState("");
+
+  const findBar = (
+    <div className="log-find-row">
+      <label htmlFor="find-build-log">Find</label>
+      <input
+        id="find-build-log"
+        type="text"
+        value={findTerm}
+        onChange={(e) => setFindTerm(e.target.value)}
+      />
+      <button type="button">Prev</button>
+      <button type="button">Next</button>
+      <button type="button" onClick={() => setFindTerm("")}>
+        Clear
+      </button>
+    </div>
+  );
+
   return (
-    <Panel title="Build Log" className="build-log-panel">
-      <LogLines lines={buildLog} dense />
+    <Panel title="Build Log" className="build-log-panel" findBar={findBar}>
+      <LogLines lines={buildLog} dense highlight={findTerm} />
       <div className="panel-footer">
         <ActionLink>Open build log</ActionLink>
       </div>
@@ -117,13 +161,33 @@ function BuildLogPanel(): JSX.Element {
 }
 
 function TailLogPanel(): JSX.Element {
+  const [findTerm, setFindTerm] = useState("");
+
+  const findBar = (
+    <div className="log-find-row">
+      <label htmlFor="find-tail-log">Find</label>
+      <input
+        id="find-tail-log"
+        type="text"
+        value={findTerm}
+        onChange={(e) => setFindTerm(e.target.value)}
+      />
+      <button type="button">Prev</button>
+      <button type="button">Next</button>
+      <button type="button" onClick={() => setFindTerm("")}>
+        Clear
+      </button>
+    </div>
+  );
+
   return (
     <Panel
       title="Tail Log"
       action={<LiveStatus label="Live tail" />}
       className="tail-log-panel"
+      findBar={findBar}
     >
-      <LogLines lines={tailLogs} dense />
+      <LogLines lines={tailLogs} dense highlight={findTerm} />
     </Panel>
   );
 }
