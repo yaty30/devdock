@@ -37,6 +37,7 @@ import type {
   LogLine,
   LogQueryResult,
   ProjectRecord,
+  ProjectDashboardSummary,
   ProjectRuntimeState,
   ProjectSettingsRecord,
   RecentBuildRecord,
@@ -145,6 +146,25 @@ export class DashboardBackend {
       projects,
       activeProjectId: projects[0]?.id ?? "",
     };
+  }
+
+  getDashboardOverview(): ProjectDashboardSummary[] {
+    return this.getProjects().map((project) => {
+      this.pruneBuilds(project.id);
+      const settings = this.getSettings(project.id);
+      return {
+        project,
+        statuses: this.getStatuses(project.id),
+        lastBuild: this.queryBuilds(project.id, { limit: 1 }).builds[0],
+        serviceUrls: {
+          frontendUrl:
+            settings.services.frontend.appUrl ||
+            settings.services.frontend.healthUrl,
+          wildflyConsoleUrl: settings.services.wildfly.managementUrl || "",
+          wildflyKmuUrl: settings.services.wildfly.appUrl || "",
+        },
+      };
+    });
   }
 
   getProjectState(projectId: string): ProjectRuntimeState {
@@ -480,6 +500,7 @@ export class DashboardBackend {
     projectId: string,
     options: BuildQueryOptions = {},
   ): BuildQueryResult {
+    this.pruneBuilds(projectId);
     return this.queryBuilds(projectId, options);
   }
 
@@ -614,20 +635,9 @@ export class DashboardBackend {
       };
     }
 
-    const result = await spawnCollect("git", splitCommand(trimmed), repository);
+    const lines = await spawnCollect("git", splitCommand(trimmed), repository);
     const status = this.readGitStatus(repository);
-    const trackedGitAction = describeTrackedGitAction(trimmed);
-    if (trackedGitAction) {
-      const ok = result.exitCode === 0;
-      this.insertActivity(
-        projectId,
-        `Git ${trackedGitAction} ${ok ? "completed" : "failed"}`,
-        gitActivityMeta(trimmed, status, result.exitCode),
-        ok ? "accent" : "error",
-        "git",
-      );
-    }
-    return { ...status, lines: result.lines };
+    return { ...status, lines };
   }
 
   private initializeSchema(): void {
@@ -1251,6 +1261,7 @@ export class DashboardBackend {
   }
 
   private getRecentBuilds(projectId: string): RecentBuildRecord[] {
+    this.pruneBuilds(projectId);
     return this.queryBuilds(projectId, { limit: 50 }).builds;
   }
 
@@ -1320,7 +1331,14 @@ export class DashboardBackend {
   }
 
   private pruneBuilds(projectId: string): void {
-    void projectId;
+    this.db
+      .prepare(
+        `DELETE FROM build_runs
+         WHERE project_id = ?
+           AND status != 'running'
+           AND datetime(COALESCE(completed_at, started_at)) < datetime('now', '-7 days')`,
+      )
+      .run(projectId);
   }
 
   private getActivity(projectId: string): ActivityRecord[] {
@@ -1328,7 +1346,7 @@ export class DashboardBackend {
       .prepare(
         `SELECT * FROM activity_events
          WHERE project_id = ?
-           AND created_at >= datetime('now', '-2 days')
+           AND created_at >= datetime('now', '-7 days')
          ORDER BY created_at DESC, id DESC`,
       )
       .all(projectId) as ActivityRow[];
@@ -1358,12 +1376,12 @@ export class DashboardBackend {
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(projectId, title, meta, tone, kind, createdAt);
-    // prune records older than 2 days to prevent unbounded growth
+    // prune records older than 7 days to prevent unbounded growth
     this.db
       .prepare(
         `DELETE FROM activity_events
          WHERE project_id = ?
-           AND created_at < datetime('now', '-2 days')`,
+           AND created_at < datetime('now', '-7 days')`,
       )
       .run(projectId);
     this.send({
@@ -2037,16 +2055,11 @@ function terminateProcessTreeAsync(
   });
 }
 
-type CommandResult = {
-  lines: string[];
-  exitCode: number | null;
-};
-
 function spawnCollect(
   command: string,
   args: string[],
   cwd: string,
-): Promise<CommandResult> {
+): Promise<string[]> {
   return new Promise((resolvePromise) => {
     const lines: string[] = [stamp(`$ ${command} ${args.join(" ")}`)];
     const child = spawn(command, args, { cwd, windowsHide: true });
@@ -2058,60 +2071,13 @@ function spawnCollect(
     });
     child.on("error", (error) => {
       lines.push(stamp(error.message));
-      resolvePromise({ lines, exitCode: null });
+      resolvePromise(lines);
     });
     child.on("exit", (code) => {
       lines.push(stamp(`git exited with code ${code ?? "unknown"}`));
-      resolvePromise({ lines, exitCode: code });
+      resolvePromise(lines);
     });
   });
-}
-
-function describeTrackedGitAction(args: string): string | null {
-  const parts = splitCommand(args);
-  const command = parts.find((part) => !part.startsWith("-"))?.toLowerCase();
-  if (!command) {
-    return null;
-  }
-
-  if (
-    command === "commit" ||
-    command === "push" ||
-    command === "pull" ||
-    command === "fetch" ||
-    command === "merge" ||
-    command === "rebase" ||
-    command === "checkout" ||
-    command === "switch" ||
-    command === "reset" ||
-    command === "revert" ||
-    command === "cherry-pick"
-  ) {
-    return command;
-  }
-
-  if (command === "stash") {
-    const subcommand = parts
-      .slice(parts.indexOf(command) + 1)
-      .find((part) => !part.startsWith("-"))
-      ?.toLowerCase();
-    return subcommand && subcommand !== "list" && subcommand !== "show"
-      ? "stash"
-      : null;
-  }
-
-  return null;
-}
-
-function gitActivityMeta(
-  args: string,
-  status: GitStatusRecord,
-  exitCode: number | null,
-): string {
-  const branch = status.branch || "unavailable";
-  const commit = status.commit || "unavailable";
-  const exit = exitCode === null ? "unknown" : String(exitCode);
-  return `${branch} @ ${commit} - git ${args} exited ${exit}`;
 }
 
 function spawnSyncText(command: string, args: string[], cwd: string): string {

@@ -13,6 +13,8 @@ import type {
 
 const api: DashboardApi = {
   getSnapshot: () => ipcRenderer.invoke("dashboard:getSnapshot"),
+  getDashboardOverview: () =>
+    ipcRenderer.invoke("dashboard:getDashboardOverview"),
   getProjectState: (projectId) =>
     ipcRenderer.invoke("dashboard:getProjectState", projectId),
   saveProjectSettings: (projectId, settings: ProjectSettingsRecord) =>

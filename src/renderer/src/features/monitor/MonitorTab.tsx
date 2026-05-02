@@ -19,6 +19,7 @@ import {
   Layers3,
   Package,
   RotateCcw,
+  Search,
   SquareTerminal,
 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
@@ -344,15 +345,18 @@ function RecentBuildsPanel({
       className="recent-builds-panel"
       findBar={
         <div className="log-find-row">
-          <label htmlFor="recent-builds-search">Find</label>
-          <input
-            ref={findInputRef}
-            id="recent-builds-search"
-            type="search"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Branch, commit, profile..."
-          />
+          <div className="find-input-shell">
+            <Search size={14} />
+            <input
+              ref={findInputRef}
+              id="recent-builds-search"
+              type="search"
+              value={searchTerm}
+              aria-label="Find"
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Branch, commit, profile..."
+            />
+          </div>
           {searchTerm ? (
             <button type="button" onClick={() => setSearchTerm("")}>
               Clear
@@ -495,7 +499,7 @@ function ActivityFeedPanel({
           />
         )}
         {!hasMore && activityFeed.length === 0 && (
-          <p className="activity-empty">No activity in the last 2 days.</p>
+          <p className="activity-empty">No activity in the last 7 days.</p>
         )}
       </div>
     </Panel>

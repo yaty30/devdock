@@ -28,6 +28,11 @@ function registerIpc(): void {
   ipcMain.handle("dashboard:getSnapshot", () =>
     withLoggedErrors("dashboard:getSnapshot", () => getBackend().getSnapshot()),
   );
+  ipcMain.handle("dashboard:getDashboardOverview", () =>
+    withLoggedErrors("dashboard:getDashboardOverview", () =>
+      getBackend().getDashboardOverview(),
+    ),
+  );
   ipcMain.handle("dashboard:getProjectState", (_event, projectId: string) =>
     withLoggedErrors("dashboard:getProjectState", () =>
       getBackend().getProjectState(projectId),

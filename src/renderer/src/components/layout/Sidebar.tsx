@@ -49,6 +49,17 @@ export function Sidebar({
 
       <nav className="sidebar-nav" aria-label="Main navigation">
         <button
+          className={`nav-item${activeSection === "dashboard" ? " active" : ""}`}
+          type="button"
+          onClick={() => onSectionChange("dashboard")}
+          aria-label="Dashboard"
+          title="Dashboard"
+        >
+          <BarChart3 size={18} />
+          <span className="nav-label">Overview</span>
+        </button>
+
+        <button
           className={`nav-item project-toggle${projectsOpen ? " open" : ""}`}
           type="button"
           onClick={() => {
@@ -71,14 +82,15 @@ export function Sidebar({
         >
           {projects.map((project) => (
             <button
-              className={`project-item${project.id === selectedProjectId ? " active" : ""}`}
+              className={`project-item${
+                activeSection === "project" && project.id === selectedProjectId
+                  ? " active"
+                  : ""
+              }`}
               type="button"
               key={project.id}
               tabIndex={projectsOpen || collapsed ? 0 : -1}
-              onClick={() => {
-                onProjectChange(project);
-                onSectionChange("dashboard");
-              }}
+              onClick={() => onProjectChange(project)}
             >
               <span className="project-code">{project.code}</span>
               <span>{project.name}</span>
@@ -95,16 +107,6 @@ export function Sidebar({
           </button>
         </div>
 
-        <button
-          className={`nav-item${activeSection === "dashboard" ? " active" : ""}`}
-          type="button"
-          onClick={() => onSectionChange("dashboard")}
-          aria-label="Dashboards"
-          title="Dashboards"
-        >
-          <BarChart3 size={18} />
-          <span className="nav-label">Dashboards</span>
-        </button>
         <button
           className={`nav-item${activeSection === "settings" ? " active" : ""}`}
           type="button"

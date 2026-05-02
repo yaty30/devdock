@@ -6,7 +6,19 @@ import {
   type CSSProperties,
   type PointerEvent,
 } from "react";
-import { CheckCircle2, CircleDot, GitBranch, Minus } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  CircleDot,
+  Clock3,
+  ExternalLink,
+  FolderKanban,
+  GitBranch,
+  Layers3,
+  Minus,
+  Search,
+  SquareTerminal,
+} from "lucide-react";
 import { ActionLink } from "../../components/common/ActionLink";
 import { LogLines } from "../../components/common/LogLines";
 import { Panel } from "../../components/common/Panel";
@@ -21,7 +33,13 @@ import {
   useLogViewport,
 } from "../../hooks/useLogStore";
 import type { LogLine } from "../../../../shared/dashboardTypes";
-import type { BuildStage, LogChannel, ProjectRuntimeState } from "../../types";
+import type {
+  BuildStage,
+  LogChannel,
+  ProjectDashboardSummary,
+  ProjectRuntimeState,
+  ServiceName,
+} from "../../types";
 import { clamp } from "../../utils/math";
 
 type DashboardLayout = {
@@ -84,13 +102,16 @@ function useLogFind(lines: LogLine[], id: string): LogFindState {
 
   const findBar = (
     <div className="log-find-row">
-      <label htmlFor={id}>Find</label>
-      <input
-        id={id}
-        type="text"
-        value={term}
-        onChange={(event) => setTerm(event.target.value)}
-      />
+      <div className="find-input-shell">
+        <Search size={14} />
+        <input
+          id={id}
+          type="text"
+          value={term}
+          aria-label="Find"
+          onChange={(event) => setTerm(event.target.value)}
+        />
+      </div>
       <span className="log-find-count">
         {total === 0 ? "0/0" : `${safePosition + 1}/${total}`}
       </span>
@@ -234,9 +255,8 @@ function BuildStatusPanel({
 }): JSX.Element {
   const latestBuild = projectState.recentBuilds[0];
   const now = useNow(latestBuild?.status === "Running" ? 1000 : null);
-  const elapsed = latestBuild
-    ? buildElapsed(latestBuild, now)
-    : "--:--";
+  const elapsed = latestBuild ? buildElapsed(latestBuild, now) : "--:--";
+  const buildStatusLabel = latestBuild?.status ?? "Idle";
   const buildLines = useLogViewport(projectId, "build").lines;
   const stages = buildStagesFromLatest(
     latestBuild?.status,
@@ -249,11 +269,9 @@ function BuildStatusPanel({
       title="Build Status"
       titleMeta={
         <div className="build-status-title-meta">
-          {latestBuild ? (
-            <span className={`status-pill ${buildStatusClass(latestBuild.status)}`}>
-              {latestBuild.status}
-            </span>
-          ) : null}
+          <span className={`status-pill ${buildStatusClass(buildStatusLabel)}`}>
+            {buildStatusLabel}
+          </span>
           <span className="elapsed-pill">{elapsed}</span>
         </div>
       }
@@ -270,15 +288,12 @@ function BuildStatusPanel({
         </div>
         <div className="branch-row">
           <span>Commit</span>
-          <strong>{projectState.gitStatus.commit}</strong>
+          <strong>@{projectState.gitStatus.commit}</strong>
         </div>
       </div>
       <div className="timeline">
         {stages.map((stage) => (
-          <div
-            className={`timeline-item ${stage.state}`}
-            key={stage.label}
-          >
+          <div className={`timeline-item ${stage.state}`} key={stage.label}>
             {stage.state === "complete" ? (
               <CheckCircle2 size={17} />
             ) : stage.state === "current" ? (
@@ -391,6 +406,309 @@ function TailLogPanel({ projectId }: { projectId: string }): JSX.Element {
 }
 
 export function DashboardContent({
+  projects,
+}: {
+  projects: ProjectDashboardSummary[];
+}): JSX.Element {
+  const hasRunningService = projects.some((summary) =>
+    summary.statuses.some((status) => status.state === "running"),
+  );
+  const now = useNow(hasRunningService ? 1000 : null);
+  const runningServices = projects.reduce(
+    (count, summary) =>
+      count +
+      summary.statuses.filter((status) => status.state === "running").length,
+    0,
+  );
+  const expectedServices = projects.length * 2;
+  const lastUpdated = latestCheckedAt(projects);
+
+  return (
+    <section className="dashboard-overview-screen">
+      <div className="dashboard-kpi-grid">
+        <OverviewKpi
+          icon={<FolderKanban size={22} />}
+          label="Total Projects"
+          value={String(projects.length)}
+          tone="project"
+        />
+        <OverviewKpi
+          icon={<Activity size={22} />}
+          label="Services Running"
+          value={`${runningServices}/${expectedServices}`}
+          tone="service"
+        />
+        <OverviewKpi
+          icon={<Clock3 size={22} />}
+          label="Last Updated"
+          value={lastUpdated ? formatTime(lastUpdated) : "--"}
+          tone="time"
+        />
+      </div>
+
+      <div className="dashboard-project-list">
+        {projects.length > 0 ? (
+          projects.map((summary) => (
+            <ProjectStatusRow
+              key={summary.project.id}
+              summary={summary}
+              now={now}
+            />
+          ))
+        ) : (
+          <div className="dashboard-empty">No projects configured.</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function OverviewKpi({
+  icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: JSX.Element;
+  label: string;
+  value: string;
+  tone: "project" | "service" | "time";
+}): JSX.Element {
+  return (
+    <article className="dashboard-kpi-card">
+      <div className={`dashboard-kpi-icon ${tone}`}>{icon}</div>
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+    </article>
+  );
+}
+
+function ProjectStatusRow({
+  summary,
+  now,
+}: {
+  summary: ProjectDashboardSummary;
+  now: number;
+}): JSX.Element {
+  const frontend = serviceStatus(summary, "frontend");
+  const wildfly = serviceStatus(summary, "wildfly");
+  const overallStatus = projectOverallStatus(summary);
+  const lastBuild = summary.lastBuild;
+
+  return (
+    <article className="dashboard-project-card">
+      <header className="dashboard-project-card-header">
+        <div className="dashboard-project-title-group">
+          <span className="dashboard-project-code">{summary.project.code}</span>
+          <div>
+            <h2>{summary.project.name}</h2>
+            <div className="dashboard-project-meta">
+              <span>Project ID</span>
+              <strong>{summary.project.id}</strong>
+              <i />
+              <span>Services</span>
+              <strong>Frontend / WildFly</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="dashboard-project-status-groups">
+          <div className="dashboard-status-group">
+            <span>
+              <span className={`dashboard-status-dot ${overallStatus.tone}`} />
+              Overall Status
+            </span>
+            <strong className={`dashboard-status-value ${overallStatus.tone}`}>
+              {overallStatus.label}
+            </strong>
+          </div>
+          <div className="dashboard-status-group">
+            <span>Last Build Status</span>
+            {lastBuild ? (
+              buildStatusPill(lastBuild.status)
+            ) : (
+              <strong className="dashboard-status-value idle">No builds</strong>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <div className="dashboard-project-detail-grid">
+        <section className="dashboard-project-detail">
+          <header>
+            <SquareTerminal size={18} />
+            <h3>Frontend</h3>
+            {statusPill(frontend?.state)}
+          </header>
+          <DashboardDetailRow label="URL">
+            {summary.serviceUrls.frontendUrl ? (
+              <a
+                className="monitor-link"
+                href={summary.serviceUrls.frontendUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span>{summary.serviceUrls.frontendUrl}</span>
+                <ExternalLink size={13} />
+              </a>
+            ) : (
+              <strong>Not set</strong>
+            )}
+          </DashboardDetailRow>
+          <DashboardDetailRow label="Last Check">
+            <strong>
+              {frontend ? formatDate(frontend.checkedAt) : "Not checked"}
+            </strong>
+          </DashboardDetailRow>
+        </section>
+
+        <section className="dashboard-project-detail">
+          <header>
+            <Layers3 size={18} />
+            <h3>WildFly</h3>
+            {statusPill(wildfly?.state)}
+          </header>
+          <DashboardDetailRow label="Console">
+            {summary.serviceUrls.wildflyConsoleUrl ? (
+              <a
+                className="monitor-link"
+                href={summary.serviceUrls.wildflyConsoleUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span>{summary.serviceUrls.wildflyConsoleUrl}</span>
+                <ExternalLink size={13} />
+              </a>
+            ) : (
+              <strong>Not set</strong>
+            )}
+          </DashboardDetailRow>
+          <DashboardDetailRow label="KMU">
+            {summary.serviceUrls.wildflyKmuUrl ? (
+              <a
+                className="monitor-link"
+                href={summary.serviceUrls.wildflyKmuUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <span>{summary.serviceUrls.wildflyKmuUrl}</span>
+                <ExternalLink size={13} />
+              </a>
+            ) : (
+              <strong>Not set</strong>
+            )}
+          </DashboardDetailRow>
+        </section>
+
+        <section className="dashboard-project-detail">
+          <header>
+            <Clock3 size={18} />
+            <h3>Uptime</h3>
+          </header>
+          <DashboardDetailRow label="Frontend">
+            <strong>{formatServiceUptime(frontend, now)}</strong>
+          </DashboardDetailRow>
+          <DashboardDetailRow label="WildFly">
+            <strong>{formatServiceUptime(wildfly, now)}</strong>
+          </DashboardDetailRow>
+        </section>
+
+        <section className="dashboard-project-detail">
+          <header>
+            <Clock3 size={18} />
+            <h3>Last Build</h3>
+            {lastBuild ? (
+              buildStatusPill(lastBuild.status)
+            ) : (
+              <strong className="dashboard-status-value idle">No builds</strong>
+            )}
+          </header>
+          <DashboardDetailRow label="Duration">
+            <strong>{lastBuild?.duration ?? "--"}</strong>
+          </DashboardDetailRow>
+          <DashboardDetailRow label="Completed">
+            <strong>{lastBuild?.completed ?? "No builds recorded"}</strong>
+          </DashboardDetailRow>
+        </section>
+      </div>
+    </article>
+  );
+}
+
+function DashboardDetailRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: JSX.Element;
+}): JSX.Element {
+  return (
+    <div className="dashboard-detail-row">
+      <span>{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function projectOverallStatus(summary: ProjectDashboardSummary): {
+  label: string;
+  tone: "success" | "warning" | "failed" | "idle";
+} {
+  const frontend = serviceStatus(summary, "frontend");
+  const wildfly = serviceStatus(summary, "wildfly");
+  const states = [frontend?.state, wildfly?.state];
+
+  if (states.every((state) => state === "running")) {
+    return { label: "All Services Running", tone: "success" };
+  }
+  if (states.some((state) => state === "error")) {
+    return { label: "Service Error", tone: "failed" };
+  }
+  if (states.some((state) => state === "running")) {
+    return { label: "Partially Running", tone: "warning" };
+  }
+  return { label: "No Services Running", tone: "idle" };
+}
+
+function latestCheckedAt(
+  projects: ProjectDashboardSummary[],
+): string | undefined {
+  let latestValue: string | undefined;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  projects.forEach((summary) => {
+    summary.statuses.forEach((status) => {
+      const time = new Date(status.checkedAt).getTime();
+      if (Number.isNaN(time)) {
+        return;
+      }
+      if (time > latestTime) {
+        latestValue = status.checkedAt;
+        latestTime = time;
+      }
+    });
+  });
+
+  return latestValue;
+}
+
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function serviceStatus(
+  summary: ProjectDashboardSummary,
+  service: ServiceName,
+): ProjectDashboardSummary["statuses"][number] | undefined {
+  return summary.statuses.find((status) => status.service === service);
+}
+
+export function ProjectDashboardContent({
   projectId,
   resetVersion,
   projectState,
@@ -659,6 +977,10 @@ function buildElapsed(
 }
 
 function buildStatusClass(status: string): string {
+  if (status === "Idle") {
+    return "idle";
+  }
+
   if (status === "Success") {
     return "success";
   }
@@ -668,10 +990,91 @@ function buildStatusClass(status: string): string {
   return "failed";
 }
 
+function statusPill(state: string | undefined): JSX.Element {
+  const normalized = (state ?? "unknown").toLowerCase();
+  const statusClass = serviceStateClass(normalized);
+  const text =
+    normalized === "running"
+      ? "Running"
+      : normalized === "starting"
+        ? "Starting"
+        : normalized === "stopping"
+          ? "Stopping"
+          : normalized === "success"
+            ? "Success"
+            : normalized === "failed" || normalized === "error"
+              ? "Failed"
+              : normalized === "stopped"
+                ? "Stopped"
+                : "Unknown";
+
+  return <span className={`status-pill ${statusClass}`}>{text}</span>;
+}
+
+function buildStatusPill(
+  status: NonNullable<ProjectDashboardSummary["lastBuild"]>["status"],
+): JSX.Element {
+  return (
+    <span className={`status-pill ${buildStatusClass(status)}`}>{status}</span>
+  );
+}
+
+function serviceStateClass(state: string): string {
+  if (state === "running" || state === "success") {
+    return "success";
+  }
+  if (state === "starting") {
+    return "starting";
+  }
+  if (state === "stopping") {
+    return "stopping";
+  }
+  if (state === "stopped") {
+    return "stopped";
+  }
+  return state === "unknown" ? "idle" : "failed";
+}
+
+function formatServiceUptime(
+  status: ProjectDashboardSummary["statuses"][number] | undefined,
+  now: number,
+): string {
+  if (!status?.startedAt || status.state !== "running") {
+    return status?.state === "starting" ? "Starting" : "Not running";
+  }
+
+  const startedAt = new Date(status.startedAt).getTime();
+  if (Number.isNaN(startedAt)) {
+    return "Not running";
+  }
+
+  const totalSeconds = Math.max(1, Math.floor((now - startedAt) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${seconds}s`;
+}
+
 function formatElapsed(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function buildStagesFromLatest(
@@ -684,7 +1087,10 @@ function buildStagesFromLatest(
       label: "Build started",
       patterns: [/\$ .*(?:mvn|mvn\.cmd)/i, /build started/i],
     },
-    { label: "Cleaning project", patterns: [/--- clean:/i, /\bclean(?:ing)?\b/i] },
+    {
+      label: "Cleaning project",
+      patterns: [/--- clean:/i, /\bclean(?:ing)?\b/i],
+    },
     {
       label: "Backend compile",
       patterns: [/--- compiler:/i, /\bcompil(?:e|ing)\b/i],

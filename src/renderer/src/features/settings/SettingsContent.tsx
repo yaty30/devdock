@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {
@@ -41,6 +41,99 @@ function FieldRow({
         <span />
       )}
     </label>
+  );
+}
+
+const OUTCOME_OPTIONS: Array<{
+  value: BuildOutcomeType;
+  label: string;
+  dotColor: string;
+}> = [
+  { value: "build-only", label: "Build only", dotColor: "var(--accent)" },
+  {
+    value: "build-and-deploy",
+    label: "Build + deploy",
+    dotColor: "var(--success)",
+  },
+];
+
+function OutcomeSelect({
+  value,
+  onChange,
+}: {
+  value: BuildOutcomeType;
+  onChange: (value: BuildOutcomeType) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const current =
+    OUTCOME_OPTIONS.find((option) => option.value === value) ??
+    OUTCOME_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function handleOutside(event: MouseEvent): void {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [open]);
+
+  return (
+    <div className="custom-select build-outcome-select" ref={containerRef}>
+      <button
+        className="custom-select-trigger"
+        type="button"
+        onClick={() => setOpen((currentOpen) => !currentOpen)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span
+          className="custom-select-dot"
+          style={{ background: current.dotColor }}
+        />
+        <span className="custom-select-value">{current.label}</span>
+        <ChevronDown
+          size={13}
+          className={`custom-select-chevron${open ? " open" : ""}`}
+        />
+      </button>
+      {open ? (
+        <ul className="custom-select-dropdown" role="listbox">
+          {OUTCOME_OPTIONS.map((option) => (
+            <li
+              key={option.value}
+              className={`custom-select-option${
+                value === option.value ? " selected" : ""
+              }`}
+              role="option"
+              aria-selected={value === option.value}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+            >
+              <span
+                className="custom-select-dot"
+                style={{ background: option.dotColor }}
+              />
+              <span className="custom-select-option-label">
+                {option.label}
+              </span>
+              {value === option.value ? (
+                <Check size={13} className="custom-select-check" />
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
@@ -667,20 +760,14 @@ export function SettingsContent({
                         />
                       </td>
                       <td>
-                        <select
+                        <OutcomeSelect
                           value={profile.outcomeType}
-                          onChange={(event) =>
+                          onChange={(outcomeType) =>
                             updateProfile(profile.id, {
-                              outcomeType: event.target
-                                .value as BuildOutcomeType,
+                              outcomeType,
                             })
                           }
-                        >
-                          <option value="build-only">Build only</option>
-                          <option value="build-and-deploy">
-                            Build + deploy
-                          </option>
-                        </select>
+                        />
                       </td>
                       <td>
                         <label className="builder-confirm">

@@ -11,6 +11,7 @@ export type {
   DashboardEvent,
   GitStatusRecord,
   LogChannel,
+  ProjectDashboardSummary,
   ProjectRecord,
   ProjectRuntimeState,
   ProjectSettingsRecord,
@@ -23,7 +24,7 @@ export type {
   ShutdownEntry,
 } from "../../shared/dashboardTypes";
 
-export type AppSection = "dashboard" | "settings";
+export type AppSection = "dashboard" | "project" | "settings";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";

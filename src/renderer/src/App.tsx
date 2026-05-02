@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, RotateCcw } from "lucide-react";
+import { CheckCircle2, RotateCcw } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { HeaderActions } from "./components/layout/HeaderActions";
 import { Sidebar } from "./components/layout/Sidebar";
 import { SegmentedTabs } from "./components/navigation/SegmentedTabs";
-import { DashboardContent } from "./features/dashboard/DashboardContent";
+import {
+  DashboardContent,
+  ProjectDashboardContent,
+} from "./features/dashboard/DashboardContent";
 import { GitTerminalTab } from "./features/git/GitTerminalTab";
 import { MonitorTab } from "./features/monitor/MonitorTab";
 import { SettingsContent } from "./features/settings/SettingsContent";
@@ -17,6 +20,7 @@ import type {
   DashboardTab,
   DashboardEvent,
   Project,
+  ProjectDashboardSummary,
   ProjectRuntimeState,
   ShutdownEntry,
   Theme,
@@ -37,6 +41,9 @@ function App(): JSX.Element {
   const [projectState, setProjectState] = useState<ProjectRuntimeState | null>(
     null,
   );
+  const [dashboardOverview, setDashboardOverview] = useState<
+    ProjectDashboardSummary[]
+  >([]);
   const [projectStateProjectId, setProjectStateProjectId] = useState<
     string | null
   >(null);
@@ -69,6 +76,7 @@ function App(): JSX.Element {
         return;
       }
       setProjects(snapshot.projects);
+      void refreshDashboardOverview();
       const active =
         snapshot.projects.find(
           (project) => project.id === snapshot.activeProjectId,
@@ -100,6 +108,11 @@ function App(): JSX.Element {
     }
 
     selectedProjectIdRef.current = selectedProject.id;
+    if (activeSection === "dashboard") {
+      setProjectLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     setProjectLoading(true);
     window.ivsDashboard
@@ -135,10 +148,18 @@ function App(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [selectedProject]);
+  }, [selectedProject, activeSection]);
 
   useEffect(() => {
     const unsubscribe = window.ivsDashboard.onEvent((event) => {
+      if (
+        event.type === "status" ||
+        event.type === "builds" ||
+        event.type === "settings"
+      ) {
+        void refreshDashboardOverview();
+      }
+
       if (event.projectId !== selectedProjectIdRef.current) {
         return;
       }
@@ -217,6 +238,14 @@ function App(): JSX.Element {
 
   function switchProject(project: Project): void {
     if (project.id === selectedProject?.id) {
+      if (settingsDirty && activeSection === "settings") {
+        setPendingNav(() => () => {
+          setActiveSection("project");
+          setSettingsDirty(false);
+        });
+        return;
+      }
+      setActiveSection("project");
       return;
     }
 
@@ -230,6 +259,7 @@ function App(): JSX.Element {
       setProjectStateProjectId(null);
       projectSwitchStartedAtRef.current = Date.now();
       setSettingsDirty(false);
+      setActiveSection("project");
     };
 
     if (settingsDirty && activeSection === "settings") {
@@ -253,6 +283,13 @@ function App(): JSX.Element {
       return;
     }
     setActiveSection(section);
+  }
+
+  function refreshDashboardOverview(): Promise<void> {
+    return window.ivsDashboard
+      .getDashboardOverview()
+      .then((overview) => setDashboardOverview(overview))
+      .catch((error) => console.error(error));
   }
 
   const splashOverlay =
@@ -318,16 +355,20 @@ function App(): JSX.Element {
           <div>
             <h1>
               {activeSection === "dashboard"
-                ? selectedProject.name
-                : "Settings"}
+                ? "Overview"
+                : activeSection === "project"
+                  ? selectedProject.name
+                  : "Settings"}
             </h1>
             <p>
               {activeSection === "dashboard"
-                ? "Monitor services, run builds, and review deployment status."
-                : "Configure project paths, services, Git, and build profiles."}
+                ? "All project server status and last build results."
+                : activeSection === "project"
+                  ? "Monitor services, run builds, and review deployment status."
+                  : "Configure project paths, services, Git, and build profiles."}
             </p>
           </div>
-          {activeSection === "dashboard" ? (
+          {activeSection === "project" ? (
             activeProjectState ? (
               <HeaderActions
                 disabled={projectLoading}
@@ -341,7 +382,9 @@ function App(): JSX.Element {
           ) : null}
         </header>
 
-        {!activeProjectState ? (
+        {activeSection === "dashboard" ? (
+          <DashboardContent projects={dashboardOverview} />
+        ) : !activeProjectState ? (
           <section className="resizable-panel-screen">
             <div className="panel">
               <div className="panel-header">
@@ -351,7 +394,7 @@ function App(): JSX.Element {
               </div>
             </div>
           </section>
-        ) : activeSection === "dashboard" ? (
+        ) : activeSection === "project" ? (
           <>
             <div className="tab-toolbar">
               <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
@@ -367,7 +410,7 @@ function App(): JSX.Element {
               ) : null}
             </div>
             {activeTab === "dashboard" ? (
-              <DashboardContent
+              <ProjectDashboardContent
                 projectId={selectedProject.id}
                 resetVersion={panelResetVersion}
                 projectState={activeProjectState}

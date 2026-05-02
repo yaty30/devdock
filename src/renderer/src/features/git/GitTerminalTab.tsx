@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Search } from "lucide-react";
 import { quickGitCommands } from "../../data/mockData";
 import type { GitStatusRecord } from "../../types";
 
@@ -94,8 +95,10 @@ export function GitTerminalTab({
             ))}
           </div>
           <div className="git-find-row">
-            <label htmlFor="git-find">Find</label>
-            <input id="git-find" type="text" />
+            <div className="find-input-shell">
+              <Search size={14} />
+              <input id="git-find" type="text" aria-label="Find" />
+            </div>
             <button type="button">Prev</button>
             <button type="button">Next</button>
             <button type="button">Clear</button>

@@ -215,14 +215,12 @@ function BuildActionsDropdown({
             <Play size={15} />
           )}
           <span className="build-dropdown-trigger-label">
-            {buildRunning ? "Stop Build" : (runningProfileName ?? "Run Build")}
+            {buildRunning ? "Stop Build" : "Run Build"}
           </span>
           {stoppingBuild ? (
             <LoaderCircle className="button-spinner" size={16} />
           ) : buildRunning ? (
-            <span className="build-running-profile">
-              {runningProfileName ?? latestBuild?.profile ?? ""}
-            </span>
+            <LoaderCircle className="button-spinner" size={16} />
           ) : (
             <ChevronDown size={16} />
           )}
@@ -302,7 +300,7 @@ function BuildConfirmDetails({
         ? `${changeLines.length} uncommitted change${
             changeLines.length === 1 ? "" : "s"
           }`
-        : "Clean, no uncommitted changes";
+        : "Clean";
   const rows = [
     ["Branch", gitStatus.branch || "unavailable"],
     ["Commit", gitStatus.commit ? `@${gitStatus.commit}` : "unavailable"],

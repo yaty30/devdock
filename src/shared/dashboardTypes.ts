@@ -139,6 +139,17 @@ export type ProjectRuntimeState = {
   logs: Record<LogChannel, string[]>;
 };
 
+export type ProjectDashboardSummary = {
+  project: ProjectRecord;
+  statuses: ServiceStatusRecord[];
+  lastBuild?: RecentBuildRecord;
+  serviceUrls: {
+    frontendUrl: string;
+    wildflyConsoleUrl: string;
+    wildflyKmuUrl: string;
+  };
+};
+
 export type DashboardSnapshot = {
   projects: ProjectRecord[];
   activeProjectId: string;
@@ -201,6 +212,7 @@ export type DashboardEvent =
 
 export type DashboardApi = {
   getSnapshot: () => Promise<DashboardSnapshot>;
+  getDashboardOverview: () => Promise<ProjectDashboardSummary[]>;
   getProjectState: (projectId: string) => Promise<ProjectRuntimeState>;
   saveProjectSettings: (
     projectId: string,
