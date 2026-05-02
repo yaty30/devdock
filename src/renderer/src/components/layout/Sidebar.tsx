@@ -11,10 +11,10 @@ import {
   Settings,
   Sun,
 } from "lucide-react";
-import { projects } from "../../data/mockData";
 import type { AppSection, Project, Theme } from "../../types";
 
 export function Sidebar({
+  projects,
   selectedProjectId,
   activeSection,
   theme,
@@ -25,6 +25,7 @@ export function Sidebar({
   onCollapseToggle,
   onThemeToggle,
 }: {
+  projects: Project[];
   selectedProjectId: string;
   activeSection: AppSection;
   theme: Theme;
@@ -66,14 +67,14 @@ export function Sidebar({
 
         <div
           className={`project-list${projectsOpen && !collapsed ? " open" : ""}`}
-          aria-hidden={collapsed || !projectsOpen}
+          aria-hidden={!collapsed && !projectsOpen}
         >
           {projects.map((project) => (
             <button
               className={`project-item${project.id === selectedProjectId ? " active" : ""}`}
               type="button"
               key={project.id}
-              tabIndex={projectsOpen ? 0 : -1}
+              tabIndex={projectsOpen || collapsed ? 0 : -1}
               onClick={() => {
                 onProjectChange(project);
                 onSectionChange("dashboard");
@@ -86,7 +87,7 @@ export function Sidebar({
           <button
             className="project-item add-project-item"
             type="button"
-            tabIndex={projectsOpen ? 0 : -1}
+            tabIndex={projectsOpen || collapsed ? 0 : -1}
             onClick={onAddProject}
           >
             <Plus className="add-project-icon" size={16} />
@@ -125,7 +126,11 @@ export function Sidebar({
           aria-label={collapsed ? "Expand side menu" : "Collapse side menu"}
           title={collapsed ? "Expand side menu" : "Collapse side menu"}
         >
-          {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          {collapsed ? (
+            <PanelLeftOpen size={18} />
+          ) : (
+            <PanelLeftClose size={18} />
+          )}
         </button>
         <button
           className="theme-toggle sidebar-icon-button"
