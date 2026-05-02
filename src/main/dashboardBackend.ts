@@ -614,9 +614,20 @@ export class DashboardBackend {
       };
     }
 
-    const lines = await spawnCollect("git", splitCommand(trimmed), repository);
+    const result = await spawnCollect("git", splitCommand(trimmed), repository);
     const status = this.readGitStatus(repository);
-    return { ...status, lines };
+    const trackedGitAction = describeTrackedGitAction(trimmed);
+    if (trackedGitAction) {
+      const ok = result.exitCode === 0;
+      this.insertActivity(
+        projectId,
+        `Git ${trackedGitAction} ${ok ? "completed" : "failed"}`,
+        gitActivityMeta(trimmed, status, result.exitCode),
+        ok ? "accent" : "error",
+        "git",
+      );
+    }
+    return { ...status, lines: result.lines };
   }
 
   private initializeSchema(): void {
@@ -2026,11 +2037,16 @@ function terminateProcessTreeAsync(
   });
 }
 
+type CommandResult = {
+  lines: string[];
+  exitCode: number | null;
+};
+
 function spawnCollect(
   command: string,
   args: string[],
   cwd: string,
-): Promise<string[]> {
+): Promise<CommandResult> {
   return new Promise((resolvePromise) => {
     const lines: string[] = [stamp(`$ ${command} ${args.join(" ")}`)];
     const child = spawn(command, args, { cwd, windowsHide: true });
@@ -2042,13 +2058,60 @@ function spawnCollect(
     });
     child.on("error", (error) => {
       lines.push(stamp(error.message));
-      resolvePromise(lines);
+      resolvePromise({ lines, exitCode: null });
     });
     child.on("exit", (code) => {
       lines.push(stamp(`git exited with code ${code ?? "unknown"}`));
-      resolvePromise(lines);
+      resolvePromise({ lines, exitCode: code });
     });
   });
+}
+
+function describeTrackedGitAction(args: string): string | null {
+  const parts = splitCommand(args);
+  const command = parts.find((part) => !part.startsWith("-"))?.toLowerCase();
+  if (!command) {
+    return null;
+  }
+
+  if (
+    command === "commit" ||
+    command === "push" ||
+    command === "pull" ||
+    command === "fetch" ||
+    command === "merge" ||
+    command === "rebase" ||
+    command === "checkout" ||
+    command === "switch" ||
+    command === "reset" ||
+    command === "revert" ||
+    command === "cherry-pick"
+  ) {
+    return command;
+  }
+
+  if (command === "stash") {
+    const subcommand = parts
+      .slice(parts.indexOf(command) + 1)
+      .find((part) => !part.startsWith("-"))
+      ?.toLowerCase();
+    return subcommand && subcommand !== "list" && subcommand !== "show"
+      ? "stash"
+      : null;
+  }
+
+  return null;
+}
+
+function gitActivityMeta(
+  args: string,
+  status: GitStatusRecord,
+  exitCode: number | null,
+): string {
+  const branch = status.branch || "unavailable";
+  const commit = status.commit || "unavailable";
+  const exit = exitCode === null ? "unknown" : String(exitCode);
+  return `${branch} @ ${commit} - git ${args} exited ${exit}`;
 }
 
 function spawnSyncText(command: string, args: string[], cwd: string): string {
