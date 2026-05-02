@@ -7,6 +7,16 @@ dist/
 dummy/**/node_modules/
 dummy/**/dist/
 dummy/**/logs/
+dummy/**/target/
+tools/
+/dummy
+/build
+
+.env
+installer/*
+!installer/installer.py
+!installer/version.txt
+!installer/pack_exe.cmd
 
 # WildFly is installed outside the project (default: C:\wildfly-server)
 # See dummy/wildfly-real/wildfly.config.ps1  →  $WF_SERVER_DIR
