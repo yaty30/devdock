@@ -1,4 +1,27 @@
 import type { ReactNode } from "react";
+export type {
+  ActivityKind,
+  ActivityRecord,
+  ActivityTone,
+  BuildQueryOptions,
+  BuildQueryResult,
+  BuildQuerySortKey,
+  BuildOutcomeType,
+  BuildProfileRecord,
+  DashboardEvent,
+  GitStatusRecord,
+  LogChannel,
+  ProjectRecord,
+  ProjectRuntimeState,
+  ProjectSettingsRecord,
+  RecentBuildRecord,
+  ServiceAction,
+  ServiceConfig,
+  ServiceName,
+  ServiceState,
+  ServiceStatusRecord,
+  ShutdownEntry,
+} from "../../shared/dashboardTypes";
 
 export type AppSection = "dashboard" | "settings";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal";
@@ -8,7 +31,7 @@ export type Theme = "light" | "dark";
 export type BuildStage = {
   label: string;
   time: string;
-  current?: boolean;
+  state: "complete" | "current" | "pending" | "failed";
 };
 
 export type Project = {
@@ -30,9 +53,8 @@ export type RecentBuild = {
   id: string;
   branch: string;
   commit: string;
-  environment: "Production" | "SIT";
-  triggeredBy: string;
-  status: "Success" | "Failed";
+  profile: string;
+  status: "Running" | "Success" | "Failed";
   duration: string;
   completed: string;
 };
@@ -41,7 +63,7 @@ export type ActivityItem = {
   title: string;
   meta: string;
   time: string;
-  tone: "success" | "accent" | "neutral" | "error"  ;
+  tone: "success" | "accent" | "neutral" | "error";
   icon: ReactNode;
 };
 
@@ -54,6 +76,8 @@ export type BuildProfile = {
 
 export type ConfirmDialogState = {
   title: string;
-  message: string;
+  message: ReactNode;
   confirmLabel: string;
+  cancelLabel?: string;
+  variant?: "danger" | "warning";
 };
