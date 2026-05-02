@@ -41,6 +41,7 @@ export function HeaderActions({
       <BuildActionsDropdown
         projectId={projectId}
         settings={settings}
+        statuses={statuses}
         recentBuilds={recentBuilds}
         gitStatus={gitStatus}
         disabled={disabled}
@@ -52,12 +53,14 @@ export function HeaderActions({
 function BuildActionsDropdown({
   projectId,
   settings,
+  statuses,
   recentBuilds,
   gitStatus,
   disabled = false,
 }: {
   projectId: string;
   settings: ProjectSettingsRecord;
+  statuses: ServiceStatusRecord[];
   recentBuilds: RecentBuildRecord[];
   gitStatus: GitStatusRecord;
   disabled?: boolean;
@@ -76,6 +79,9 @@ function BuildActionsDropdown({
   const latestBuildRunning = latestBuild?.status === "Running";
   const open = openMode !== null;
   const buildRunning = runningProfileId !== null || latestBuildRunning;
+  const wildflyStatus = statuses.find((status) => status.service === "wildfly");
+  const wildflyAvailable = wildflyStatus?.state === "running";
+  const buildDisabled = disabled || (!buildRunning && !wildflyAvailable);
 
   useEffect(() => {
     if (openMode !== "click") {
@@ -94,10 +100,10 @@ function BuildActionsDropdown({
   }, [openMode]);
 
   useEffect(() => {
-    if (disabled || buildRunning) {
+    if (buildDisabled || buildRunning) {
       setOpenMode(null);
     }
-  }, [disabled, buildRunning]);
+  }, [buildDisabled, buildRunning]);
 
   useEffect(() => {
     if (!latestBuildRunning) {
@@ -141,7 +147,7 @@ function BuildActionsDropdown({
         className="build-dropdown"
         ref={dropdownRef}
         onMouseEnter={() => {
-          if (!disabled && !buildRunning && openMode !== "click") {
+          if (!buildDisabled && !buildRunning && openMode !== "click") {
             setOpenMode("hover");
           }
         }}
@@ -158,7 +164,12 @@ function BuildActionsDropdown({
           type="button"
           aria-haspopup="menu"
           aria-expanded={open}
-          disabled={disabled || stoppingBuild}
+          title={
+            buildDisabled && !buildRunning
+              ? "Start WildFly before running a build"
+              : undefined
+          }
+          disabled={buildDisabled || stoppingBuild}
           onClick={() => {
             if (buildRunning) {
               stopBuild();
@@ -196,7 +207,7 @@ function BuildActionsDropdown({
                 type="button"
                 role="menuitem"
                 key={profile.buttonName}
-                disabled={disabled || buildRunning}
+                disabled={buildDisabled || buildRunning}
                 onClick={() => {
                   setOpenMode(null);
                   if (profile.confirm) {
