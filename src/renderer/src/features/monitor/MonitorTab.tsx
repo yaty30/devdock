@@ -1,6 +1,6 @@
-import {
+﻿import {
+  useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -9,27 +9,38 @@ import {
 import {
   ArrowDownAZ,
   ArrowUpDown,
-  ChevronLeft,
-  ChevronRight,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  Circle,
   ExternalLink,
+  GitBranch,
+  Clock3,
+  Layers3,
+  Package,
+  RotateCcw,
+  SquareTerminal,
 } from "lucide-react";
-import { ActionLink } from "../../components/common/ActionLink";
 import { Panel } from "../../components/common/Panel";
-import { activityFeed, monitorCards, recentBuilds } from "../../data/mockData";
-import type { MonitorCard, RecentBuild } from "../../types";
+import type {
+  ActivityRecord,
+  BuildQuerySortKey,
+  MonitorCard,
+  ProjectRuntimeState,
+  RecentBuildRecord,
+  ServiceState,
+} from "../../types";
 import { clamp } from "../../utils/math";
 
 type MonitorLayout = {
   columnWidths: [number, number, number, number] | null;
-  topRowHeight: number | null;
 };
 
 type MonitorDragState = {
-  type: "column-1" | "column-2" | "column-3" | "row";
+  type: "column-1" | "column-2" | "column-3";
   startX: number;
   startY: number;
   startColumnWidths: [number, number, number, number];
-  startTopRowHeight: number;
 };
 
 const MONITOR_MIN_COLUMN_WIDTH = 190;
@@ -82,76 +93,206 @@ function MonitorCardView({
   );
 }
 
-function RecentBuildsPanel(): JSX.Element {
-  const [searchTerm, setSearchTerm] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"All" | RecentBuild["status"]>(
-    "All",
+type BuildStatusFilter = "All" | RecentBuildRecord["status"];
+
+const STATUS_OPTIONS: Array<{
+  value: BuildStatusFilter;
+  label: string;
+  dotColor: string | null;
+}> = [
+  { value: "All", label: "All statuses", dotColor: null },
+  { value: "Running", label: "Running", dotColor: "var(--accent)" },
+  { value: "Success", label: "Success", dotColor: "#22c55e" },
+  { value: "Failed", label: "Failed", dotColor: "#ef4444" },
+  { value: "Stopped", label: "Stopped", dotColor: "#f59e0b" },
+];
+
+function StatusSelect({
+  value,
+  onChange,
+}: {
+  value: BuildStatusFilter;
+  onChange: (value: BuildStatusFilter) => void;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const current =
+    STATUS_OPTIONS.find((o) => o.value === value) ?? STATUS_OPTIONS[0];
+
+  useEffect(() => {
+    if (!open) return;
+    function handleOutside(e: MouseEvent): void {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleOutside);
+    return () => document.removeEventListener("mousedown", handleOutside);
+  }, [open]);
+
+  return (
+    <div className="custom-select" ref={containerRef}>
+      <button
+        className="custom-select-trigger"
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {current.dotColor && (
+          <span
+            className="custom-select-dot"
+            style={{ background: current.dotColor }}
+          />
+        )}
+        <span className="custom-select-value">{current.label}</span>
+        <ChevronDown
+          size={13}
+          className={`custom-select-chevron${open ? " open" : ""}`}
+        />
+      </button>
+      {open && (
+        <ul className="custom-select-dropdown" role="listbox">
+          {STATUS_OPTIONS.map((option) => (
+            <li
+              key={option.value}
+              className={`custom-select-option${
+                value === option.value ? " selected" : ""
+              }`}
+              role="option"
+              aria-selected={value === option.value}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+            >
+              <span
+                className="custom-select-dot"
+                style={
+                  option.dotColor
+                    ? { background: option.dotColor }
+                    : {
+                        background: "transparent",
+                        border: "1.5px solid var(--muted)",
+                      }
+                }
+              />
+              <span className="custom-select-option-label">{option.label}</span>
+              {value === option.value && (
+                <Check size={13} className="custom-select-check" />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
-  const [environmentFilter, setEnvironmentFilter] = useState<
-    "All" | RecentBuild["environment"]
-  >("All");
-  const [sortBy, setSortBy] = useState<keyof RecentBuild>("completed");
+}
+
+const RECENT_BUILDS_PAGE_SIZE = 30;
+
+function RecentBuildsPanel({
+  projectId,
+  recentBuilds,
+}: {
+  projectId: string;
+  recentBuilds: RecentBuildRecord[];
+}): JSX.Element {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<BuildStatusFilter>("All");
+  const [sortBy, setSortBy] = useState<BuildQuerySortKey>("completed");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [builds, setBuilds] = useState<RecentBuildRecord[]>([]);
+  const [totalBuilds, setTotalBuilds] = useState(0);
+  const [hasMoreBuilds, setHasMoreBuilds] = useState(false);
+  const [loadingBuilds, setLoadingBuilds] = useState(false);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const requestSeqRef = useRef(0);
+  const latestBuildKey = recentBuilds
+    .map((build) => `${build.id}:${build.status}:${build.completedAt ?? ""}`)
+    .join("|");
 
-  const filteredBuilds = useMemo(() => {
-    const search = searchTerm.trim().toLowerCase();
-
-    const nextBuilds = recentBuilds.filter((build) => {
-      const matchesSearch =
-        search.length === 0 ||
-        [
-          build.id,
-          build.branch,
-          build.commit,
-          build.environment,
-          build.triggeredBy,
-          build.status,
-          build.duration,
-          build.completed,
-        ].some((value) => value.toLowerCase().includes(search));
-      const matchesStatus =
-        statusFilter === "All" || build.status === statusFilter;
-      const matchesEnvironment =
-        environmentFilter === "All" || build.environment === environmentFilter;
-
-      return matchesSearch && matchesStatus && matchesEnvironment;
-    });
-
-    return [...nextBuilds].sort((left, right) => {
-      const leftValue = sortValue(left, sortBy);
-      const rightValue = sortValue(right, sortBy);
-      const direction = sortDirection === "asc" ? 1 : -1;
-
-      if (leftValue < rightValue) {
-        return -1 * direction;
+  const fetchBuildPage = useCallback(
+    async (offset: number): Promise<void> => {
+      const requestSeq = ++requestSeqRef.current;
+      setLoadingBuilds(true);
+      try {
+        const result = await window.ivsDashboard.getBuilds(projectId, {
+          search: searchTerm,
+          status: statusFilter,
+          sortBy,
+          sortDirection,
+          offset,
+          limit: RECENT_BUILDS_PAGE_SIZE,
+        });
+        if (requestSeq !== requestSeqRef.current) {
+          return;
+        }
+        setBuilds((current) =>
+          offset === 0 ? result.builds : [...current, ...result.builds],
+        );
+        setTotalBuilds(result.total);
+        setHasMoreBuilds(result.hasMore);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        if (requestSeq === requestSeqRef.current) {
+          setLoadingBuilds(false);
+        }
       }
+    },
+    [projectId, searchTerm, sortBy, sortDirection, statusFilter],
+  );
 
-      if (leftValue > rightValue) {
-        return 1 * direction;
-      }
+  useEffect(() => {
+    setBuilds([]);
+    setTotalBuilds(0);
+    setHasMoreBuilds(false);
+    scrollRef.current?.scrollTo({ top: 0 });
+    void fetchBuildPage(0);
+  }, [fetchBuildPage, latestBuildKey]);
 
-      return 0;
-    });
-  }, [environmentFilter, searchTerm, sortBy, sortDirection, statusFilter]);
-
-  function sortValue(build: RecentBuild, key: keyof RecentBuild): number | string {
-    if (key === "completed") {
-      return new Date(build.completed).getTime();
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!sentinel || !root) {
+      return undefined;
     }
 
-    if (key === "duration") {
-      const match = build.duration.match(/(?:(\d+)m)\s+(\d+)s/);
-      if (!match) {
-        return 0;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (
+          entries[0].isIntersecting &&
+          hasMoreBuilds &&
+          !loadingBuilds
+        ) {
+          void fetchBuildPage(builds.length);
+        }
+      },
+      { root, threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [builds.length, fetchBuildPage, hasMoreBuilds, loadingBuilds]);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        findInputRef.current?.focus();
+        findInputRef.current?.select();
       }
-
-      return Number(match[1]) * 60 + Number(match[2]);
     }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
-    return String(build[key]).toLowerCase();
-  }
-
-  function handleSort(column: keyof RecentBuild): void {
+  function handleSort(column: BuildQuerySortKey): void {
     if (sortBy === column) {
       setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
       return;
@@ -161,7 +302,10 @@ function RecentBuildsPanel(): JSX.Element {
     setSortDirection(column === "completed" ? "desc" : "asc");
   }
 
-  function renderSortLabel(column: keyof RecentBuild, label: string): JSX.Element {
+  function renderSortLabel(
+    column: BuildQuerySortKey,
+    label: string,
+  ): JSX.Element {
     const isActive = sortBy === column;
 
     return (
@@ -181,176 +325,268 @@ function RecentBuildsPanel(): JSX.Element {
     );
   }
 
+  function handleReset(): void {
+    setSearchTerm("");
+    setStatusFilter("All");
+    setSortBy("completed");
+    setSortDirection("desc");
+  }
+
+  const isFiltered =
+    searchTerm !== "" ||
+    statusFilter !== "All" ||
+    sortBy !== "completed" ||
+    sortDirection !== "desc";
+
   return (
     <Panel
       title="Recent Builds"
-      action={<ActionLink>View all</ActionLink>}
       className="recent-builds-panel"
-    >
-      <div className="table-controls">
-        <label className="table-filter-field" htmlFor="recent-builds-search">
-          <span>Find</span>
+      findBar={
+        <div className="log-find-row">
+          <label htmlFor="recent-builds-search">Find</label>
           <input
+            ref={findInputRef}
             id="recent-builds-search"
             type="search"
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Build, branch, commit, user"
+            placeholder="Branch, commit, profile..."
           />
-        </label>
-        <label className="table-filter-field" htmlFor="recent-builds-status">
-          <span>Status</span>
-          <select
-            id="recent-builds-status"
-            value={statusFilter}
-            onChange={(event) =>
-              setStatusFilter(event.target.value as "All" | RecentBuild["status"])
-            }
-          >
-            <option value="All">All</option>
-            <option value="Success">Success</option>
-            <option value="Failed">Failed</option>
-          </select>
-        </label>
-        <label className="table-filter-field" htmlFor="recent-builds-environment">
-          <span>Environment</span>
-          <select
-            id="recent-builds-environment"
-            value={environmentFilter}
-            onChange={(event) =>
-              setEnvironmentFilter(
-                event.target.value as "All" | RecentBuild["environment"],
-              )
-            }
-          >
-            <option value="All">All</option>
-            <option value="Production">Production</option>
-            <option value="SIT">SIT</option>
-          </select>
-        </label>
-      </div>
-      <table className="recent-builds-table">
-        <thead>
-          <tr>
-            <th>{renderSortLabel("id", "Build ID")}</th>
-            <th>{renderSortLabel("branch", "Branch")}</th>
-            <th>{renderSortLabel("commit", "Commit")}</th>
-            <th>{renderSortLabel("triggeredBy", "Builder Name")}</th>
-            <th>{renderSortLabel("environment", "Environment")}</th>
-            <th>{renderSortLabel("status", "Status")}</th>
-            <th>{renderSortLabel("duration", "Duration")}</th>
-            <th>{renderSortLabel("completed", "Completed")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filteredBuilds.map((build) => (
-            <tr key={build.id}>
-              <td>{build.id}</td>
-              <td>{build.branch}</td>
-              <td>{`@${build.commit}`}</td>
-              <td>{build.triggeredBy}</td>
-              <td>
-                <span
-                  className={`environment-pill ${build.environment.toLowerCase()}`}
-                >
-                  {build.environment}
-                </span>
-              </td>
-              <td>
-                <span className={`status-pill ${build.status.toLowerCase()}`}>
-                  {build.status}
-                </span>
-              </td>
-              <td>{build.duration}</td>
-              <td>{build.completed}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="table-footer">
-        <span>
-          {filteredBuilds.length === recentBuilds.length
-            ? `Showing ${filteredBuilds.length} builds`
-            : `Showing ${filteredBuilds.length} of ${recentBuilds.length} builds`}
-        </span>
-        <div className="pagination">
-          <button
-            className="pagination-arrow"
-            type="button"
-            aria-label="Previous page"
-          >
-            <ChevronLeft size={22} />
-          </button>
-          {[1, 2, 3, 4, 5].map((page) => (
-            <button
-              className={page === 2 ? "active" : ""}
-              type="button"
-              key={page}
-            >
-              {page}
+          {searchTerm ? (
+            <button type="button" onClick={() => setSearchTerm("")}>
+              Clear
             </button>
-          ))}
-          <span className="pagination-ellipsis">...</span>
-          <button type="button">22</button>
+          ) : null}
+          <StatusSelect value={statusFilter} onChange={setStatusFilter} />
           <button
-            className="pagination-arrow next"
+            className="table-reset-button"
             type="button"
-            aria-label="Next page"
+            onClick={handleReset}
+            title="Reset filters and sorting"
+            disabled={!isFiltered}
           >
-            <ChevronRight size={22} />
+            <RotateCcw size={14} />
+            <span>Reset</span>
           </button>
         </div>
+      }
+    >
+      <div className="recent-builds-table-scroll" ref={scrollRef}>
+        <table className="recent-builds-table">
+          <thead>
+            <tr>
+              <th>{renderSortLabel("id", "Build ID")}</th>
+              <th>{renderSortLabel("branch", "Branch")}</th>
+              <th>{renderSortLabel("commit", "Commit")}</th>
+              <th>{renderSortLabel("profile", "Profile")}</th>
+              <th>{renderSortLabel("status", "Status")}</th>
+              <th>{renderSortLabel("duration", "Duration")}</th>
+              <th>{renderSortLabel("completed", "Completed")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {builds.map((build) => (
+              <tr key={build.id}>
+                <td>{build.id}</td>
+                <td>{build.branch}</td>
+                <td>{`@${build.commit}`}</td>
+                <td>{build.profile}</td>
+                <td>
+                  <span
+                    className={`status-pill ${buildStatusClass(build.status)}`}
+                  >
+                    {build.status}
+                  </span>
+                </td>
+                <td>{build.duration}</td>
+                <td>{build.completed}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div
+          ref={sentinelRef}
+          className="recent-builds-sentinel"
+          aria-hidden="true"
+        />
+        {builds.length === 0 && !loadingBuilds ? (
+          <p className="recent-builds-empty">No builds match the filters.</p>
+        ) : null}
+      </div>
+      <div className="table-footer">
+        <span>
+          {loadingBuilds && builds.length === 0
+            ? "Loading builds"
+            : `Showing ${builds.length} of ${totalBuilds} builds`}
+        </span>
+        {loadingBuilds && builds.length > 0 ? (
+          <span>Loading more...</span>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+const ACTIVITY_PAGE_SIZE = 20;
+
+type ActivityFeedRow =
+  | { type: "divider"; key: string; label: string }
+  | { type: "item"; item: ActivityRecord };
+
+function ActivityFeedPanel({
+  activityFeed,
+}: {
+  activityFeed: ActivityRecord[];
+}): JSX.Element {
+  const [visibleCount, setVisibleCount] = useState(ACTIVITY_PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+
+  // reset when the feed itself changes (project switch or fresh data)
+  useEffect(() => {
+    setVisibleCount(ACTIVITY_PAGE_SIZE);
+  }, [activityFeed]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisibleCount((prev) =>
+            Math.min(prev + ACTIVITY_PAGE_SIZE, activityFeed.length),
+          );
+        }
+      },
+      { threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [activityFeed.length]);
+
+  const visibleItems = activityFeed.slice(0, visibleCount);
+  const rows = groupActivityFeedByDate(visibleItems);
+  const hasMore = visibleCount < activityFeed.length;
+
+  return (
+    <Panel title="Activity Feed" className="activity-feed-panel">
+      <div className="activity-list">
+        {rows.map((row) =>
+          row.type === "divider" ? (
+            <div className="activity-date-divider" key={row.key}>
+              <span>{row.label}</span>
+            </div>
+          ) : (
+            <div className="activity-item" key={row.item.id}>
+              <span className={`activity-dot ${row.item.tone}`} />
+              <div className="activity-icon">{activityIcon(row.item.kind)}</div>
+              <div className="activity-copy">
+                <strong>{row.item.title}</strong>
+                <span>{row.item.meta}</span>
+              </div>
+              <time>{row.item.time}</time>
+            </div>
+          ),
+        )}
+        {hasMore && (
+          <div
+            ref={sentinelRef}
+            className="activity-scroll-sentinel"
+            aria-hidden="true"
+          />
+        )}
+        {!hasMore && activityFeed.length === 0 && (
+          <p className="activity-empty">No activity in the last 2 days.</p>
+        )}
       </div>
     </Panel>
   );
 }
 
-function ActivityFeedPanel(): JSX.Element {
-  return (
-    <Panel
-      title="Activity Feed"
-      action={
-        <button className="text-link" type="button">
-          View all
-        </button>
-      }
-      className="activity-feed-panel"
-    >
-      <div className="activity-list">
-        {activityFeed.map((item) => (
-          <div className="activity-item" key={`${item.title}-${item.time}`}>
-            <span className={`activity-dot ${item.tone}`} />
-            <div className="activity-icon">{item.icon}</div>
-            <div className="activity-copy">
-              <strong>{item.title}</strong>
-              <span>{item.meta}</span>
-            </div>
-            <time>{item.time}</time>
-          </div>
-        ))}
-      </div>
-      <div className="activity-footer">
-        <ActionLink>View all activity</ActionLink>
-      </div>
-    </Panel>
-  );
+function groupActivityFeedByDate(items: ActivityRecord[]): ActivityFeedRow[] {
+  const rows: ActivityFeedRow[] = [];
+  let previousKey: string | null = null;
+
+  for (const item of items) {
+    const key = activityDateKey(item.createdAt);
+    if (key !== previousKey) {
+      rows.push({
+        type: "divider",
+        key: `divider-${key}`,
+        label: formatActivityDate(item.createdAt),
+      });
+      previousKey = key;
+    }
+    rows.push({ type: "item", item });
+  }
+
+  return rows;
+}
+
+function activityDateKey(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "unknown";
+  }
+
+  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+}
+
+function formatActivityDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown date";
+  }
+
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  if (activityDateKey(value) === activityDateKey(today.toISOString())) {
+    return "Today";
+  }
+
+  if (activityDateKey(value) === activityDateKey(yesterday.toISOString())) {
+    return "Yesterday";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  }).format(date);
 }
 
 export function MonitorTab({
   resetVersion,
+  projectState,
+  projectId,
 }: {
   resetVersion: number;
+  projectState: ProjectRuntimeState;
+  projectId: string;
 }): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<MonitorDragState | null>(null);
-  const [layout, setLayout] = useState<MonitorLayout>({
-    columnWidths: null,
-    topRowHeight: null,
-  });
+  const [layout, setLayout] = useState<MonitorLayout>(() =>
+    readStoredMonitorLayout(projectId),
+  );
+  const [, setUptimeTick] = useState(0);
 
   useEffect(() => {
-    setLayout({ columnWidths: null, topRowHeight: null });
-  }, [resetVersion]);
+    setLayout(readStoredMonitorLayout(projectId));
+  }, [resetVersion, projectId]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      `ivs-monitor-layout-${projectId}`,
+      JSON.stringify(layout),
+    );
+  }, [layout, projectId]);
+
+  useEffect(() => {
+    const id = setInterval(() => setUptimeTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const startResize = (
     type: MonitorDragState["type"],
@@ -359,8 +595,6 @@ export function MonitorTab({
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
 
-    const topRowPanel =
-      gridRef.current?.querySelector<HTMLElement>(".monitor-card-one");
     const columnPanels = [
       gridRef.current?.querySelector<HTMLElement>(".monitor-card-one"),
       gridRef.current?.querySelector<HTMLElement>(".monitor-card-two"),
@@ -376,7 +610,6 @@ export function MonitorTab({
       startX: event.clientX,
       startY: event.clientY,
       startColumnWidths,
-      startTopRowHeight: topRowPanel?.getBoundingClientRect().height ?? 0,
     };
   };
 
@@ -385,32 +618,6 @@ export function MonitorTab({
     const grid = gridRef.current;
 
     if (!drag || !grid) {
-      return;
-    }
-
-    if (drag.type === "row") {
-      const gridStyles = window.getComputedStyle(grid);
-      const gridPaddingTop = parseFloat(gridStyles.paddingTop) || 0;
-      const gridPaddingBottom = parseFloat(gridStyles.paddingBottom) || 0;
-      const availableHeight =
-        grid.clientHeight -
-        gridPaddingTop -
-        gridPaddingBottom -
-        MONITOR_SPLITTER_SIZE;
-      const maxTopHeight = Math.max(
-        MONITOR_MIN_TOP_ROW,
-        availableHeight - MONITOR_MIN_BOTTOM_ROW,
-      );
-      const nextTopHeight = clamp(
-        drag.startTopRowHeight + event.clientY - drag.startY,
-        MONITOR_MIN_TOP_ROW,
-        maxTopHeight,
-      );
-
-      setLayout((current) => ({
-        ...current,
-        topRowHeight: nextTopHeight,
-      }));
       return;
     }
 
@@ -486,11 +693,9 @@ export function MonitorTab({
       layout.columnWidths === null
         ? `minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr)`
         : `minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[0]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[1]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[2]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[3]}px)`,
-    "--monitor-row-template":
-      layout.topRowHeight === null
-        ? `minmax(${MONITOR_MIN_TOP_ROW}px, auto) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_BOTTOM_ROW}px, 1fr)`
-        : `minmax(${MONITOR_MIN_TOP_ROW}px, ${layout.topRowHeight}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_BOTTOM_ROW}px, 1fr)`,
+    "--monitor-row-template": `minmax(${MONITOR_MIN_TOP_ROW}px, auto) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_BOTTOM_ROW}px, 1fr)`,
   } as CSSProperties;
+  const monitorCards = createMonitorCards(projectState);
 
   return (
     <section className="monitor-screen resizable-panel-screen">
@@ -506,8 +711,11 @@ export function MonitorTab({
             key={card.title}
           />
         ))}
-        <RecentBuildsPanel />
-        <ActivityFeedPanel />
+        <RecentBuildsPanel
+          projectId={projectId}
+          recentBuilds={projectState.recentBuilds}
+        />
+        <ActivityFeedPanel activityFeed={projectState.activityFeed} />
         <div
           className="grid-splitter monitor-column-splitter monitor-column-splitter-one"
           role="separator"
@@ -538,17 +746,201 @@ export function MonitorTab({
           onPointerUp={stopResize}
           onPointerCancel={stopResize}
         />
-        <div
-          className="grid-splitter monitor-row-splitter"
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize monitor summary and details rows"
-          onPointerDown={(event) => startResize("row", event)}
-          onPointerMove={resizeLayout}
-          onPointerUp={stopResize}
-          onPointerCancel={stopResize}
-        />
       </div>
     </section>
   );
+}
+
+function readStoredMonitorLayout(projectId: string): MonitorLayout {
+  const fallback: MonitorLayout = { columnWidths: null };
+  const stored = window.localStorage.getItem(`ivs-monitor-layout-${projectId}`);
+  if (!stored) return fallback;
+  try {
+    const parsed = JSON.parse(stored) as { columnWidths?: unknown };
+    return {
+      columnWidths: Array.isArray(parsed.columnWidths)
+        ? (parsed.columnWidths as [number, number, number, number])
+        : null,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
+  const frontendStatus = projectState.statuses.find(
+    (status) => status.service === "frontend",
+  );
+  const wildflyStatus = projectState.statuses.find(
+    (status) => status.service === "wildfly",
+  );
+  const lastBuild = projectState.recentBuilds[0];
+
+  return [
+    {
+      title: "Frontend",
+      icon: <SquareTerminal size={26} />,
+      rows: [
+        { label: "Status", value: statusPill(frontendStatus?.state) },
+        {
+          label: "URL",
+          value:
+            projectState.settings.services.frontend.appUrl ||
+            projectState.settings.services.frontend.healthUrl ||
+            "Not set",
+        },
+        {
+          label: "Last Check",
+          value: frontendStatus
+            ? formatDate(frontendStatus.checkedAt)
+            : "Not checked",
+        },
+      ],
+    },
+    {
+      title: "WildFly",
+      icon: <Layers3 size={26} />,
+      rows: [
+        { label: "Status", value: statusPill(wildflyStatus?.state) },
+        {
+          label: "Console",
+          value:
+            projectState.settings.services.wildfly.managementUrl || "Not set",
+        },
+        {
+          label: "KMU",
+          value: projectState.settings.services.wildfly.appUrl || "Not set",
+        },
+      ],
+    },
+    {
+      title: "Uptime",
+      icon: <Clock3 size={26} />,
+      rows: [
+        {
+          label: "Frontend",
+          value: formatUptime(frontendStatus?.startedAt, frontendStatus?.state),
+        },
+        {
+          label: "WildFly",
+          value: formatUptime(wildflyStatus?.startedAt, wildflyStatus?.state),
+        },
+      ],
+    },
+    {
+      title: "Last Build",
+      icon: <CheckCircle2 size={26} />,
+      rows: [
+        {
+          label: "Status",
+          value: statusPill(lastBuild?.status.toLowerCase()),
+        },
+        { label: "Duration", value: lastBuild?.duration ?? "No builds" },
+        { label: "Completed", value: lastBuild?.completed ?? "No builds" },
+      ],
+    },
+  ];
+}
+
+function statusPill(state: string | undefined): JSX.Element {
+  const normalized = state ?? "unknown";
+  const statusClass =
+    normalized === "running" || normalized === "success"
+      ? "success"
+      : normalized === "starting"
+        ? "starting"
+        : normalized === "stopping"
+          ? "stopping"
+          : normalized === "stopped"
+            ? "stopped"
+            : "failed";
+  const text =
+    normalized === "running"
+      ? "Running"
+      : normalized === "starting"
+        ? "Starting"
+        : normalized === "stopping"
+          ? "Stopping"
+          : normalized === "success"
+            ? "Success"
+            : normalized === "failed" || normalized === "error"
+              ? "Failed"
+              : normalized === "stopped"
+                ? "Stopped"
+                : "Unknown";
+
+  return <span className={`status-pill ${statusClass}`}>{text}</span>;
+}
+
+function buildStatusClass(status: RecentBuildRecord["status"]): string {
+  if (status === "Success") {
+    return "success";
+  }
+
+  if (status === "Running") {
+    return "running";
+  }
+
+  if (status === "Stopped") {
+    return "stopped";
+  }
+
+  return "failed";
+}
+
+function activityIcon(kind: ActivityRecord["kind"]): JSX.Element {
+  if (kind === "build") {
+    return <Package size={18} />;
+  }
+  if (kind === "service") {
+    return <SquareTerminal size={18} />;
+  }
+  if (kind === "git") {
+    return <GitBranch size={18} />;
+  }
+  return <Circle size={18} />;
+}
+
+function formatUptime(
+  startedAt: string | undefined,
+  state: ServiceState | undefined,
+): string {
+  if (state === "starting") {
+    return "Starting";
+  }
+
+  if (state === "stopping") {
+    return "Stopping";
+  }
+
+  if (!startedAt || state !== "running") {
+    return "Not running";
+  }
+
+  const totalSeconds = Math.max(
+    1,
+    Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000),
+  );
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+
+  return `${seconds}s`;
+}
+
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
