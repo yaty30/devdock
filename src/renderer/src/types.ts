@@ -80,4 +80,5 @@ export type ConfirmDialogState = {
   confirmLabel: string;
   cancelLabel?: string;
   variant?: "danger" | "warning";
+  confirmDisabled?: boolean;
 };

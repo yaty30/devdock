@@ -66,6 +66,7 @@ function BuildActionsDropdown({
   disabled?: boolean;
 }): JSX.Element {
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const confirmRequestRef = useRef(0);
   const [openMode, setOpenMode] = useState<"hover" | "click" | null>(null);
   const [runningProfileId, setRunningProfileId] = useState<string | null>(null);
   const [runningProfileName, setRunningProfileName] = useState<string | null>(
@@ -74,6 +75,9 @@ function BuildActionsDropdown({
   const [pendingBuild, setPendingBuild] = useState<BuildProfileRecord | null>(
     null,
   );
+  const [confirmGitStatus, setConfirmGitStatus] =
+    useState<GitStatusRecord>(gitStatus);
+  const [confirmGitLoading, setConfirmGitLoading] = useState(false);
   const [stoppingBuild, setStoppingBuild] = useState(false);
   const latestBuild = recentBuilds[0];
   const latestBuildRunning = latestBuild?.status === "Running";
@@ -132,6 +136,33 @@ function BuildActionsDropdown({
         setRunningProfileId(null);
         setRunningProfileName(null);
       });
+  }
+
+  function openBuildConfirmation(profile: BuildProfileRecord): void {
+    const requestId = confirmRequestRef.current + 1;
+    confirmRequestRef.current = requestId;
+    setPendingBuild(profile);
+    setConfirmGitStatus(gitStatus);
+    setConfirmGitLoading(true);
+    window.ivsDashboard
+      .getGitStatus(projectId)
+      .then((status) => {
+        if (confirmRequestRef.current === requestId) {
+          setConfirmGitStatus(status);
+        }
+      })
+      .catch((error) => console.error(error))
+      .finally(() => {
+        if (confirmRequestRef.current === requestId) {
+          setConfirmGitLoading(false);
+        }
+      });
+  }
+
+  function closeBuildConfirmation(): void {
+    confirmRequestRef.current += 1;
+    setConfirmGitLoading(false);
+    setPendingBuild(null);
   }
 
   function confirmBuildTitle(profile: BuildProfileRecord): string {
@@ -211,7 +242,7 @@ function BuildActionsDropdown({
                 onClick={() => {
                   setOpenMode(null);
                   if (profile.confirm) {
-                    setPendingBuild(profile);
+                    openBuildConfirmation(profile);
                     return;
                   }
                   runBuild(profile);
@@ -232,14 +263,22 @@ function BuildActionsDropdown({
       {pendingBuild ? (
         <ConfirmDialog
           title={confirmBuildTitle(pendingBuild)}
-          message="Review the target before running this build."
-          details={
-            <BuildConfirmDetails profile={pendingBuild} gitStatus={gitStatus} />
+          message={
+            confirmGitLoading
+              ? "Refreshing Git status before running this build."
+              : "Review the target before running this build."
           }
-          confirmLabel="Run Build"
+          details={
+            <BuildConfirmDetails
+              profile={pendingBuild}
+              gitStatus={confirmGitStatus}
+            />
+          }
+          confirmLabel={confirmGitLoading ? "Checking Git" : "Run Build"}
           cancelLabel="Cancel"
           variant="warning"
-          onClose={() => setPendingBuild(null)}
+          onClose={closeBuildConfirmation}
+          confirmDisabled={confirmGitLoading}
           onConfirm={() => runBuild(pendingBuild)}
         />
       ) : null}
@@ -254,10 +293,20 @@ function BuildConfirmDetails({
   profile: BuildProfileRecord;
   gitStatus: GitStatusRecord;
 }): JSX.Element {
+  const changeLines = gitChangeLines(gitStatus);
+  const hasChanges = gitStatus.status !== "Clean" || changeLines.length > 0;
+  const statusLabel =
+    gitStatus.branch === "unavailable" || gitStatus.commit === "unavailable"
+      ? gitStatus.status
+      : hasChanges
+        ? `${changeLines.length} uncommitted change${
+            changeLines.length === 1 ? "" : "s"
+          }`
+        : "Clean, no uncommitted changes";
   const rows = [
     ["Branch", gitStatus.branch || "unavailable"],
     ["Commit", gitStatus.commit ? `@${gitStatus.commit}` : "unavailable"],
-    ["Git status", gitStatus.status === "Clean" ? "Clean" : "Dirty"],
+    ["Git status", statusLabel],
     ["Profile", profile.profileName],
     ["Goal", profile.goals],
   ];
@@ -272,6 +321,19 @@ function BuildConfirmDetails({
       ))}
     </>
   );
+}
+
+function gitChangeLines(gitStatus: GitStatusRecord): string[] {
+  return gitStatus.lines
+    .map((line) => line.replace(/^\d{2}:\d{2}:\d{2}\s+/, "").trim())
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !line.startsWith("Repository:") &&
+        !line.startsWith("Branch:") &&
+        !line.startsWith("Commit:") &&
+        line !== "Working tree clean",
+    );
 }
 
 function ServiceControlGroup({
@@ -326,8 +388,7 @@ function ServiceControlGroup({
             (busyAction === "stop" ||
               (busyAction === "restart" && !isServerStarting)));
         const isStarting =
-          isServerStarting ||
-          (isBusy && busyAction === "start");
+          isServerStarting || (isBusy && busyAction === "start");
 
         // Slot 1 shows Terminate when running or in the middle of starting;
         // otherwise shows Start.

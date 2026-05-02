@@ -573,6 +573,22 @@ body {
   border-color: #5b5ee8;
 }
 
+.build-dropdown-trigger:not(.stop-build-trigger):disabled,
+.build-dropdown-trigger:not(.stop-build-trigger):disabled:hover {
+  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 8px 18px rgba(68, 76, 231, 0.24);
+  transform: none;
+}
+
+[data-theme="dark"] .build-dropdown-trigger:not(.stop-build-trigger):disabled,
+[data-theme="dark"] .build-dropdown-trigger:not(.stop-build-trigger):disabled:hover {
+  background: #5558e8;
+  border-color: #6467f2;
+  box-shadow: 0 8px 18px rgba(85, 88, 232, 0.2);
+}
+
 .build-dropdown-trigger.stop-build-trigger {
   color: #ffffff;
   background: var(--error);
@@ -3160,6 +3176,38 @@ body {
   font-weight: 750;
 }
 
+.confirm-dialog-change-list {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 12px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.confirm-dialog-change-list > span {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.confirm-dialog-change-list ul {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  max-height: 112px;
+  padding: 0;
+  margin: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.confirm-dialog-change-list li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono",
+    monospace;
+}
+
 .confirm-dialog-actions {
   display: flex;
   align-items: center;
@@ -3212,6 +3260,15 @@ body {
   color: #ffffff;
   background: #b45309;
   border-color: #92400e;
+}
+
+.confirm-warning-button:disabled,
+.confirm-warning-button:disabled:hover {
+  color: #ffffff;
+  background: #d97706;
+  border-color: #b45309;
+  box-shadow: 0 6px 14px rgba(217, 119, 6, 0.24);
+  transform: none;
 }
 
 @keyframes dialog-backdrop-in {

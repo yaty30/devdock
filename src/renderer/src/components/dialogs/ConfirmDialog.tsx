@@ -8,6 +8,7 @@ export function ConfirmDialog({
   confirmLabel,
   cancelLabel,
   variant = "danger",
+  confirmDisabled = false,
   onClose,
   onConfirm,
   details,
@@ -81,6 +82,7 @@ export function ConfirmDialog({
                 : "confirm-danger-button"
             }
             type="button"
+            disabled={confirmDisabled}
             onClick={() => {
               onConfirm?.();
               closeDialog();
