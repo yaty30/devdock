@@ -1033,13 +1033,14 @@ body {
 }
 
 .dashboard-overview-screen {
+  position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 22px;
   flex: 1 1 auto;
   min-height: 0;
   margin-top: 14px;
-  padding: 20px 6px 0;
+  padding: 28px 42px 64px;
   overflow: auto;
   border-top: 1px solid var(--border);
   scrollbar-color: var(--accent-soft) transparent;
@@ -1097,7 +1098,54 @@ body {
   align-content: start;
   gap: 16px;
   min-width: 0;
-  padding-bottom: 22px;
+}
+
+.dashboard-kpi-grid,
+.dashboard-project-list {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease,
+    filter 180ms ease;
+}
+
+.dashboard-overview-screen.overview-loading .dashboard-kpi-grid,
+.dashboard-overview-screen.overview-loading .dashboard-project-list {
+  opacity: 0.28;
+  filter: saturate(0.86);
+  pointer-events: none;
+  transform: translateY(4px);
+}
+
+.dashboard-overview-loading {
+  position: absolute;
+  inset: 28px 42px 64px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  animation: loading-fade-in 160ms ease both;
+}
+
+.dashboard-overview-spinner {
+  display: block;
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: button-spinner-spin 760ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-kpi-grid,
+  .dashboard-project-list {
+    transition: none;
+  }
+
+  .dashboard-overview-loading,
+  .dashboard-overview-spinner {
+    animation: none;
+  }
 }
 
 .dashboard-project-card {

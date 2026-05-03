@@ -442,8 +442,10 @@ function TailLogPanel({
 
 export function DashboardContent({
   projects,
+  loading,
 }: {
   projects: ProjectDashboardSummary[];
+  loading: boolean;
 }): JSX.Element {
   const hasRunningService = projects.some((summary) =>
     summary.statuses.some((status) => status.state === "running"),
@@ -459,7 +461,10 @@ export function DashboardContent({
   const lastUpdated = latestCheckedAt(projects);
 
   return (
-    <section className="dashboard-overview-screen">
+    <section
+      className={`dashboard-overview-screen${loading ? " overview-loading" : ""}`}
+      aria-busy={loading}
+    >
       <div className="dashboard-kpi-grid">
         <OverviewKpi
           icon={<FolderKanban size={22} />}
@@ -494,6 +499,15 @@ export function DashboardContent({
           <div className="dashboard-empty">No projects configured.</div>
         )}
       </div>
+      {loading ? (
+        <div
+          className="dashboard-overview-loading"
+          role="status"
+          aria-label="Loading overview"
+        >
+          <span className="dashboard-overview-spinner" />
+        </div>
+      ) : null}
     </section>
   );
 }

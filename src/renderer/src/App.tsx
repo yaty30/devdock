@@ -45,6 +45,8 @@ function App(): JSX.Element {
   const [dashboardOverview, setDashboardOverview] = useState<
     ProjectDashboardSummary[]
   >([]);
+  const [dashboardOverviewLoading, setDashboardOverviewLoading] =
+    useState(true);
   const [projectStateProjectId, setProjectStateProjectId] = useState<
     string | null
   >(null);
@@ -69,6 +71,7 @@ function App(): JSX.Element {
   const projectSwitchStartedAtRef = useRef<number | null>(null);
   const splashSequenceStartedRef = useRef(false);
   const selectedProjectIdRef = useRef<string | null>(null);
+  const dashboardOverviewRequestRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -301,10 +304,19 @@ function App(): JSX.Element {
   }
 
   function refreshDashboardOverview(): Promise<void> {
+    const requestId = dashboardOverviewRequestRef.current + 1;
+    dashboardOverviewRequestRef.current = requestId;
+    setDashboardOverviewLoading(true);
+
     return window.ivsDashboard
       .getDashboardOverview()
       .then((overview) => setDashboardOverview(overview))
-      .catch((error) => console.error(error));
+      .catch((error) => console.error(error))
+      .finally(() => {
+        if (dashboardOverviewRequestRef.current === requestId) {
+          setDashboardOverviewLoading(false);
+        }
+      });
   }
 
   const splashOverlay =
@@ -393,7 +405,10 @@ function App(): JSX.Element {
         </header>
 
         {activeSection === "dashboard" ? (
-          <DashboardContent projects={dashboardOverview} />
+          <DashboardContent
+            projects={dashboardOverview}
+            loading={dashboardOverviewLoading}
+          />
         ) : activeSection === "project" ? (
           <>
             <div className="tab-toolbar">
