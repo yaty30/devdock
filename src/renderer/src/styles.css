@@ -352,6 +352,10 @@ body {
   color: var(--accent);
 }
 
+.sidebar.collapsed .brand-mark {
+  transform: translateX(8px);
+}
+
 .sidebar.collapsed .brand {
   justify-content: center;
   padding-right: 0;
