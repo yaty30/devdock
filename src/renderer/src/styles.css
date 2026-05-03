@@ -19,13 +19,16 @@
   --error: #dc2626;
   --info: #2563eb;
   --info-soft: #dbeafe;
+  --command: #db4cf1;
+  --muted: #495875;
+  --change: #331d42;
   --shadow: 0 18px 44px rgba(17, 24, 39, 0.06);
   --nav-text: #374151;
   --field-bg: #ffffff;
   --subtle-bg: #f9fafb;
   --icon-muted: #6b7280;
-  --terminal-bg: #11161d;
-  --terminal-border: #252d38;
+  --terminal-bg: #f0f0f075;
+  --terminal-border: #d6d6d6;
 }
 
 [data-theme="dark"] {
@@ -43,6 +46,9 @@
   --info-soft: #112d50;
   --warning: #fbbf24;
   --error: #f87171;
+  --command: #e879f9;
+  --muted: #e5e7eb;
+  --change: #331d42;
   --shadow: 0 18px 44px rgba(0, 0, 0, 0.22);
   --nav-text: #d4d4d8;
   --field-bg: #111214;
@@ -3045,8 +3051,8 @@ select option {
   color: #ffffff;
   font-size: 11px;
   font-weight: 750;
-  background: #1f2937;
-  border: 1px solid #374151;
+  background: var(--accent);
+  border: 1px solid var(--border);
   border-radius: 6px;
   user-select: none;
 }
@@ -3193,31 +3199,31 @@ select option {
 }
 
 .terminal-command {
-  color: #e879f9;
+  color: var(--command);
 }
 
 .terminal-muted {
-  color: #e5e7eb;
+  color: var(--muted);
 }
 
 .terminal-warning {
-  color: #facc15;
+  color: var(--warning);
 }
 
 .terminal-error {
-  color: #fb7185;
+  color: var(--error);
 }
 
 .terminal-success {
-  color: #4ade80;
+  color: var(--success);
 }
 
 .terminal-info {
-  color: #38bdf8;
+  color: var(--info);
 }
 
 .terminal-change {
-  color: #fbbf24;
+  color: var(--change);
 }
 
 .git-command-row {
