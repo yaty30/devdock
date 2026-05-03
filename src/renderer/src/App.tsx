@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckCircle2, RotateCcw } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
+import { Modal } from "./components/dialogs/Modal";
 import { HeaderActions } from "./components/layout/HeaderActions";
 import { Sidebar } from "./components/layout/Sidebar";
 import { SegmentedTabs } from "./components/navigation/SegmentedTabs";
@@ -50,6 +51,7 @@ function App(): JSX.Element {
   const [theme, setTheme] = useState<Theme>(() => readStoredTheme());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [panelResetVersion, setPanelResetVersion] = useState(0);
   const [projectLoading, setProjectLoading] = useState(true);
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -238,13 +240,15 @@ function App(): JSX.Element {
 
   function switchProject(project: Project): void {
     if (project.id === selectedProject?.id) {
-      if (settingsDirty && activeSection === "settings") {
+      if (settingsDirty && settingsOpen) {
         setPendingNav(() => () => {
+          setSettingsOpen(false);
           setActiveSection("project");
           setSettingsDirty(false);
         });
         return;
       }
+      setSettingsOpen(false);
       setActiveSection("project");
       return;
     }
@@ -258,11 +262,12 @@ function App(): JSX.Element {
       setProjectLoading(true);
       setProjectStateProjectId(null);
       projectSwitchStartedAtRef.current = Date.now();
+      setSettingsOpen(false);
       setSettingsDirty(false);
       setActiveSection("project");
     };
 
-    if (settingsDirty && activeSection === "settings") {
+    if (settingsDirty && settingsOpen) {
       setPendingNav(() => doSwitch);
       return;
     }
@@ -271,18 +276,28 @@ function App(): JSX.Element {
   }
 
   function handleSectionChange(section: AppSection): void {
-    if (
-      settingsDirty &&
-      activeSection === "settings" &&
-      section !== "settings"
-    ) {
+    if (settingsDirty && settingsOpen) {
       setPendingNav(() => () => {
+        setSettingsOpen(false);
         setActiveSection(section);
         setSettingsDirty(false);
       });
       return;
     }
+    setSettingsOpen(false);
     setActiveSection(section);
+  }
+
+  function closeSettings(): void {
+    if (settingsDirty) {
+      setPendingNav(() => () => {
+        setSettingsOpen(false);
+        setSettingsDirty(false);
+      });
+      return;
+    }
+
+    setSettingsOpen(false);
   }
 
   function refreshDashboardOverview(): Promise<void> {
@@ -354,18 +369,12 @@ function App(): JSX.Element {
         <header className="main-header">
           <div>
             <h1>
-              {activeSection === "dashboard"
-                ? "Overview"
-                : activeSection === "project"
-                  ? selectedProject.name
-                  : "Settings"}
+              {activeSection === "dashboard" ? "Overview" : selectedProject.name}
             </h1>
             <p>
               {activeSection === "dashboard"
                 ? "All project server status and last build results."
-                : activeSection === "project"
-                  ? "Monitor services, run builds, and review deployment status."
-                  : "Configure project paths, services, Git, and build profiles."}
+                : "Monitor services, run builds, and review deployment status."}
             </p>
           </div>
           {activeSection === "project" ? (
@@ -377,6 +386,7 @@ function App(): JSX.Element {
                 statuses={activeProjectState.statuses}
                 recentBuilds={activeProjectState.recentBuilds}
                 gitStatus={activeProjectState.gitStatus}
+                onSettingsClick={() => setSettingsOpen(true)}
               />
             ) : null
           ) : null}
@@ -384,16 +394,6 @@ function App(): JSX.Element {
 
         {activeSection === "dashboard" ? (
           <DashboardContent projects={dashboardOverview} />
-        ) : !activeProjectState ? (
-          <section className="resizable-panel-screen">
-            <div className="panel">
-              <div className="panel-header">
-                <div className="panel-title-group">
-                  <h2>Loading Project</h2>
-                </div>
-              </div>
-            </div>
-          </section>
         ) : activeSection === "project" ? (
           <>
             <div className="tab-toolbar">
@@ -413,44 +413,77 @@ function App(): JSX.Element {
               <ProjectDashboardContent
                 projectId={selectedProject.id}
                 resetVersion={panelResetVersion}
-                projectState={activeProjectState}
+                projectState={
+                  activeProjectState ?? createLoadingProjectState()
+                }
               />
             ) : null}
             {activeTab === "monitor" ? (
               <MonitorTab
                 resetVersion={panelResetVersion}
-                projectState={activeProjectState}
+                projectState={
+                  activeProjectState ?? createLoadingProjectState()
+                }
                 projectId={selectedProject.id}
               />
             ) : null}
             {activeTab === "git-terminal" ? (
-              <GitTerminalTab
-                projectId={selectedProject.id}
-                gitStatus={activeProjectState.gitStatus}
-              />
+              activeProjectState ? (
+                <GitTerminalTab
+                  projectId={selectedProject.id}
+                  gitStatus={activeProjectState.gitStatus}
+                />
+              ) : (
+                <section className="resizable-panel-screen">
+                  <div className="panel">
+                    <div />
+                  </div>
+                </section>
+              )
             ) : null}
           </>
-        ) : (
+        ) : null}
+      </main>
+
+      <Modal
+        open={settingsOpen && activeProjectState !== null}
+        title="Settings"
+        subtitle={selectedProject.name}
+        size="xl"
+        className="settings-modal"
+        contentClassName="settings-modal-content"
+        closeLabel="Close settings"
+        onClose={closeSettings}
+      >
+        {activeProjectState ? (
           <SettingsContent
             selectedProject={selectedProject}
             settings={activeProjectState.settings}
-            onSettingsSaved={(settings) =>
+            onSettingsSaved={(settings) => {
               setProjectState((current) =>
                 current ? { ...current, settings } : current,
-              )
-            }
+              );
+              setSettingsDirty(false);
+              setSettingsOpen(false);
+            }}
             onProjectDeleted={() => {
               const remaining = projects.filter(
                 (p) => p.id !== selectedProject.id,
               );
+              setSettingsOpen(false);
+              setSettingsDirty(false);
               setProjects(remaining);
               setSelectedProject(remaining[0] ?? null);
               setActiveSection("dashboard");
             }}
             onDirtyChange={setSettingsDirty}
+            onCancel={() => {
+              setSettingsDirty(false);
+              setSettingsOpen(false);
+            }}
           />
-        )}
-      </main>
+        ) : null}
+      </Modal>
 
       {addProjectOpen ? (
         <AddProjectDialog onClose={() => setAddProjectOpen(false)} />
@@ -459,7 +492,7 @@ function App(): JSX.Element {
       {pendingNav ? (
         <ConfirmDialog
           title="Unsaved Changes"
-          message="You have unsaved settings changes. Leaving now will discard them."
+          message="You have unsaved settings changes. Closing now will discard them."
           confirmLabel="Discard"
           cancelLabel="Stay"
           variant="warning"
@@ -548,6 +581,57 @@ function applyDashboardEvent(
   }
 
   return current;
+}
+
+function createLoadingProjectState(): ProjectRuntimeState {
+  return {
+    settings: {
+      appLogFile: "",
+      gitProjectDirectory: "",
+      defaultBranch: "",
+      remote: "",
+      services: {
+        frontend: {
+          workingDirectory: "",
+          command: "",
+          healthUrl: "",
+          appUrl: "",
+          autoStart: false,
+        },
+        wildfly: {
+          workingDirectory: "",
+          command: "",
+          healthUrl: "",
+          appUrl: "",
+          managementUrl: "",
+          autoStart: false,
+        },
+      },
+      maven: {
+        executable: "",
+        settingsXml: "",
+        pomXml: "",
+        skipTests: false,
+      },
+      buildProfiles: [],
+    },
+    statuses: [],
+    recentBuilds: [],
+    activityFeed: [],
+    gitStatus: {
+      repository: "",
+      branch: "",
+      commit: "",
+      status: "",
+      lines: [],
+    },
+    logs: {
+      frontend: [],
+      wildfly: [],
+      build: [],
+      tail: [],
+    },
+  };
 }
 
 export default App;

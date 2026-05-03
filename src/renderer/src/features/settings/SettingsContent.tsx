@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown, Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
@@ -57,6 +65,13 @@ const OUTCOME_OPTIONS: Array<{
   },
 ];
 
+const PROFILE_ROW_EXIT_MS = 180;
+
+type BuildProfileField = "buttonName" | "profileName" | "goals";
+type BuildProfileFieldErrors = Partial<
+  Record<string, Partial<Record<BuildProfileField, boolean>>>
+>;
+
 function OutcomeSelect({
   value,
   onChange,
@@ -65,7 +80,9 @@ function OutcomeSelect({
   onChange: (value: BuildOutcomeType) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const [dropdownStyle, setDropdownStyle] = useState<CSSProperties>();
   const containerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLUListElement>(null);
   const current =
     OUTCOME_OPTIONS.find((option) => option.value === value) ??
     OUTCOME_OPTIONS[0];
@@ -75,15 +92,114 @@ function OutcomeSelect({
       return undefined;
     }
 
-    function handleOutside(event: MouseEvent): void {
-      if (!containerRef.current?.contains(event.target as Node)) {
+    function isOutsideSelect(target: EventTarget | null): boolean {
+      if (!(target instanceof Node)) {
+        return true;
+      }
+
+      return (
+        !containerRef.current?.contains(target) &&
+        !dropdownRef.current?.contains(target)
+      );
+    }
+
+    function handleOutside(event: PointerEvent): void {
+      if (isOutsideSelect(event.target)) {
         setOpen(false);
       }
     }
 
-    document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
+    function handleFocusOutside(event: FocusEvent): void {
+      if (isOutsideSelect(event.target)) {
+        setOpen(false);
+      }
+    }
+
+    function handleWindowBlur(): void {
+      setOpen(false);
+    }
+
+    document.addEventListener("pointerdown", handleOutside, true);
+    document.addEventListener("focusin", handleFocusOutside);
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutside, true);
+      document.removeEventListener("focusin", handleFocusOutside);
+      window.removeEventListener("blur", handleWindowBlur);
+    };
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function positionDropdown(): void {
+      const trigger = containerRef.current?.querySelector("button");
+      if (!(trigger instanceof HTMLElement)) {
+        return;
+      }
+
+      const rect = trigger.getBoundingClientRect();
+      const gap = 6;
+      const dropdownHeight = OUTCOME_OPTIONS.length * 36 + 12;
+      const spaceBelow = window.innerHeight - rect.bottom - gap;
+      const spaceAbove = rect.top - gap;
+      const openUp = spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
+
+      setDropdownStyle({
+        position: "fixed",
+        top: openUp ? rect.top - dropdownHeight - gap : rect.bottom + gap,
+        left: rect.left,
+        right: "auto",
+        width: Math.max(rect.width, 168),
+        minWidth: Math.max(rect.width, 168),
+        zIndex: 1000,
+      });
+    }
+
+    positionDropdown();
+    window.addEventListener("resize", positionDropdown);
+    window.addEventListener("scroll", positionDropdown, true);
+
+    return () => {
+      window.removeEventListener("resize", positionDropdown);
+      window.removeEventListener("scroll", positionDropdown, true);
+    };
+  }, [open]);
+
+  const dropdown = open ? (
+    <ul
+      className="custom-select-dropdown custom-select-dropdown-portal"
+      role="listbox"
+      ref={dropdownRef}
+      style={dropdownStyle}
+    >
+      {OUTCOME_OPTIONS.map((option) => (
+        <li
+          key={option.value}
+          className={`custom-select-option${
+            value === option.value ? " selected" : ""
+          }`}
+          role="option"
+          aria-selected={value === option.value}
+          onClick={() => {
+            onChange(option.value);
+            setOpen(false);
+          }}
+        >
+          <span
+            className="custom-select-dot"
+            style={{ background: option.dotColor }}
+          />
+          <span className="custom-select-option-label">{option.label}</span>
+          {value === option.value ? (
+            <Check size={13} className="custom-select-check" />
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  ) : null;
 
   return (
     <div className="custom-select build-outcome-select" ref={containerRef}>
@@ -104,35 +220,7 @@ function OutcomeSelect({
           className={`custom-select-chevron${open ? " open" : ""}`}
         />
       </button>
-      {open ? (
-        <ul className="custom-select-dropdown" role="listbox">
-          {OUTCOME_OPTIONS.map((option) => (
-            <li
-              key={option.value}
-              className={`custom-select-option${
-                value === option.value ? " selected" : ""
-              }`}
-              role="option"
-              aria-selected={value === option.value}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              <span
-                className="custom-select-dot"
-                style={{ background: option.dotColor }}
-              />
-              <span className="custom-select-option-label">
-                {option.label}
-              </span>
-              {value === option.value ? (
-                <Check size={13} className="custom-select-check" />
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      {dropdown ? createPortal(dropdown, document.body) : null}
     </div>
   );
 }
@@ -143,12 +231,14 @@ export function SettingsContent({
   onSettingsSaved,
   onProjectDeleted,
   onDirtyChange,
+  onCancel,
 }: {
   selectedProject: Project;
   settings: ProjectSettingsRecord;
   onSettingsSaved: (settings: ProjectSettingsRecord) => void;
   onProjectDeleted: () => void;
   onDirtyChange: (dirty: boolean) => void;
+  onCancel: () => void;
 }): JSX.Element {
   const [activeSettingsTab, setActiveSettingsTab] =
     useState<SettingsTab>("general");
@@ -163,14 +253,26 @@ export function SettingsContent({
     message?: string;
   } | null>(null);
   const [validationClosing, setValidationClosing] = useState(false);
+  const [profileFieldErrors, setProfileFieldErrors] =
+    useState<BuildProfileFieldErrors>({});
+  const [deletingProfileIds, setDeletingProfileIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const dismissTimerRef = useRef<number | null>(null);
   const closingTimerRef = useRef<number | null>(null);
+  const profileScrollerRef = useRef<HTMLDivElement>(null);
+  const profileDeleteTimersRef = useRef<Map<string, number>>(new Map());
+  const previousProfileCountRef = useRef(settings.buildProfiles.length);
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;
 
   const isDirty = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(settings),
     [draft, settings],
+  );
+  const savedProfileIds = useMemo(
+    () => new Set(settings.buildProfiles.map((profile) => profile.id)),
+    [settings.buildProfiles],
   );
 
   useEffect(() => {
@@ -183,6 +285,10 @@ export function SettingsContent({
         window.clearTimeout(dismissTimerRef.current);
       if (closingTimerRef.current !== null)
         window.clearTimeout(closingTimerRef.current);
+      profileDeleteTimersRef.current.forEach((timer) =>
+        window.clearTimeout(timer),
+      );
+      profileDeleteTimersRef.current.clear();
     };
   }, []);
 
@@ -219,8 +325,34 @@ export function SettingsContent({
   }
 
   useEffect(() => {
+    profileDeleteTimersRef.current.forEach((timer) =>
+      window.clearTimeout(timer),
+    );
+    profileDeleteTimersRef.current.clear();
     setDraft(settings);
+    setProfileFieldErrors({});
+    setDeletingProfileIds(new Set());
+    previousProfileCountRef.current = settings.buildProfiles.length;
   }, [settings]);
+
+  useEffect(() => {
+    const currentProfileCount = draft.buildProfiles.length;
+    const addedProfile = currentProfileCount > previousProfileCountRef.current;
+    previousProfileCountRef.current = currentProfileCount;
+
+    if (!addedProfile || activeSettingsTab !== "builders") {
+      return undefined;
+    }
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      const scroller = profileScrollerRef.current;
+      if (scroller) {
+        scroller.scrollTop = scroller.scrollHeight;
+      }
+    });
+
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [activeSettingsTab, draft.buildProfiles.length]);
 
   function updateService(
     service: ServiceName,
@@ -249,6 +381,32 @@ export function SettingsContent({
         profile.id === profileId ? { ...profile, ...patch } : profile,
       ),
     }));
+
+    (["buttonName", "profileName", "goals"] as BuildProfileField[]).forEach(
+      (field) => {
+        const value = patch[field];
+        if (typeof value !== "string" || !value.trim()) {
+          return;
+        }
+
+        setProfileFieldErrors((current) => {
+          const profileErrors = current[profileId];
+          if (!profileErrors?.[field]) {
+            return current;
+          }
+
+          const nextProfileErrors = { ...profileErrors };
+          delete nextProfileErrors[field];
+          const next = { ...current };
+          if (Object.keys(nextProfileErrors).length === 0) {
+            delete next[profileId];
+          } else {
+            next[profileId] = nextProfileErrors;
+          }
+          return next;
+        });
+      },
+    );
   }
 
   function addProfile(): void {
@@ -259,9 +417,9 @@ export function SettingsContent({
         ...current.buildProfiles,
         {
           id,
-          buttonName: "New",
-          profileName: "local",
-          goals: "clean package",
+          buttonName: "",
+          profileName: "",
+          goals: "",
           confirm: false,
           outcomeType: "build-only",
         },
@@ -270,28 +428,73 @@ export function SettingsContent({
   }
 
   function removeProfile(profileId: string): void {
-    setDraft((current) => ({
-      ...current,
-      buildProfiles: current.buildProfiles.filter(
-        (profile) => profile.id !== profileId,
-      ),
-    }));
+    if (profileDeleteTimersRef.current.has(profileId)) {
+      return;
+    }
+
+    setDeletingProfileIds((current) => {
+      const next = new Set(current);
+      next.add(profileId);
+      return next;
+    });
+
+    const timer = window.setTimeout(() => {
+      setDraft((current) => ({
+        ...current,
+        buildProfiles: current.buildProfiles.filter(
+          (profile) => profile.id !== profileId,
+        ),
+      }));
+      setProfileFieldErrors((current) => {
+        if (!current[profileId]) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[profileId];
+        return next;
+      });
+      setDeletingProfileIds((current) => {
+        const next = new Set(current);
+        next.delete(profileId);
+        return next;
+      });
+      profileDeleteTimersRef.current.delete(profileId);
+    }, PROFILE_ROW_EXIT_MS);
+
+    profileDeleteTimersRef.current.set(profileId, timer);
   }
 
-  function save(): void {
-    setSaving(true);
-    window.ivsDashboard
-      .saveProjectSettings(selectedProject.id, draft)
-      .then((saved) => {
-        onSettingsSaved(saved);
-        showBanner({ valid: true, errors: [], message: "Settings saved." });
-      })
-      .catch((error) => console.error(error))
-      .finally(() => setSaving(false));
+  function profileInputClass(
+    profileId: string,
+    field: BuildProfileField,
+  ): string | undefined {
+    return profileFieldErrors[profileId]?.[field] ? "field-error" : undefined;
   }
 
-  function validateDraft(): void {
+  function profileInputInvalid(
+    profileId: string,
+    field: BuildProfileField,
+  ): boolean {
+    return profileFieldErrors[profileId]?.[field] === true;
+  }
+
+  function profileRowClass(profile: BuildProfileRecord): string | undefined {
+    const classes: string[] = [];
+    if (!savedProfileIds.has(profile.id)) {
+      classes.push("profile-row-new");
+    }
+    if (deletingProfileIds.has(profile.id)) {
+      classes.push("profile-row-removing");
+    }
+    return classes.length > 0 ? classes.join(" ") : undefined;
+  }
+
+  function validateSettingsDraft(): {
+    errors: string[];
+    profileErrors: BuildProfileFieldErrors;
+  } {
     const errors: string[] = [];
+    const profileErrors: BuildProfileFieldErrors = {};
     if (!draft.maven.executable.trim())
       errors.push("Maven: executable path is required");
     if (!draft.maven.pomXml.trim())
@@ -308,7 +511,93 @@ export function SettingsContent({
       errors.push("WildFly: start command is required");
     if (!draft.services.wildfly.healthUrl.trim())
       errors.push("WildFly: health URL is required");
+
+    const seenNames = new Set<string>();
+    const duplicateNames = new Set<string>();
+    let missingProfileName = false;
+    let missingButtonName = false;
+    let missingGoals = false;
+
+    draft.buildProfiles.forEach((profile) => {
+      const name = profile.buttonName.trim().toLowerCase();
+      if (!name) {
+        missingButtonName = true;
+        profileErrors[profile.id] = {
+          ...profileErrors[profile.id],
+          buttonName: true,
+        };
+      } else if (seenNames.has(name)) {
+        duplicateNames.add(profile.buttonName.trim());
+      } else {
+        seenNames.add(name);
+      }
+
+      if (!profile.profileName.trim()) {
+        missingProfileName = true;
+        profileErrors[profile.id] = {
+          ...profileErrors[profile.id],
+          profileName: true,
+        };
+      }
+
+      if (!profile.goals.trim()) {
+        missingGoals = true;
+        profileErrors[profile.id] = {
+          ...profileErrors[profile.id],
+          goals: true,
+        };
+      }
+    });
+
+    if (missingButtonName) {
+      errors.push("Build Profiles: name is required");
+    }
+
+    if (missingProfileName) {
+      errors.push("Build Profiles: profile is required");
+    }
+
+    if (missingGoals) {
+      errors.push("Build Profiles: goal is required");
+    }
+
+    duplicateNames.forEach((name) =>
+      errors.push(`Build Profiles: duplicate name "${name}"`),
+    );
+
+    return { errors, profileErrors };
+  }
+
+  function save(): void {
+    const { errors, profileErrors } = validateSettingsDraft();
+    setProfileFieldErrors(profileErrors);
+    if (errors.length > 0) {
+      showBanner({ valid: false, errors });
+      return;
+    }
+
+    setSaving(true);
+    window.ivsDashboard
+      .saveProjectSettings(selectedProject.id, draft)
+      .then((saved) => {
+        onSettingsSaved(saved);
+        showBanner({ valid: true, errors: [], message: "Settings saved." });
+      })
+      .catch((error) => console.error(error))
+      .finally(() => setSaving(false));
+  }
+
+  function validateDraft(): void {
+    const { errors, profileErrors } = validateSettingsDraft();
+    setProfileFieldErrors(profileErrors);
     showBanner({ valid: errors.length === 0, errors });
+  }
+
+  function cancel(): void {
+    setDraft(settings);
+    setProfileFieldErrors({});
+    onDirtyChangeRef.current(false);
+    onCancel();
   }
 
   function browseDirectory(
@@ -361,7 +650,7 @@ export function SettingsContent({
         >
           {validationBanner.valid
             ? (validationBanner.message ?? "Configuration looks valid.")
-            : validationBanner.errors.map((e) => <div key={e}>• {e}</div>)}
+            : validationBanner.errors.map((e) => <div key={e}>{e}</div>)}
         </div>
       ) : null}
       <div
@@ -699,6 +988,11 @@ export function SettingsContent({
             </Panel>
             <Panel
               title="Build Profiles"
+              titleMeta={
+                <span className="build-profiles-count-badge">
+                  {draft.buildProfiles.length}
+                </span>
+              }
               action={
                 <button
                   className="icon-button primary"
@@ -712,91 +1006,126 @@ export function SettingsContent({
               }
               className="build-profiles-panel"
             >
-              <table className="build-profiles-table">
-                <thead>
-                  <tr>
-                    <th>Name</th>
-                    <th>Profile</th>
-                    <th>Goal</th>
-                    <th>Outcome</th>
-                    <th>Confirm</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {draft.buildProfiles.map((profile) => (
-                    <tr key={profile.id}>
-                      <td>
-                        <input
-                          type="text"
-                          value={profile.buttonName}
-                          onChange={(event) =>
-                            updateProfile(profile.id, {
-                              buttonName: event.target.value,
-                            })
-                          }
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={profile.profileName}
-                          onChange={(event) =>
-                            updateProfile(profile.id, {
-                              profileName: event.target.value,
-                            })
-                          }
-                        />
-                      </td>
-                      <td>
-                        <input
-                          type="text"
-                          value={profile.goals}
-                          onChange={(event) =>
-                            updateProfile(profile.id, {
-                              goals: event.target.value,
-                            })
-                          }
-                        />
-                      </td>
-                      <td>
-                        <OutcomeSelect
-                          value={profile.outcomeType}
-                          onChange={(outcomeType) =>
-                            updateProfile(profile.id, {
-                              outcomeType,
-                            })
-                          }
-                        />
-                      </td>
-                      <td>
-                        <label className="builder-confirm">
+              <div
+                className="build-profiles-table-wrap"
+                ref={profileScrollerRef}
+              >
+                <table className="build-profiles-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Profile</th>
+                      <th>Goal</th>
+                      <th>Outcome</th>
+                      <th>Confirm</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {draft.buildProfiles.map((profile) => (
+                      <tr key={profile.id} className={profileRowClass(profile)}>
+                        <td>
+                          <div className="build-profile-name-cell">
+                            {!savedProfileIds.has(profile.id) ? (
+                              <span
+                                className="build-profile-new-dot"
+                                aria-hidden="true"
+                              />
+                            ) : null}
+                            <input
+                              className={profileInputClass(
+                                profile.id,
+                                "buttonName",
+                              )}
+                              type="text"
+                              value={profile.buttonName}
+                              aria-invalid={profileInputInvalid(
+                                profile.id,
+                                "buttonName",
+                              )}
+                              onChange={(event) =>
+                                updateProfile(profile.id, {
+                                  buttonName: event.target.value,
+                                })
+                              }
+                            />
+                          </div>
+                        </td>
+                        <td>
                           <input
-                            type="checkbox"
-                            checked={profile.confirm}
+                            className={profileInputClass(
+                              profile.id,
+                              "profileName",
+                            )}
+                            type="text"
+                            value={profile.profileName}
+                            aria-invalid={profileInputInvalid(
+                              profile.id,
+                              "profileName",
+                            )}
                             onChange={(event) =>
                               updateProfile(profile.id, {
-                                confirm: event.target.checked,
+                                profileName: event.target.value,
                               })
                             }
                           />
-                        </label>
-                      </td>
-                      <td>
-                        <button
-                          className="icon-button danger"
-                          type="button"
-                          aria-label={`Remove ${profile.buttonName} profile`}
-                          title="Remove profile"
-                          onClick={() => removeProfile(profile.id)}
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                        </td>
+                        <td>
+                          <input
+                            className={profileInputClass(profile.id, "goals")}
+                            type="text"
+                            value={profile.goals}
+                            aria-invalid={profileInputInvalid(
+                              profile.id,
+                              "goals",
+                            )}
+                            onChange={(event) =>
+                              updateProfile(profile.id, {
+                                goals: event.target.value,
+                              })
+                            }
+                          />
+                        </td>
+                        <td>
+                          <OutcomeSelect
+                            value={profile.outcomeType}
+                            onChange={(outcomeType) =>
+                              updateProfile(profile.id, {
+                                outcomeType,
+                              })
+                            }
+                          />
+                        </td>
+                        <td>
+                          <label className="builder-confirm">
+                            <input
+                              type="checkbox"
+                              checked={profile.confirm}
+                              onChange={(event) =>
+                                updateProfile(profile.id, {
+                                  confirm: event.target.checked,
+                                })
+                              }
+                            />
+                          </label>
+                        </td>
+                        <td>
+                          <button
+                            className="icon-button danger"
+                            type="button"
+                            aria-label={`Remove ${profile.buttonName || "profile"}`}
+                            title="Remove profile"
+                            disabled={deletingProfileIds.has(profile.id)}
+                            onClick={() => removeProfile(profile.id)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </Panel>
           </div>
         ) : null}
@@ -837,7 +1166,7 @@ export function SettingsContent({
             <button
               className="button secondary compact"
               type="button"
-              onClick={() => setDraft(settings)}
+              onClick={cancel}
             >
               Cancel
             </button>

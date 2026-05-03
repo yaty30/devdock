@@ -4,6 +4,7 @@ import {
   LoaderCircle,
   Play,
   RotateCcw,
+  Settings,
   Square,
 } from "lucide-react";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
@@ -22,6 +23,7 @@ export function HeaderActions({
   statuses,
   recentBuilds,
   gitStatus,
+  onSettingsClick,
   disabled = false,
 }: {
   projectId: string;
@@ -29,6 +31,7 @@ export function HeaderActions({
   statuses: ServiceStatusRecord[];
   recentBuilds: RecentBuildRecord[];
   gitStatus: GitStatusRecord;
+  onSettingsClick: () => void;
   disabled?: boolean;
 }): JSX.Element {
   return (
@@ -46,6 +49,16 @@ export function HeaderActions({
         gitStatus={gitStatus}
         disabled={disabled}
       />
+      <button
+        className="icon-button secondary header-settings-button"
+        type="button"
+        aria-label="Settings"
+        title="Settings"
+        disabled={disabled}
+        onClick={onSettingsClick}
+      >
+        <Settings size={18} />
+      </button>
     </div>
   );
 }

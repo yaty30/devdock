@@ -9,7 +9,7 @@ export type ServiceState =
   | "error";
 export type BuildOutcomeType = "build-only" | "build-and-deploy";
 export type BuildStatus = "running" | "success" | "failed" | "stopped";
-export type ActivityTone = "success" | "accent" | "neutral" | "error";
+export type ActivityTone = "success" | "accent" | "info" | "neutral" | "error";
 export type ActivityKind = "service" | "build" | "git" | "system";
 export type LogChannel = "frontend" | "wildfly" | "build" | "tail";
 

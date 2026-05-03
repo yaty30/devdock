@@ -1649,6 +1649,41 @@ body {
   line-height: 1.14;
 }
 
+.log-lines.resizing {
+  overflow: hidden;
+}
+
+.log-content {
+  min-width: 100%;
+}
+
+.log-resize-placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.log-resize-placeholder::before {
+  width: 22px;
+  height: 22px;
+  content: "";
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 999px;
+  animation: log-resize-spinner-spin 760ms linear infinite;
+}
+
+@keyframes log-resize-spinner-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .log-line {
   display: grid;
   grid-template-columns: 24px 68px minmax(0, 1fr);
@@ -2197,6 +2232,7 @@ body {
   border: 1px solid transparent;
   border-radius: 7px;
   text-decoration: none;
+  transform: translateX(-8px);
   white-space: nowrap;
   transition:
     background-color 150ms ease,
@@ -2796,6 +2832,10 @@ select option {
   background: var(--accent);
 }
 
+.activity-dot.info {
+  background: #38bdf8;
+}
+
 .activity-dot.neutral {
   background: var(--surface);
   border: 1px solid #9ca3af;
@@ -3146,6 +3186,143 @@ select option {
   border-color: var(--accent);
 }
 
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(3px);
+  animation: modal-backdrop-in 180ms ease both;
+}
+
+.modal-backdrop.closing {
+  pointer-events: none;
+  animation: modal-backdrop-out 180ms ease both;
+}
+
+.modal-surface {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 64px);
+  overflow: hidden;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  animation: modal-surface-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.modal-surface.closing {
+  animation: modal-surface-out 180ms ease both;
+}
+
+.modal-sm {
+  width: min(420px, calc(100vw - 64px));
+}
+
+.modal-md {
+  width: min(640px, calc(100vw - 64px));
+}
+
+.modal-lg {
+  width: min(880px, calc(100vw - 64px));
+}
+
+.modal-xl {
+  width: min(1180px, calc(100vw - 64px));
+}
+
+.settings-modal {
+  height: 900px;
+  max-height: calc(100dvh - 64px);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-height: 68px;
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  line-height: 1.2;
+}
+
+.modal-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.modal-content {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 18px 22px 20px;
+  overflow: auto;
+}
+
+.settings-modal .settings-screen {
+  width: 100%;
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.settings-modal-content {
+  overflow: hidden;
+}
+
+@keyframes modal-backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modal-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes modal-surface-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.985);
+  }
+}
+
 .settings-screen {
   position: relative;
   display: grid;
@@ -3164,7 +3341,11 @@ select option {
 }
 
 .settings-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 38px;
+  min-height: 38px;
   padding: 0 14px;
   color: var(--muted);
   font-size: 13px;
@@ -3182,7 +3363,7 @@ select option {
 
 .settings-body {
   min-height: 0;
-  overflow: visible;
+  overflow: auto;
 }
 
 .settings-grid {
@@ -3309,6 +3490,7 @@ select option {
   grid-template-rows: auto minmax(0, 1fr);
   gap: 18px;
   height: 100%;
+  min-height: 0;
 }
 
 .skip-tests-row {
@@ -3338,7 +3520,34 @@ select option {
 
 .build-profiles-panel {
   min-height: 0;
-  overflow: visible;
+  overflow: hidden;
+}
+
+.build-profiles-count-badge {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 22px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.build-profiles-table-wrap {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .build-profiles-table {
@@ -3346,6 +3555,7 @@ select option {
   border-collapse: collapse;
   color: var(--nav-text);
   font-size: 12px;
+  overflow-x: hidden;
 }
 
 .build-profiles-table th,
@@ -3356,9 +3566,48 @@ select option {
 }
 
 .build-profiles-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   color: var(--muted);
   font-weight: bold;
+  background: var(--surface);
   user-select: none;
+}
+
+.build-profiles-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.build-profiles-table tbody tr.profile-row-new {
+  animation: build-profile-row-add 180ms ease-out both;
+}
+
+.build-profiles-table tbody tr.profile-row-removing {
+  pointer-events: none;
+  animation: build-profile-row-remove 180ms ease-in both;
+}
+
+@keyframes build-profile-row-add {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes build-profile-row-remove {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
 }
 
 .build-profiles-table input[type="text"],
@@ -3372,8 +3621,41 @@ select option {
   border-radius: 6px;
 }
 
+.build-profiles-table input.field-error {
+  border-color: var(--error);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .build-profiles-table tbody tr.profile-row-new,
+  .build-profiles-table tbody tr.profile-row-removing {
+    animation: none;
+  }
+}
+
 .build-profiles-table td:nth-child(1) {
   width: 160px;
+}
+
+.build-profile-name-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.build-profile-new-dot {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  min-height: 8px;
+  background: var(--success);
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 14%, transparent);
+  transform: translateY(-20px) translateX(-8px);
+  pointer-events: none;
 }
 
 .build-profiles-table td:nth-child(2),
@@ -3451,6 +3733,24 @@ select option {
   color: #ffffff;
   background: #3038c9;
   border-color: #3038c9;
+}
+
+.icon-button.secondary {
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.icon-button.secondary:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.header-settings-button {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
 }
 
 .icon-button.danger {

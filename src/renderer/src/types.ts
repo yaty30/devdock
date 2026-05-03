@@ -24,7 +24,7 @@ export type {
   ShutdownEntry,
 } from "../../shared/dashboardTypes";
 
-export type AppSection = "dashboard" | "project" | "settings";
+export type AppSection = "dashboard" | "project";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
@@ -64,7 +64,7 @@ export type ActivityItem = {
   title: string;
   meta: string;
   time: string;
-  tone: "success" | "accent" | "neutral" | "error";
+  tone: "success" | "accent" | "info" | "neutral" | "error";
   icon: ReactNode;
 };
 

@@ -8,7 +8,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
-  Settings,
   Sun,
 } from "lucide-react";
 import type { AppSection, Project, Theme } from "../../types";
@@ -106,17 +105,6 @@ export function Sidebar({
             <span>Add Project</span>
           </button>
         </div>
-
-        <button
-          className={`nav-item${activeSection === "settings" ? " active" : ""}`}
-          type="button"
-          onClick={() => onSectionChange("settings")}
-          aria-label="Settings"
-          title="Settings"
-        >
-          <Settings size={18} />
-          <span className="nav-label">Settings</span>
-        </button>
       </nav>
 
       <div className="sidebar-footer">

@@ -53,12 +53,30 @@ type DragState = {
   startY: number;
   startColumnWidths: [number, number, number];
   startTopRowHeight: number;
+  availableWidth: number;
+  maxTopRowHeight: number;
 };
 
 const DASHBOARD_MIN_COLUMN_WIDTH = 230;
 const DASHBOARD_MIN_TOP_ROW = 320;
 const DASHBOARD_MIN_BOTTOM_ROW = 220;
 const DASHBOARD_SPLITTER_SIZE = 16;
+
+function dashboardColumnTemplate(
+  columnWidths: DashboardLayout["columnWidths"],
+): string {
+  return columnWidths === null
+    ? `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 1fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 1.12fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 0.96fr)`
+    : `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${columnWidths[0]}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${columnWidths[1]}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${columnWidths[2]}px)`;
+}
+
+function dashboardRowTemplate(
+  topRowHeight: DashboardLayout["topRowHeight"],
+): string {
+  return topRowHeight === null
+    ? `minmax(${DASHBOARD_MIN_TOP_ROW}px, 1fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_BOTTOM_ROW}px, 1fr)`
+    : `minmax(${DASHBOARD_MIN_TOP_ROW}px, ${topRowHeight}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_BOTTOM_ROW}px, 1fr)`;
+}
 
 type LogFindState = {
   term: string;
@@ -203,6 +221,7 @@ function LogPanel({
   onOpen,
   className,
   dense = false,
+  suspendAutoFollow = false,
 }: {
   title: string;
   projectId: string;
@@ -211,6 +230,7 @@ function LogPanel({
   onOpen?: () => void;
   className?: string;
   dense?: boolean;
+  suspendAutoFollow?: boolean;
 }): JSX.Element {
   const {
     viewport,
@@ -238,6 +258,7 @@ function LogPanel({
         hasMoreOlder={viewport.hasMoreOlder}
         unseenCount={viewport.unseenNewLineCount}
         isFollowing={viewport.isFollowing}
+        suspendAutoFollow={suspendAutoFollow}
         onLoadOlder={handleLoadOlder}
         onJumpToBottom={handleJumpToBottom}
         onFollowingChange={handleFollowingChange}
@@ -321,7 +342,13 @@ function BuildStatusPanel({
   );
 }
 
-function BuildLogPanel({ projectId }: { projectId: string }): JSX.Element {
+function BuildLogPanel({
+  projectId,
+  suspendAutoFollow = false,
+}: {
+  projectId: string;
+  suspendAutoFollow?: boolean;
+}): JSX.Element {
   const {
     viewport,
     handleLoadOlder,
@@ -357,6 +384,7 @@ function BuildLogPanel({ projectId }: { projectId: string }): JSX.Element {
         hasMoreOlder={viewport.hasMoreOlder}
         unseenCount={viewport.unseenNewLineCount}
         isFollowing={viewport.isFollowing}
+        suspendAutoFollow={suspendAutoFollow}
         onLoadOlder={handleLoadOlder}
         onJumpToBottom={handleJumpToBottom}
         onFollowingChange={handleFollowingChange}
@@ -365,7 +393,13 @@ function BuildLogPanel({ projectId }: { projectId: string }): JSX.Element {
   );
 }
 
-function TailLogPanel({ projectId }: { projectId: string }): JSX.Element {
+function TailLogPanel({
+  projectId,
+  suspendAutoFollow = false,
+}: {
+  projectId: string;
+  suspendAutoFollow?: boolean;
+}): JSX.Element {
   const {
     viewport,
     handleLoadOlder,
@@ -397,6 +431,7 @@ function TailLogPanel({ projectId }: { projectId: string }): JSX.Element {
         hasMoreOlder={viewport.hasMoreOlder}
         unseenCount={viewport.unseenNewLineCount}
         isFollowing={viewport.isFollowing}
+        suspendAutoFollow={suspendAutoFollow}
         onLoadOlder={handleLoadOlder}
         onJumpToBottom={handleJumpToBottom}
         onFollowingChange={handleFollowingChange}
@@ -719,9 +754,12 @@ export function ProjectDashboardContent({
 }): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const pendingLayoutRef = useRef<DashboardLayout | null>(null);
+  const resizingRef = useRef(false);
   const [layout, setLayout] = useState<DashboardLayout>(() =>
     readStoredLayout(projectId),
   );
+  const [isResizing, setIsResizing] = useState(false);
 
   useEffect(() => {
     setLayout(readStoredLayout(projectId));
@@ -734,13 +772,61 @@ export function ProjectDashboardContent({
     );
   }, [layout, projectId]);
 
+  function applyGridLayout(nextLayout: DashboardLayout): void {
+    const grid = gridRef.current;
+    if (!grid) {
+      return;
+    }
+
+    grid.style.setProperty(
+      "--dashboard-column-template",
+      dashboardColumnTemplate(nextLayout.columnWidths),
+    );
+    grid.style.setProperty(
+      "--dashboard-row-template",
+      dashboardRowTemplate(nextLayout.topRowHeight),
+    );
+  }
+
+  function scheduleGridLayout(nextLayout: DashboardLayout): void {
+    pendingLayoutRef.current = nextLayout;
+    applyGridLayout(nextLayout);
+  }
+
   const startResize = (
     type: DragState["type"],
     event: PointerEvent<HTMLDivElement>,
   ): void => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    resizingRef.current = false;
 
+    const grid = gridRef.current;
+    const gridStyles = grid ? window.getComputedStyle(grid) : null;
+    const gridPaddingTop = gridStyles
+      ? parseFloat(gridStyles.paddingTop) || 0
+      : 0;
+    const gridPaddingRight = gridStyles
+      ? parseFloat(gridStyles.paddingRight) || 0
+      : 0;
+    const gridPaddingBottom = gridStyles
+      ? parseFloat(gridStyles.paddingBottom) || 0
+      : 0;
+    const gridPaddingLeft = gridStyles
+      ? parseFloat(gridStyles.paddingLeft) || 0
+      : 0;
+    const availableWidth = grid
+      ? grid.clientWidth -
+        gridPaddingLeft -
+        gridPaddingRight -
+        DASHBOARD_SPLITTER_SIZE * 2
+      : 0;
+    const availableHeight = grid
+      ? grid.clientHeight -
+        gridPaddingTop -
+        gridPaddingBottom -
+        DASHBOARD_SPLITTER_SIZE
+      : 0;
     const topRowPanel =
       gridRef.current?.querySelector<HTMLElement>(".frontend-panel");
     const columnPanels = [
@@ -758,51 +844,42 @@ export function ProjectDashboardContent({
       startY: event.clientY,
       startColumnWidths,
       startTopRowHeight: topRowPanel?.getBoundingClientRect().height ?? 0,
+      availableWidth,
+      maxTopRowHeight: Math.max(
+        DASHBOARD_MIN_TOP_ROW,
+        availableHeight - DASHBOARD_MIN_BOTTOM_ROW,
+      ),
     };
   };
 
   const resizeLayout = (event: PointerEvent<HTMLDivElement>): void => {
     const drag = dragRef.current;
-    const grid = gridRef.current;
 
-    if (!drag || !grid) {
+    if (!drag) {
       return;
     }
 
+    if (!resizingRef.current) {
+      resizingRef.current = true;
+      setIsResizing(true);
+    }
+
+    const baseLayout = pendingLayoutRef.current ?? layout;
+
     if (drag.type === "row") {
-      const gridStyles = window.getComputedStyle(grid);
-      const gridPaddingTop = parseFloat(gridStyles.paddingTop) || 0;
-      const gridPaddingBottom = parseFloat(gridStyles.paddingBottom) || 0;
-      const availableHeight =
-        grid.clientHeight -
-        gridPaddingTop -
-        gridPaddingBottom -
-        DASHBOARD_SPLITTER_SIZE;
-      const maxTopHeight = Math.max(
-        DASHBOARD_MIN_TOP_ROW,
-        availableHeight - DASHBOARD_MIN_BOTTOM_ROW,
-      );
       const nextTopHeight = clamp(
         drag.startTopRowHeight + event.clientY - drag.startY,
         DASHBOARD_MIN_TOP_ROW,
-        maxTopHeight,
+        drag.maxTopRowHeight,
       );
 
-      setLayout((current) => ({
-        ...current,
+      scheduleGridLayout({
+        ...baseLayout,
         topRowHeight: nextTopHeight,
-      }));
+      });
       return;
     }
 
-    const gridStyles = window.getComputedStyle(grid);
-    const gridPaddingLeft = parseFloat(gridStyles.paddingLeft) || 0;
-    const gridPaddingRight = parseFloat(gridStyles.paddingRight) || 0;
-    const availableWidth =
-      grid.clientWidth -
-      gridPaddingLeft -
-      gridPaddingRight -
-      DASHBOARD_SPLITTER_SIZE * 2;
     const delta = event.clientX - drag.startX;
     const nextWidths: [number, number, number] = [
       drag.startColumnWidths[0],
@@ -830,37 +907,42 @@ export function ProjectDashboardContent({
 
     const nextTotal = nextWidths.reduce((total, value) => total + value, 0);
     const normalizedWidths =
-      nextTotal === availableWidth
+      nextTotal <= 0 || drag.availableWidth <= 0
         ? nextWidths
-        : (nextWidths.map((width) => (width / nextTotal) * availableWidth) as [
-            number,
-            number,
-            number,
-          ]);
+        : nextTotal === drag.availableWidth
+          ? nextWidths
+          : (nextWidths.map(
+              (width) => (width / nextTotal) * drag.availableWidth,
+            ) as [number, number, number]);
 
-    setLayout((current) => ({
-      ...current,
+    scheduleGridLayout({
+      ...baseLayout,
       columnWidths: normalizedWidths,
-    }));
+    });
   };
 
   const stopResize = (event: PointerEvent<HTMLDivElement>): void => {
     if (dragRef.current) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    }
+
+    const pendingLayout = pendingLayoutRef.current;
+    if (pendingLayout) {
+      applyGridLayout(pendingLayout);
+      setLayout(pendingLayout);
+      pendingLayoutRef.current = null;
     }
 
     dragRef.current = null;
+    resizingRef.current = false;
+    setIsResizing(false);
   };
 
   const gridStyle = {
-    "--dashboard-column-template":
-      layout.columnWidths === null
-        ? `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 1fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 1.12fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 0.96fr)`
-        : `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[0]}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[1]}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[2]}px)`,
-    "--dashboard-row-template":
-      layout.topRowHeight === null
-        ? `minmax(${DASHBOARD_MIN_TOP_ROW}px, 1fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_BOTTOM_ROW}px, 1fr)`
-        : `minmax(${DASHBOARD_MIN_TOP_ROW}px, ${layout.topRowHeight}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_BOTTOM_ROW}px, 1fr)`,
+    "--dashboard-column-template": dashboardColumnTemplate(layout.columnWidths),
+    "--dashboard-row-template": dashboardRowTemplate(layout.topRowHeight),
   } as CSSProperties;
 
   return (
@@ -872,9 +954,13 @@ export function ProjectDashboardContent({
           channel="frontend"
           footer="Open full log"
           className="frontend-panel"
+          suspendAutoFollow={isResizing}
           onOpen={() => void window.ivsDashboard.openLog(projectId, "frontend")}
         />
-        <BuildLogPanel projectId={projectId} />
+        <BuildLogPanel
+          projectId={projectId}
+          suspendAutoFollow={isResizing}
+        />
         <BuildStatusPanel projectId={projectId} projectState={projectState} />
         <LogPanel
           title="WildFly"
@@ -883,9 +969,13 @@ export function ProjectDashboardContent({
           footer="Open full log"
           className="wildfly-panel"
           dense
+          suspendAutoFollow={isResizing}
           onOpen={() => void window.ivsDashboard.openLog(projectId, "wildfly")}
         />
-        <TailLogPanel projectId={projectId} />
+        <TailLogPanel
+          projectId={projectId}
+          suspendAutoFollow={isResizing}
+        />
         <div
           className="grid-splitter column-splitter column-splitter-one"
           role="separator"
