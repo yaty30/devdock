@@ -1697,39 +1697,8 @@ body {
   line-height: 1.14;
 }
 
-.log-lines.resizing {
-  overflow: hidden;
-}
-
 .log-content {
   min-width: 100%;
-}
-
-.log-resize-placeholder {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  pointer-events: none;
-}
-
-.log-resize-placeholder::before {
-  width: 22px;
-  height: 22px;
-  content: "";
-  border: 3px solid var(--accent-soft);
-  border-top-color: var(--accent);
-  border-radius: 999px;
-  animation: log-resize-spinner-spin 760ms linear infinite;
-}
-
-@keyframes log-resize-spinner-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .log-line {
@@ -1903,6 +1872,55 @@ body {
 
 .link-button svg {
   color: var(--accent);
+}
+
+.log-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.log-colorize-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.log-colorize-toggle:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+/* Inactive (off) — all three circles are dimmed */
+.log-colorize-toggle .log-colorize-circle-top,
+.log-colorize-toggle .log-colorize-circle-right,
+.log-colorize-toggle .log-colorize-circle-left {
+  stroke: var(--muted);
+  opacity: 0.45;
+  transition: stroke 0.2s, opacity 0.2s;
+}
+
+/* Active (on) — each circle gets its own vivid color */
+.log-colorize-toggle.active .log-colorize-circle-top {
+  stroke: #38bdf8; /* cyan */
+  opacity: 1;
+}
+
+.log-colorize-toggle.active .log-colorize-circle-right {
+  stroke: #f59e0b; /* amber */
+  opacity: 1;
+}
+
+.log-colorize-toggle.active .log-colorize-circle-left {
+  stroke: #f43f5e; /* rose */
+  opacity: 1;
 }
 
 .timeline {

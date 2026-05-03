@@ -1,10 +1,9 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
-  useState,
-  type ReactNode,
   type UIEvent,
 } from "react";
 import {
@@ -17,8 +16,40 @@ import type { LogLine } from "../../../../shared/dashboardTypes";
 const AUTO_SCROLL_THRESHOLD = 80;
 const ROW_HEIGHT_DENSE = 18;
 const ROW_HEIGHT_NORMAL = 22;
-const COLORIZED_MESSAGE_CACHE_LIMIT = 2000;
-const colorizedMessageCache = new Map<string, ReactNode[]>();
+// Sized for a 50K-line buffer so most visible rows stay cached across
+// scrolling and re-renders. We cache pre-built HTML strings (not React
+// node trees) so each row mounts a single innerHTML span instead of a
+// fiber tree of ~10-20 token spans. This keeps resize/sidebar-toggle
+// reconciliation cheap even with token-dense WildFly output.
+const COLORIZED_MESSAGE_CACHE_LIMIT = 8000;
+const colorizedMessageCache = new Map<string, string>();
+
+function escapeHtml(value: string): string {
+  let out = "";
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value.charCodeAt(i);
+    switch (ch) {
+      case 38: // &
+        out += "&amp;";
+        break;
+      case 60: // <
+        out += "&lt;";
+        break;
+      case 62: // >
+        out += "&gt;";
+        break;
+      case 34: // "
+        out += "&quot;";
+        break;
+      case 39: // '
+        out += "&#39;";
+        break;
+      default:
+        out += value[i];
+    }
+  }
+  return out;
+}
 
 type TokenKind =
   | "level-info"
@@ -152,44 +183,37 @@ function tokenKind(value: string): TokenKind {
   return "keyword";
 }
 
-function colorizeMessage(message: string): ReactNode[] {
-  const parts: ReactNode[] = [];
+function colorizeMessageHtml(message: string): string {
+  let out = "";
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   TOKEN_PATTERN.lastIndex = 0;
 
   while ((match = TOKEN_PATTERN.exec(message)) !== null) {
     if (match.index > lastIndex) {
-      parts.push(message.slice(lastIndex, match.index));
+      out += escapeHtml(message.slice(lastIndex, match.index));
     }
 
     const value = match[0];
-    parts.push(
-      <span
-        className={`log-token log-token-${tokenKind(value)}`}
-        key={`${value}-${match.index}`}
-      >
-        {value}
-      </span>,
-    );
+    out += `<span class="log-token log-token-${tokenKind(value)}">${escapeHtml(value)}</span>`;
     lastIndex = match.index + value.length;
   }
 
   if (lastIndex < message.length) {
-    parts.push(message.slice(lastIndex));
+    out += escapeHtml(message.slice(lastIndex));
   }
 
-  return parts;
+  return out;
 }
 
-function getColorizedMessage(message: string): ReactNode[] {
+function getColorizedMessageHtml(message: string): string {
   const cached = colorizedMessageCache.get(message);
-  if (cached) {
+  if (cached !== undefined) {
     return cached;
   }
 
-  const colorized = colorizeMessage(message);
-  colorizedMessageCache.set(message, colorized);
+  const html = colorizeMessageHtml(message);
+  colorizedMessageCache.set(message, html);
 
   if (colorizedMessageCache.size > COLORIZED_MESSAGE_CACHE_LIMIT) {
     const oldestKey = colorizedMessageCache.keys().next().value;
@@ -198,8 +222,91 @@ function getColorizedMessage(message: string): ReactNode[] {
     }
   }
 
-  return colorized;
+  return html;
 }
+
+export type VirtualizedLogViewerProps = {
+  lines: LogLine[];
+  isLoadingOlder?: boolean;
+  hasMoreOlder?: boolean;
+  unseenCount?: number;
+  isFollowing?: boolean;
+  suspendAutoFollow?: boolean;
+  activeMatchSeq?: number | null;
+  dense?: boolean;
+  colorize?: boolean;
+  highlight?: string;
+  onLoadOlder?: () => void;
+  onJumpToBottom?: () => void;
+  onFollowingChange?: (following: boolean) => void;
+};
+
+type LogRowProps = {
+  line: LogLine;
+  top: number;
+  height: number;
+  matched: boolean;
+  active: boolean;
+  colorize: boolean;
+};
+
+// Memoized so unrelated panel state changes (find term updates that don't
+// affect this row, scroll position, resize, sibling updates) don't force this
+// row to re-render. Rows only re-render when their own match/active flags or
+// position change.
+const LogRow = memo(function LogRow({
+  line,
+  top,
+  height,
+  matched,
+  active,
+  colorize,
+}: LogRowProps) {
+  const timeMatch = line.text.match(/^(\d{2}:\d{2}:\d{2})(?:\s+|$)/);
+  const time = timeMatch?.[1] ?? "";
+  const message = timeMatch ? line.text.slice(timeMatch[0].length) : line.text;
+  const lowerText = line.text.toLowerCase();
+  const severity = colorize
+    ? lowerText.includes("error") || lowerText.includes("fail")
+      ? " error"
+      : lowerText.includes("warn")
+        ? " warning"
+        : lowerText.includes("success") || lowerText.includes("running")
+          ? " success"
+          : ""
+    : "";
+
+  return (
+    <div
+      className={`log-line${matched ? " log-line-matched" : ""}${
+        active ? " log-line-active" : ""
+      }${severity}`}
+      data-log-seq={line.seq}
+      style={{
+        position: "absolute",
+        top,
+        left: 0,
+        width: "100%",
+        height,
+      }}
+    >
+      <span className="log-number">{line.seq}</span>
+      <span className="log-time">{time}</span>
+      <span
+        className="log-message"
+        // Colorized output is a pre-built, fully escaped HTML string (see
+        // colorizeMessageHtml). Setting it via innerHTML keeps each row at
+        // a single React fiber instead of one fiber per token, so resize
+        // and sidebar-toggle reconciliation stays cheap.
+        dangerouslySetInnerHTML={{
+          __html: colorize
+            ? getColorizedMessageHtml(message)
+            : escapeHtml(message),
+        }}
+      />
+    </div>
+  );
+});
 
 export function LogLines({
   lines,
@@ -210,39 +317,22 @@ export function LogLines({
   suspendAutoFollow = false,
   activeMatchSeq = null,
   dense = false,
+  colorize = true,
   highlight = "",
   onLoadOlder,
   onJumpToBottom,
   onFollowingChange,
-}: {
-  lines: LogLine[];
-  isLoadingOlder?: boolean;
-  hasMoreOlder?: boolean;
-  unseenCount?: number;
-  isFollowing?: boolean;
-  suspendAutoFollow?: boolean;
-  activeMatchSeq?: number | null;
-  dense?: boolean;
-  highlight?: string;
-  onLoadOlder?: () => void;
-  onJumpToBottom?: () => void;
-  onFollowingChange?: (following: boolean) => void;
-}): JSX.Element {
+}: VirtualizedLogViewerProps): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const programmaticScrollRef = useRef(false);
   const programmaticScrollVersionRef = useRef(0);
   const shouldStickToBottomRef = useRef(isFollowing);
   const suspendAutoFollowRef = useRef(suspendAutoFollow);
   const pendingFollowSyncRef = useRef(false);
-  const frozenScrollTopRef = useRef(0);
-  const frozenRestorePendingRef = useRef(false);
-  const resizeStateInitializedRef = useRef(false);
   const prependScrollRef = useRef<{
     scrollTop: number;
     prevFirstSeq: number | null;
   } | null>(null);
-  const [contentFrozen, setContentFrozen] = useState(false);
-  const [spinnerVisible, setSpinnerVisible] = useState(false);
   const term = highlight.trim();
 
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
@@ -259,59 +349,22 @@ export function LogLines({
   }, [isFollowing]);
 
   useLayoutEffect(() => {
+    const wasSuspended = suspendAutoFollowRef.current;
     suspendAutoFollowRef.current = suspendAutoFollow;
-    if (!resizeStateInitializedRef.current) {
-      resizeStateInitializedRef.current = true;
-      if (!suspendAutoFollow) {
-        return;
-      }
-    }
 
-    if (suspendAutoFollow) {
-      frozenScrollTopRef.current = containerRef.current?.scrollTop ?? 0;
-      frozenRestorePendingRef.current = true;
-      if (shouldStickToBottomRef.current) {
-        pendingFollowSyncRef.current = true;
-      }
-      setSpinnerVisible(true);
-      setContentFrozen(true);
-      return;
-    }
-
-    setContentFrozen(false);
-    setSpinnerVisible(false);
-  }, [suspendAutoFollow]);
-
-  useLayoutEffect(() => {
+    // When resize ends, fire any deferred bottom-sync that arrived while we
+    // were suspending auto-follow.
     if (
-      suspendAutoFollow ||
-      contentFrozen ||
-      !frozenRestorePendingRef.current
+      wasSuspended &&
+      !suspendAutoFollow &&
+      pendingFollowSyncRef.current &&
+      shouldStickToBottomRef.current
     ) {
-      return;
-    }
-
-    frozenRestorePendingRef.current = false;
-    if (pendingFollowSyncRef.current) {
       pendingFollowSyncRef.current = false;
-      if (shouldStickToBottomRef.current) {
-        scrollToBottom();
-      }
-      return;
-    }
-
-    const container = containerRef.current;
-    if (container) {
-      programmaticScrollRef.current = true;
-      requestAnimationFrame(() => {
-        container.scrollTop = frozenScrollTopRef.current;
-        requestAnimationFrame(() => {
-          programmaticScrollRef.current = false;
-        });
-      });
+      scrollToBottom();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contentFrozen, suspendAutoFollow]);
+  }, [suspendAutoFollow]);
 
   const lastSeq = lines[lines.length - 1]?.seq ?? 0;
   useEffect(() => {
@@ -331,15 +384,15 @@ export function LogLines({
   }, []);
 
   useEffect(() => {
-    if (activeMatchSeq === null || contentFrozen) return;
+    if (activeMatchSeq === null) return;
     const idx = lines.findIndex((l) => l.seq === activeMatchSeq);
     if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "center" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeMatchSeq, contentFrozen, lines.length]);
+  }, [activeMatchSeq, lines.length]);
 
   useLayoutEffect(() => {
     const pending = prependScrollRef.current;
-    if (!pending || pending.prevFirstSeq === null || contentFrozen) return;
+    if (!pending || pending.prevFirstSeq === null) return;
 
     const currentFirstSeq = lines[0]?.seq ?? null;
     if (currentFirstSeq === null || currentFirstSeq >= pending.prevFirstSeq)
@@ -360,7 +413,7 @@ export function LogLines({
         programmaticScrollRef.current = false;
       });
     }
-  }, [contentFrozen, lines, dense]);
+  }, [lines, dense]);
 
   function scrollToBottom(): void {
     const container = containerRef.current;
@@ -383,7 +436,7 @@ export function LogLines({
       return;
     }
 
-    if (suspendAutoFollowRef.current || contentFrozen) {
+    if (suspendAutoFollowRef.current) {
       pendingFollowSyncRef.current = true;
       return;
     }
@@ -403,7 +456,7 @@ export function LogLines({
   }, [onLoadOlder, isLoadingOlder, hasMoreOlder, lines]);
 
   function handleScroll(event: UIEvent<HTMLDivElement>): void {
-    if (programmaticScrollRef.current || contentFrozen) return;
+    if (programmaticScrollRef.current) return;
 
     const container = event.currentTarget;
     const distanceFromBottom =
@@ -422,95 +475,71 @@ export function LogLines({
 
   return (
     <div
-      className={`log-lines${dense ? " dense" : ""}${
-        contentFrozen ? " resizing" : ""
-      }`}
+      className={`log-lines${dense ? " dense" : ""}`}
       onScroll={handleScroll}
       ref={containerRef}
       style={{ position: "relative" }}
     >
-      {!contentFrozen ? (
-        <div className="log-content">
-          {(hasMoreOlder || isLoadingOlder) && (
-            <div className="log-loading-row">
-              {isLoadingOlder
-                ? "Loading older log lines..."
-                : "Scroll up to load older lines"}
-            </div>
-          )}
+      <div className="log-content">
+        {(hasMoreOlder || isLoadingOlder) && (
+          <div className="log-loading-row">
+            {isLoadingOlder
+              ? "Loading older log lines..."
+              : "Scroll up to load older lines"}
+          </div>
+        )}
 
-          <div
-            style={{
-              height: virtualizer.getTotalSize(),
-              width: "100%",
-              position: "relative",
+        <div
+          style={{
+            height: virtualizer.getTotalSize(),
+            width: "100%",
+            position: "relative",
+          }}
+        >
+          {virtualizer.getVirtualItems().map((item) => {
+            const logLine = lines[item.index];
+            const matched =
+              term.length > 0 &&
+              logLine.text.toLowerCase().includes(term.toLowerCase());
+
+            return (
+              <LogRow
+                key={logLine.seq}
+                line={logLine}
+                top={item.start}
+                height={item.size}
+                matched={matched}
+                active={activeMatchSeq === logLine.seq}
+                colorize={colorize}
+              />
+            );
+          })}
+        </div>
+
+        {unseenCount > 0 && !isFollowing && (
+          <button
+            type="button"
+            className="log-jump-bar"
+            onClick={() => {
+              scrollToBottom();
+              onJumpToBottom?.();
             }}
           >
-            {virtualizer.getVirtualItems().map((item) => {
-              const logLine = lines[item.index];
-              const timeMatch = logLine.text.match(
-                /^(\d{2}:\d{2}:\d{2})(?:\s+|$)/,
-              );
-              const time = timeMatch?.[1] ?? "";
-              const message = timeMatch
-                ? logLine.text.slice(timeMatch[0].length)
-                : logLine.text;
-              const lowerText = logLine.text.toLowerCase();
-              const matched =
-                term.length > 0 && lowerText.includes(term.toLowerCase());
-              const severity =
-                lowerText.includes("error") || lowerText.includes("fail")
-                  ? " error"
-                  : lowerText.includes("warn")
-                    ? " warning"
-                    : lowerText.includes("success") ||
-                        lowerText.includes("running")
-                      ? " success"
-                      : "";
-
-              return (
-                <div
-                  className={`log-line${matched ? " log-line-matched" : ""}${
-                    activeMatchSeq === logLine.seq ? " log-line-active" : ""
-                  }${severity}`}
-                  data-log-seq={logLine.seq}
-                  key={logLine.seq}
-                  style={{
-                    position: "absolute",
-                    top: item.start,
-                    left: 0,
-                    width: "100%",
-                    height: item.size,
-                  }}
-                >
-                  <span className="log-number">{logLine.seq}</span>
-                  <span className="log-time">{time}</span>
-                  <span className="log-message">
-                    {getColorizedMessage(message)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-
-          {unseenCount > 0 && !isFollowing && (
-            <button
-              type="button"
-              className="log-jump-bar"
-              onClick={() => {
-                scrollToBottom();
-                onJumpToBottom?.();
-              }}
-            >
-              {unseenCount} new {unseenCount === 1 ? "line" : "lines"} - Jump to
-              bottom
-            </button>
-          )}
-        </div>
-      ) : null}
-      {spinnerVisible ? (
-        <div className="log-resize-placeholder" aria-hidden="true" />
-      ) : null}
+            {unseenCount} new {unseenCount === 1 ? "line" : "lines"} - Jump to
+            bottom
+          </button>
+        )}
+      </div>
     </div>
   );
 }
+
+/**
+ * Reusable virtualized log viewer used by every dashboard log panel and any
+ * full-log view. Renders only visible rows via @tanstack/react-virtual with a
+ * small overscan, supports auto-follow, search highlighting, jump-to-bottom,
+ * and progressive historical loading.
+ *
+ * `LogLines` is kept as a named export for backwards compatibility.
+ */
+export const VirtualizedLogViewer = LogLines;

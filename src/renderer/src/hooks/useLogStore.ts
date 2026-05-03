@@ -25,9 +25,14 @@ import type {
 
 export const INITIAL_LIVE_LINES = 400;
 export const LOAD_OLDER_CHUNK = 400;
-const MAX_RENDERER_LINES = 4000;
-// Lines moved from the pending queue into the visible store per animation frame.
-const DRAIN_PER_FRAME = 16;
+// Hard cap for in-memory log retention per channel. Lines beyond this are
+// dropped from the oldest end (when following) or newest end (when prepending
+// historical lines) to prevent unbounded memory growth during long sessions.
+const MAX_RENDERER_LINES = 50_000;
+// Lines moved from the pending queue into the visible store per animation
+// frame. Tuned high enough that bursts of 20K+ records flush within a few
+// frames, while still letting React paint between batches.
+const DRAIN_PER_FRAME = 500;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -52,7 +57,19 @@ export type LogViewportState = {
 const viewports = new Map<StoreKey, LogViewportState>();
 const pendingQueue = new Map<StoreKey, LogLine[]>();
 const subscribers = new Map<StoreKey, Set<() => void>>();
+// Per-channel set of seq numbers currently in `viewports[k].lines`. Maintained
+// incrementally so dedup during drains is O(batch) instead of O(buffer).
+const loadedSeqs = new Map<StoreKey, Set<number>>();
 let drainScheduled = false;
+
+function getOrCreateSeqSet(k: StoreKey): Set<number> {
+  let s = loadedSeqs.get(k);
+  if (!s) {
+    s = new Set();
+    loadedSeqs.set(k, s);
+  }
+  return s;
+}
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -99,25 +116,38 @@ function drainAll(): void {
 
     const batch = queue.splice(0, DRAIN_PER_FRAME);
     const vp = getOrCreate(k);
+    const seqSet = getOrCreateSeqSet(k);
 
-    // Deduplicate by seq
-    const existingSeqs = new Set(vp.lines.map((l) => l.seq));
-    const newLines = batch.filter((l) => !existingSeqs.has(l.seq));
+    // Deduplicate by seq using the incrementally-maintained set (O(batch)).
+    const newLines: LogLine[] = [];
+    for (const line of batch) {
+      if (!seqSet.has(line.seq)) {
+        seqSet.add(line.seq);
+        newLines.push(line);
+      }
+    }
     if (newLines.length === 0) continue;
 
-    const merged = [...vp.lines, ...newLines];
-
-    // Trim from the top when following (keep newest lines)
-    const trimmed =
-      merged.length > MAX_RENDERER_LINES
-        ? merged.slice(merged.length - MAX_RENDERER_LINES)
-        : merged;
+    let merged: LogLine[];
+    if (vp.lines.length + newLines.length > MAX_RENDERER_LINES) {
+      // Trim from the top when following (keep newest lines).
+      const overflow = vp.lines.length + newLines.length - MAX_RENDERER_LINES;
+      for (let i = 0; i < overflow && i < vp.lines.length; i++) {
+        seqSet.delete(vp.lines[i]!.seq);
+      }
+      merged =
+        overflow >= vp.lines.length
+          ? newLines.slice(-MAX_RENDERER_LINES)
+          : vp.lines.slice(overflow).concat(newLines);
+    } else {
+      merged = vp.lines.concat(newLines);
+    }
 
     viewports.set(k, {
       ...vp,
-      lines: trimmed,
-      oldestLoadedSeq: trimmed[0]?.seq ?? vp.oldestLoadedSeq,
-      newestLoadedSeq: trimmed[trimmed.length - 1]?.seq ?? vp.newestLoadedSeq,
+      lines: merged,
+      oldestLoadedSeq: merged[0]?.seq ?? vp.oldestLoadedSeq,
+      newestLoadedSeq: merged[merged.length - 1]?.seq ?? vp.newestLoadedSeq,
       unseenNewLineCount: vp.isFollowing
         ? 0
         : vp.unseenNewLineCount + newLines.length,
@@ -145,6 +175,10 @@ export function initViewport(
   // Discard any pending live lines that arrived before init completed
   const queue = pendingQueue.get(k);
   if (queue) queue.length = 0;
+
+  const seqSet = new Set<number>();
+  for (const line of result.lines) seqSet.add(line.seq);
+  loadedSeqs.set(k, seqSet);
 
   viewports.set(k, {
     lines: [...result.lines],
@@ -189,22 +223,25 @@ export function prependHistorical(
 ): void {
   const k = makeKey(projectId, channel);
   const vp = getOrCreate(k);
+  const seqSet = getOrCreateSeqSet(k);
 
-  const existingSeqs = new Set(vp.lines.map((l) => l.seq));
-  const newLines = result.lines.filter((l) => !existingSeqs.has(l.seq));
+  const newLines = result.lines.filter((l) => !seqSet.has(l.seq));
+  for (const line of newLines) seqSet.add(line.seq);
 
-  const merged = [...newLines, ...vp.lines];
+  let merged = newLines.concat(vp.lines);
 
-  // Trim from the bottom (far end from where user is reading) to stay within budget
-  const trimmed =
-    merged.length > MAX_RENDERER_LINES
-      ? merged.slice(0, MAX_RENDERER_LINES)
-      : merged;
+  // Trim from the bottom (far end from where user is reading) to stay within budget.
+  if (merged.length > MAX_RENDERER_LINES) {
+    for (let i = MAX_RENDERER_LINES; i < merged.length; i++) {
+      seqSet.delete(merged[i]!.seq);
+    }
+    merged = merged.slice(0, MAX_RENDERER_LINES);
+  }
 
   viewports.set(k, {
     ...vp,
-    lines: trimmed,
-    oldestLoadedSeq: trimmed[0]?.seq ?? vp.oldestLoadedSeq,
+    lines: merged,
+    oldestLoadedSeq: merged[0]?.seq ?? vp.oldestLoadedSeq,
     isLoadingOlder: false,
     hasMoreOlder: result.hasMoreOlder,
   });
@@ -253,6 +290,7 @@ export function clearViewport(projectId: string, channel: LogChannel): void {
   const k = makeKey(projectId, channel);
   const queue = pendingQueue.get(k);
   if (queue) queue.length = 0;
+  loadedSeqs.delete(k);
   viewports.set(k, emptyViewport());
   notify(k);
 }

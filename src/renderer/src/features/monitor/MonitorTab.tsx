@@ -267,11 +267,7 @@ function RecentBuildsPanel({
 
     const observer = new IntersectionObserver(
       (entries) => {
-        if (
-          entries[0].isIntersecting &&
-          hasMoreBuilds &&
-          !loadingBuilds
-        ) {
+        if (entries[0].isIntersecting && hasMoreBuilds && !loadingBuilds) {
           void fetchBuildPage(builds.length);
         }
       },
@@ -571,14 +567,44 @@ export function MonitorTab({
 }): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<MonitorDragState | null>(null);
+  const prevAvailableWidthRef = useRef<number | null>(null);
   const [layout, setLayout] = useState<MonitorLayout>(() =>
     readStoredMonitorLayout(projectId),
   );
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const [, setUptimeTick] = useState(0);
 
   useEffect(() => {
     setLayout(readStoredMonitorLayout(projectId));
+    prevAvailableWidthRef.current = null;
   }, [resetVersion, projectId]);
+
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+
+    const observer = new ResizeObserver((entries) => {
+      if (dragRef.current) return;
+      const entry = entries[0];
+      if (!entry) return;
+      const newContentWidth = entry.contentRect.width;
+      const newAvailableWidth = newContentWidth - MONITOR_SPLITTER_SIZE * 3;
+      const prev = prevAvailableWidthRef.current;
+      prevAvailableWidthRef.current = newAvailableWidth;
+      if (prev === null || prev === newAvailableWidth) return;
+      const current = layoutRef.current;
+      if (current.columnWidths === null) return;
+      const ratio = newAvailableWidth / prev;
+      const rescaled = current.columnWidths.map((w) =>
+        Math.max(MONITOR_MIN_COLUMN_WIDTH, w * ratio),
+      ) as [number, number, number, number];
+      setLayout((l) => ({ ...l, columnWidths: rescaled }));
+    });
+
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     window.localStorage.setItem(

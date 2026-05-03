@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -20,7 +21,7 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { ActionLink } from "../../components/common/ActionLink";
-import { LogLines } from "../../components/common/LogLines";
+import { VirtualizedLogViewer } from "../../components/common/VirtualizedLogViewer";
 import { Panel } from "../../components/common/Panel";
 import {
   clearUnseen,
@@ -213,14 +214,99 @@ function useLogPanel(
   };
 }
 
+function useColorizeState(
+  projectId: string,
+  channel: string,
+  defaultValue: boolean,
+): [boolean, () => void] {
+  const key = `ivs-colorize-${projectId}-${channel}`;
+  const getStoredValue = useCallback((): boolean => {
+    const stored = window.localStorage.getItem(key);
+    return stored !== null ? stored === "true" : defaultValue;
+  }, [defaultValue, key]);
+  const [state, setState] = useState<{ active: boolean; key: string }>(() => {
+    return { active: getStoredValue(), key };
+  });
+  const active = state.key === key ? state.active : getStoredValue();
+  useEffect(() => {
+    if (state.key !== key || state.active !== active) {
+      setState({ active, key });
+    }
+  }, [active, key, state.active, state.key]);
+  const toggle = useCallback(() => {
+    setState((current) => {
+      const currentActive =
+        current.key === key ? current.active : getStoredValue();
+      const next = !currentActive;
+      window.localStorage.setItem(key, String(next));
+      return { active: next, key };
+    });
+  }, [getStoredValue, key]);
+  return [active, toggle];
+}
+
+function ColorizeToggle({
+  active,
+  onClick,
+}: {
+  active: boolean;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      className={`log-colorize-toggle${active ? " active" : ""}`}
+      title={active ? "Colorization on" : "Colorization off"}
+      onClick={onClick}
+    >
+      <svg
+        viewBox="0 0 512 512"
+        xmlns="http://www.w3.org/2000/svg"
+        width="20"
+        height="20"
+        fill="none"
+        aria-hidden="true"
+      >
+        <circle
+          cx="256"
+          cy="184"
+          r="120"
+          className="log-colorize-circle-top"
+          strokeWidth="42"
+          strokeLinejoin="round"
+        />
+        <circle
+          cx="344"
+          cy="328"
+          r="120"
+          className="log-colorize-circle-right"
+          strokeWidth="42"
+          strokeLinejoin="round"
+        />
+        <circle
+          cx="168"
+          cy="328"
+          r="120"
+          className="log-colorize-circle-left"
+          strokeWidth="42"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 function LogPanel({
   title,
   projectId,
   channel,
   footer,
   onOpen,
+  openDisabled = false,
+  serviceState,
   className,
   dense = false,
+  colorize = true,
   suspendAutoFollow = false,
 }: {
   title: string;
@@ -228,8 +314,11 @@ function LogPanel({
   channel: LogChannel;
   footer: string;
   onOpen?: () => void;
+  openDisabled?: boolean;
+  serviceState?: ProjectRuntimeState["statuses"][number]["state"];
   className?: string;
   dense?: boolean;
+  colorize?: boolean;
   suspendAutoFollow?: boolean;
 }): JSX.Element {
   const {
@@ -240,18 +329,37 @@ function LogPanel({
   } = useLogPanel(projectId, channel);
   const id = `find-${title.toLowerCase().replace(/\s+/g, "-")}`;
   const find = useLogFind(viewport.lines, id);
+  const [colorizeActive, toggleColorize] = useColorizeState(
+    projectId,
+    channel,
+    colorize,
+  );
 
   return (
     <Panel
       title={title}
-      titleMeta={<span className="status-pill success">Live</span>}
-      action={<ActionLink onClick={onOpen}>{footer}</ActionLink>}
+      titleMeta={
+        serviceState === undefined ? (
+          <span className="status-pill success">Live</span>
+        ) : (
+          statusPill(serviceState)
+        )
+      }
+      action={
+        <div className="log-panel-actions">
+          <ColorizeToggle active={colorizeActive} onClick={toggleColorize} />
+          <ActionLink disabled={openDisabled} onClick={onOpen}>
+            {footer}
+          </ActionLink>
+        </div>
+      }
       className={className}
       findBar={find.findBar}
     >
-      <LogLines
+      <VirtualizedLogViewer
         lines={viewport.lines}
         dense={dense}
+        colorize={colorizeActive}
         highlight={find.term}
         activeMatchSeq={find.activeSeq}
         isLoadingOlder={viewport.isLoadingOlder}
@@ -361,23 +469,32 @@ function BuildLogPanel({
     BUILD_LOAD_OLDER_LINES,
   );
   const find = useLogFind(viewport.lines, "find-build-log");
+  const [colorizeActive, toggleColorize] = useColorizeState(
+    projectId,
+    "build",
+    true,
+  );
 
   return (
     <Panel
       title="Build Log"
       action={
-        <ActionLink
-          onClick={() => void window.ivsDashboard.openLog(projectId, "build")}
-        >
-          Open build log
-        </ActionLink>
+        <div className="log-panel-actions">
+          <ColorizeToggle active={colorizeActive} onClick={toggleColorize} />
+          <ActionLink
+            onClick={() => void window.ivsDashboard.openLog(projectId, "build")}
+          >
+            Open build log
+          </ActionLink>
+        </div>
       }
       className="build-log-panel"
       findBar={find.findBar}
     >
-      <LogLines
+      <VirtualizedLogViewer
         lines={viewport.lines}
         dense
+        colorize={colorizeActive}
         highlight={find.term}
         activeMatchSeq={find.activeSeq}
         isLoadingOlder={viewport.isLoadingOlder}
@@ -407,24 +524,33 @@ function TailLogPanel({
     handleFollowingChange,
   } = useLogPanel(projectId, "tail");
   const find = useLogFind(viewport.lines, "find-tail-log");
+  const [colorizeActive, toggleColorize] = useColorizeState(
+    projectId,
+    "tail",
+    true,
+  );
 
   return (
     <Panel
       title="Tail Log"
       titleMeta={<span className="status-pill success">Live</span>}
       action={
-        <ActionLink
-          onClick={() => void window.ivsDashboard.openLog(projectId, "tail")}
-        >
-          Open full log
-        </ActionLink>
+        <div className="log-panel-actions">
+          <ColorizeToggle active={colorizeActive} onClick={toggleColorize} />
+          <ActionLink
+            onClick={() => void window.ivsDashboard.openLog(projectId, "tail")}
+          >
+            Open full log
+          </ActionLink>
+        </div>
       }
       className="tail-log-panel"
       findBar={find.findBar}
     >
-      <LogLines
+      <VirtualizedLogViewer
         lines={viewport.lines}
         dense
+        colorize={colorizeActive}
         highlight={find.term}
         activeMatchSeq={find.activeSeq}
         isLoadingOlder={viewport.isLoadingOlder}
@@ -751,7 +877,7 @@ function formatTime(value: string): string {
 }
 
 function serviceStatus(
-  summary: ProjectDashboardSummary,
+  summary: { statuses: ProjectDashboardSummary["statuses"] },
   service: ServiceName,
 ): ProjectDashboardSummary["statuses"][number] | undefined {
   return summary.statuses.find((status) => status.service === service);
@@ -766,17 +892,25 @@ export function ProjectDashboardContent({
   resetVersion: number;
   projectState: ProjectRuntimeState;
 }): JSX.Element {
+  const frontendStatus = serviceStatus(projectState, "frontend");
+  const wildflyStatus = serviceStatus(projectState, "wildfly");
+  const frontendRunning = frontendStatus?.state === "running";
+  const wildflyRunning = wildflyStatus?.state === "running";
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
   const resizingRef = useRef(false);
+  const prevAvailableWidthRef = useRef<number | null>(null);
   const [layout, setLayout] = useState<DashboardLayout>(() =>
     readStoredLayout(projectId),
   );
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
   const [isResizing, setIsResizing] = useState(false);
 
   useEffect(() => {
     setLayout(readStoredLayout(projectId));
+    prevAvailableWidthRef.current = null;
   }, [resetVersion, projectId]);
 
   useEffect(() => {
@@ -785,6 +919,34 @@ export function ProjectDashboardContent({
       JSON.stringify(layout),
     );
   }, [layout, projectId]);
+
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) return;
+
+    const observer = new ResizeObserver((entries) => {
+      if (dragRef.current || resizingRef.current) return;
+      const entry = entries[0];
+      if (!entry) return;
+      const newContentWidth = entry.contentRect.width;
+      const newAvailableWidth = newContentWidth - DASHBOARD_SPLITTER_SIZE * 2;
+      const prev = prevAvailableWidthRef.current;
+      prevAvailableWidthRef.current = newAvailableWidth;
+      if (prev === null || prev === newAvailableWidth) return;
+      const current = layoutRef.current;
+      if (current.columnWidths === null) return;
+      const ratio = newAvailableWidth / prev;
+      const rescaled = current.columnWidths.map((w) =>
+        Math.max(DASHBOARD_MIN_COLUMN_WIDTH, w * ratio),
+      ) as [number, number, number];
+      const nextLayout = { ...current, columnWidths: rescaled };
+      applyGridLayout(nextLayout);
+      setLayout(nextLayout);
+    });
+
+    observer.observe(grid);
+    return () => observer.disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyGridLayout(nextLayout: DashboardLayout): void {
     const grid = gridRef.current;
@@ -968,13 +1130,12 @@ export function ProjectDashboardContent({
           channel="frontend"
           footer="Open full log"
           className="frontend-panel"
+          serviceState={frontendStatus?.state}
+          openDisabled={!frontendRunning}
           suspendAutoFollow={isResizing}
           onOpen={() => void window.ivsDashboard.openLog(projectId, "frontend")}
         />
-        <BuildLogPanel
-          projectId={projectId}
-          suspendAutoFollow={isResizing}
-        />
+        <BuildLogPanel projectId={projectId} suspendAutoFollow={isResizing} />
         <BuildStatusPanel projectId={projectId} projectState={projectState} />
         <LogPanel
           title="WildFly"
@@ -983,13 +1144,13 @@ export function ProjectDashboardContent({
           footer="Open full log"
           className="wildfly-panel"
           dense
+          colorize={false}
+          serviceState={wildflyStatus?.state}
+          openDisabled={!wildflyRunning}
           suspendAutoFollow={isResizing}
           onOpen={() => void window.ivsDashboard.openLog(projectId, "wildfly")}
         />
-        <TailLogPanel
-          projectId={projectId}
-          suspendAutoFollow={isResizing}
-        />
+        <TailLogPanel projectId={projectId} suspendAutoFollow={isResizing} />
         <div
           className="grid-splitter column-splitter column-splitter-one"
           role="separator"
