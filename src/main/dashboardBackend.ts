@@ -66,6 +66,7 @@ type BuildResult = "success" | "failed" | "stopped";
 type TailState = {
   path: string;
   offset: number;
+  lineCount: number;
   timer: NodeJS.Timeout;
 };
 
@@ -101,6 +102,12 @@ type SettingsRow = {
   project_id: string;
   settings_json: string;
   updated_at: string;
+};
+
+type SettingsActivityEntry = {
+  title: string;
+  meta: string;
+  tone: ActivityTone;
 };
 
 const LOG_LIMIT = 5000;
@@ -182,7 +189,7 @@ export class DashboardBackend {
         frontend: this.getLog(projectId, "frontend"),
         wildfly: this.getLog(projectId, "wildfly"),
         build: this.getLog(projectId, "build"),
-        tail: this.getLog(projectId, "tail"),
+        tail: [],
       },
     };
   }
@@ -318,12 +325,7 @@ export class DashboardBackend {
       rmSync(configDir, { recursive: true, force: true });
     }
     // clear in-memory logs
-    for (const channel of [
-      "frontend",
-      "wildfly",
-      "build",
-      "tail",
-    ] as LogChannel[]) {
+    for (const channel of ["frontend", "wildfly", "build"] as LogChannel[]) {
       const key = `${projectId}:${channel}`;
       this.logs.delete(key);
       this.logSeqMap.delete(key);
@@ -334,16 +336,20 @@ export class DashboardBackend {
     projectId: string,
     settings: ProjectSettingsRecord,
   ): ProjectSettingsRecord {
+    const previousSettings = this.getSettings(projectId);
+    const activityEntries = settingsActivityEntries(previousSettings, settings);
     this.writeProjectConfig(projectId, settings);
     this.ensureTail(projectId, settings.appLogFile, true);
     this.send({ type: "settings", projectId, settings });
-    this.insertActivity(
-      projectId,
-      "Settings saved",
-      "Project configuration updated",
-      "neutral",
-      "system",
-    );
+    for (const entry of activityEntries) {
+      this.insertActivity(
+        projectId,
+        entry.title,
+        entry.meta,
+        entry.tone,
+        "system",
+      );
+    }
     return settings;
   }
 
@@ -606,6 +612,12 @@ export class DashboardBackend {
   }
 
   getLogFilePath(projectId: string, channel: LogChannel): string {
+    if (channel === "tail") {
+      const appLogFile = this.getSettings(projectId).appLogFile.trim();
+      if (appLogFile) {
+        return appLogFile;
+      }
+    }
     const filePath = this.projectLogPath(projectId, channel);
     mkdirSync(dirname(filePath), { recursive: true });
     if (!existsSync(filePath)) {
@@ -1404,6 +1416,10 @@ export class DashboardBackend {
   }
 
   private clearLog(projectId: string, channel: LogChannel): void {
+    if (channel === "tail") {
+      this.send({ type: "log-clear", projectId, channel });
+      return;
+    }
     const key = logKey(projectId, channel);
     this.logs.set(key, []);
     this.logSeqMap.set(key, 0);
@@ -1523,6 +1539,9 @@ export class DashboardBackend {
     channel: LogChannel,
     limit = 400,
   ): LogQueryResult {
+    if (channel === "tail") {
+      return this.tailLogLatest(projectId, limit);
+    }
     const all = this.logs.get(logKey(projectId, channel)) ?? [];
     const lines = all.slice(-limit);
     return {
@@ -1539,6 +1558,9 @@ export class DashboardBackend {
     beforeSeq: number,
     limit = 400,
   ): LogQueryResult {
+    if (channel === "tail") {
+      return this.tailLogBefore(projectId, beforeSeq, limit);
+    }
     const all = this.logs.get(logKey(projectId, channel)) ?? [];
     const beforeIdx = all.findIndex((l) => l.seq >= beforeSeq);
     const sliceEnd = beforeIdx === -1 ? all.length : beforeIdx;
@@ -1551,6 +1573,64 @@ export class DashboardBackend {
     };
   }
 
+  private tailReadLines(filePath: string): string[] {
+    if (!existsSync(filePath)) return [];
+    return readFileSync(filePath, "utf8")
+      .split(/\r?\n/)
+      .filter((l) => l.trim().length > 0);
+  }
+
+  private tailLogLatest(projectId: string, limit: number): LogQueryResult {
+    const state = this.tailStates.get(projectId);
+    const filePath = state?.path ?? this.getSettings(projectId).appLogFile;
+    if (!filePath.trim())
+      return {
+        lines: [],
+        oldestSeq: null,
+        newestSeq: null,
+        hasMoreOlder: false,
+      };
+    const all = this.tailReadLines(filePath);
+    const start = Math.max(0, all.length - limit);
+    const lines: LogLine[] = all
+      .slice(start)
+      .map((text, i) => ({ seq: start + i + 1, text }));
+    return {
+      lines,
+      oldestSeq: lines[0]?.seq ?? null,
+      newestSeq: lines[lines.length - 1]?.seq ?? null,
+      hasMoreOlder: start > 0,
+    };
+  }
+
+  private tailLogBefore(
+    projectId: string,
+    beforeSeq: number,
+    limit: number,
+  ): LogQueryResult {
+    const state = this.tailStates.get(projectId);
+    const filePath = state?.path ?? this.getSettings(projectId).appLogFile;
+    if (!filePath.trim())
+      return {
+        lines: [],
+        oldestSeq: null,
+        newestSeq: null,
+        hasMoreOlder: false,
+      };
+    const all = this.tailReadLines(filePath);
+    const sliceEnd = Math.min(beforeSeq - 1, all.length);
+    const start = Math.max(0, sliceEnd - limit);
+    const lines: LogLine[] = all
+      .slice(start, sliceEnd)
+      .map((text, i) => ({ seq: start + i + 1, text }));
+    return {
+      lines,
+      oldestSeq: lines[0]?.seq ?? null,
+      newestSeq: lines[lines.length - 1]?.seq ?? null,
+      hasMoreOlder: start > 0,
+    };
+  }
+
   private projectLogPath(projectId: string, channel: LogChannel): string {
     return join(this.dataRoot, "projects", projectId, "logs", `${channel}.log`);
   }
@@ -1558,6 +1638,11 @@ export class DashboardBackend {
   private ensureTail(projectId: string, filePath: string, force = false): void {
     const existing = this.tailStates.get(projectId);
     if (existing && !force && existing.path === filePath) {
+      if (existsSync(filePath) && statSync(filePath).size < existing.offset) {
+        existing.offset = 0;
+        existing.lineCount = 0;
+        this.send({ type: "log-clear", projectId, channel: "tail" });
+      }
       return;
     }
 
@@ -1566,36 +1651,16 @@ export class DashboardBackend {
       this.tailStates.delete(projectId);
     }
 
-    this.clearLog(projectId, "tail");
+    this.send({ type: "log-clear", projectId, channel: "tail" });
+
     if (!filePath.trim()) {
-      this.appendLog(
-        projectId,
-        "tail",
-        stamp("No Application Log File configured"),
-      );
       return;
     }
 
-    let offset = 0;
+    let offset = existsSync(filePath) ? statSync(filePath).size : 0;
+    let lineCount = 0;
     if (existsSync(filePath)) {
-      const stat = statSync(filePath);
-      const startAt = Math.max(0, stat.size - 2_000_000);
-      if (stat.size > startAt) {
-        const fd = openSync(filePath, "r");
-        const len = stat.size - startAt;
-        const buf = Buffer.alloc(len);
-        readSync(fd, buf, 0, len, startAt);
-        closeSync(fd);
-        // silent=true: lines already delivered in getProjectState snapshot
-        this.appendChunk(projectId, "tail", buf, true);
-      }
-      offset = stat.size;
-    } else {
-      this.appendLog(
-        projectId,
-        "tail",
-        stamp(`Waiting for log file: ${filePath}`),
-      );
+      lineCount = this.tailReadLines(filePath).length;
     }
 
     const timer = setInterval(() => {
@@ -1606,6 +1671,8 @@ export class DashboardBackend {
         const size = statSync(filePath).size;
         if (size < offset) {
           offset = 0;
+          lineCount = 0;
+          this.send({ type: "log-clear", projectId, channel: "tail" });
         }
         if (size === offset) {
           return;
@@ -1616,17 +1683,34 @@ export class DashboardBackend {
         readSync(fd, buffer, 0, buffer.length, offset);
         closeSync(fd);
         offset = size;
-        this.appendChunk(projectId, "tail", buffer);
-      } catch (error) {
-        this.appendLog(
+        const newLines = buffer
+          .toString()
+          .split(/\r?\n/)
+          .filter((l) => l.trim().length > 0);
+        if (newLines.length === 0) return;
+        const logLines: LogLine[] = newLines.map((text) => ({
+          seq: ++lineCount,
+          text,
+        }));
+        const state = this.tailStates.get(projectId);
+        if (state) state.lineCount = lineCount;
+        this.send({
+          type: "log-batch",
           projectId,
-          "tail",
-          stamp(error instanceof Error ? error.message : String(error)),
-        );
+          channel: "tail",
+          lines: logLines,
+        });
+      } catch (error) {
+        // silently ignore transient read errors
       }
     }, TAIL_INTERVAL_MS);
 
-    this.tailStates.set(projectId, { path: filePath, offset, timer });
+    this.tailStates.set(projectId, {
+      path: filePath,
+      offset,
+      lineCount,
+      timer,
+    });
   }
 
   private ensureStatusPolling(projectId: string): void {
@@ -1937,6 +2021,216 @@ function splitCommand(value: string): string[] {
 
 function quote(value: string): string {
   return value.includes(" ") ? `"${value}"` : value;
+}
+
+function settingsActivityEntries(
+  previous: ProjectSettingsRecord,
+  next: ProjectSettingsRecord,
+): SettingsActivityEntry[] {
+  const entries: SettingsActivityEntry[] = [];
+
+  const add = (
+    title: string,
+    meta: string,
+    tone: ActivityTone = "info",
+  ): void => {
+    entries.push({ title, meta, tone });
+  };
+  const addIfChanged = (
+    before: string | undefined,
+    after: string | undefined,
+    title: string,
+    meta: string,
+  ): void => {
+    if ((before ?? "") !== (after ?? "")) {
+      add(title, meta);
+    }
+  };
+
+  addIfChanged(
+    previous.appLogFile,
+    next.appLogFile,
+    "Project settings updated",
+    "Application log file updated",
+  );
+  addIfChanged(
+    previous.gitProjectDirectory,
+    next.gitProjectDirectory,
+    "Git settings updated",
+    "Git project directory updated",
+  );
+  addIfChanged(
+    previous.defaultBranch,
+    next.defaultBranch,
+    "Git settings updated",
+    "Default branch updated",
+  );
+  addIfChanged(
+    previous.remote,
+    next.remote,
+    "Git settings updated",
+    "Git remote updated",
+  );
+
+  addIfChanged(
+    previous.maven.executable,
+    next.maven.executable,
+    "Maven settings updated",
+    "Maven executable path updated",
+  );
+  addIfChanged(
+    previous.maven.settingsXml,
+    next.maven.settingsXml,
+    "Maven settings updated",
+    "settings.xml path updated",
+  );
+  addIfChanged(
+    previous.maven.pomXml,
+    next.maven.pomXml,
+    "Maven settings updated",
+    "pom.xml path updated",
+  );
+  if (previous.maven.skipTests !== next.maven.skipTests) {
+    add(
+      "Maven settings updated",
+      `Skip tests turned ${next.maven.skipTests ? "on" : "off"}`,
+    );
+  }
+
+  for (const service of ["frontend", "wildfly"] as ServiceName[]) {
+    const before = previous.services[service];
+    const after = next.services[service];
+    const label = serviceLabel(service);
+    const title = `${label} settings updated`;
+
+    addIfChanged(
+      before.workingDirectory,
+      after.workingDirectory,
+      title,
+      `${label} working directory updated`,
+    );
+    addIfChanged(
+      before.command,
+      after.command,
+      title,
+      `${label} command updated`,
+    );
+    addIfChanged(
+      before.healthUrl,
+      after.healthUrl,
+      title,
+      `${label} health URL updated`,
+    );
+
+    if (service === "frontend") {
+      addIfChanged(
+        before.appUrl,
+        after.appUrl,
+        title,
+        "Frontend app URL updated",
+      );
+    } else {
+      addIfChanged(
+        before.appUrl,
+        after.appUrl,
+        title,
+        "WildFly KMU URL updated",
+      );
+      addIfChanged(
+        before.managementUrl,
+        after.managementUrl,
+        title,
+        "WildFly admin console URL updated",
+      );
+    }
+
+    if ((before.autoStart ?? false) !== (after.autoStart ?? false)) {
+      add(
+        title,
+        `${label} auto start turned ${(after.autoStart ?? false) ? "on" : "off"}`,
+      );
+    }
+  }
+
+  const previousProfiles = new Map(
+    previous.buildProfiles.map((profile) => [profile.id, profile]),
+  );
+  const nextProfiles = new Map(
+    next.buildProfiles.map((profile) => [profile.id, profile]),
+  );
+
+  for (const profile of next.buildProfiles) {
+    const before = previousProfiles.get(profile.id);
+    if (!before) {
+      add(
+        "Build profile added",
+        `Profile "${profileDisplayName(profile)}" added`,
+        "success",
+      );
+      continue;
+    }
+
+    if (buildProfileChanged(before, profile)) {
+      if (
+        before.buttonName !== profile.buttonName &&
+        profileChangeCount(before, profile) === 1
+      ) {
+        add(
+          "Build profile renamed",
+          `Profile "${profileDisplayName(before)}" renamed to "${profileDisplayName(profile)}"`,
+        );
+      } else {
+        add(
+          "Build profile updated",
+          `Profile "${profileDisplayName(profile)}" updated`,
+        );
+      }
+    }
+  }
+
+  for (const profile of previous.buildProfiles) {
+    if (!nextProfiles.has(profile.id)) {
+      add(
+        "Build profile deleted",
+        `Profile "${profileDisplayName(profile)}" deleted`,
+        "error",
+      );
+    }
+  }
+
+  return entries.length > 0
+    ? entries
+    : [
+        {
+          title: "Settings saved",
+          meta: "No setting changes detected",
+          tone: "neutral",
+        },
+      ];
+}
+
+function profileDisplayName(profile: BuildProfileRecord): string {
+  return profile.buttonName.trim() || profile.profileName.trim() || "Unnamed";
+}
+
+function buildProfileChanged(
+  previous: BuildProfileRecord,
+  next: BuildProfileRecord,
+): boolean {
+  return profileChangeCount(previous, next) > 0;
+}
+
+function profileChangeCount(
+  previous: BuildProfileRecord,
+  next: BuildProfileRecord,
+): number {
+  return (
+    Number(previous.buttonName !== next.buttonName) +
+    Number(previous.profileName !== next.profileName) +
+    Number(previous.goals !== next.goals) +
+    Number(previous.confirm !== next.confirm) +
+    Number(previous.outcomeType !== next.outcomeType)
+  );
 }
 
 function serviceProcessKey(projectId: string, service: ServiceName): string {
