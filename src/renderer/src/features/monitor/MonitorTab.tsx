@@ -42,12 +42,25 @@ type MonitorDragState = {
   startX: number;
   startY: number;
   startColumnWidths: [number, number, number, number];
+  availableWidth: number;
 };
 
 const MONITOR_MIN_COLUMN_WIDTH = 190;
 const MONITOR_MIN_TOP_ROW = 198;
 const MONITOR_MIN_BOTTOM_ROW = 240;
 const MONITOR_SPLITTER_SIZE = 16;
+
+function monitorColumnTemplate(
+  columnWidths: MonitorLayout["columnWidths"],
+): string {
+  return columnWidths === null
+    ? `minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr)`
+    : `minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${columnWidths[0]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${columnWidths[1]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${columnWidths[2]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${columnWidths[3]}px)`;
+}
+
+function monitorRowTemplate(): string {
+  return `minmax(${MONITOR_MIN_TOP_ROW}px, auto) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_BOTTOM_ROW}px, 1fr)`;
+}
 
 function MonitorCardView({
   card,
@@ -567,6 +580,8 @@ export function MonitorTab({
 }): JSX.Element {
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<MonitorDragState | null>(null);
+  const pendingLayoutRef = useRef<MonitorLayout | null>(null);
+  const resizingRef = useRef(false);
   const prevAvailableWidthRef = useRef<number | null>(null);
   const [layout, setLayout] = useState<MonitorLayout>(() =>
     readStoredMonitorLayout(projectId),
@@ -585,7 +600,7 @@ export function MonitorTab({
     if (!grid) return;
 
     const observer = new ResizeObserver((entries) => {
-      if (dragRef.current) return;
+      if (dragRef.current || resizingRef.current) return;
       const entry = entries[0];
       if (!entry) return;
       const newContentWidth = entry.contentRect.width;
@@ -599,12 +614,32 @@ export function MonitorTab({
       const rescaled = current.columnWidths.map((w) =>
         Math.max(MONITOR_MIN_COLUMN_WIDTH, w * ratio),
       ) as [number, number, number, number];
-      setLayout((l) => ({ ...l, columnWidths: rescaled }));
+      const nextLayout = { ...current, columnWidths: rescaled };
+      applyGridLayout(nextLayout);
+      setLayout(nextLayout);
     });
 
     observer.observe(grid);
     return () => observer.disconnect();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function applyGridLayout(nextLayout: MonitorLayout): void {
+    const grid = gridRef.current;
+    if (!grid) {
+      return;
+    }
+
+    grid.style.setProperty(
+      "--monitor-column-template",
+      monitorColumnTemplate(nextLayout.columnWidths),
+    );
+    grid.style.setProperty("--monitor-row-template", monitorRowTemplate());
+  }
+
+  function scheduleGridLayout(nextLayout: MonitorLayout): void {
+    pendingLayoutRef.current = nextLayout;
+    applyGridLayout(nextLayout);
+  }
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -624,6 +659,22 @@ export function MonitorTab({
   ): void => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    resizingRef.current = false;
+
+    const grid = gridRef.current;
+    const gridStyles = grid ? window.getComputedStyle(grid) : null;
+    const gridPaddingRight = gridStyles
+      ? parseFloat(gridStyles.paddingRight) || 0
+      : 0;
+    const gridPaddingLeft = gridStyles
+      ? parseFloat(gridStyles.paddingLeft) || 0
+      : 0;
+    const availableWidth = grid
+      ? grid.clientWidth -
+        gridPaddingLeft -
+        gridPaddingRight -
+        MONITOR_SPLITTER_SIZE * 3
+      : 0;
 
     const columnPanels = [
       gridRef.current?.querySelector<HTMLElement>(".monitor-card-one"),
@@ -640,25 +691,21 @@ export function MonitorTab({
       startX: event.clientX,
       startY: event.clientY,
       startColumnWidths,
+      availableWidth,
     };
   };
 
   const resizeLayout = (event: PointerEvent<HTMLDivElement>): void => {
     const drag = dragRef.current;
-    const grid = gridRef.current;
-
-    if (!drag || !grid) {
+    if (!drag) {
       return;
     }
 
-    const gridStyles = window.getComputedStyle(grid);
-    const gridPaddingLeft = parseFloat(gridStyles.paddingLeft) || 0;
-    const gridPaddingRight = parseFloat(gridStyles.paddingRight) || 0;
-    const availableWidth =
-      grid.clientWidth -
-      gridPaddingLeft -
-      gridPaddingRight -
-      MONITOR_SPLITTER_SIZE * 3;
+    if (!resizingRef.current) {
+      resizingRef.current = true;
+    }
+
+    const baseLayout = pendingLayoutRef.current ?? layout;
     const delta = event.clientX - drag.startX;
     const nextWidths: [number, number, number, number] = [
       drag.startColumnWidths[0],
@@ -695,35 +742,41 @@ export function MonitorTab({
 
     const nextTotal = nextWidths.reduce((total, value) => total + value, 0);
     const normalizedWidths =
-      nextTotal === availableWidth
+      nextTotal <= 0 || drag.availableWidth <= 0
         ? nextWidths
-        : (nextWidths.map((width) => (width / nextTotal) * availableWidth) as [
-            number,
-            number,
-            number,
-            number,
-          ]);
+        : nextTotal === drag.availableWidth
+          ? nextWidths
+          : (nextWidths.map(
+              (width) => (width / nextTotal) * drag.availableWidth,
+            ) as [number, number, number, number]);
 
-    setLayout((current) => ({
-      ...current,
+    scheduleGridLayout({
+      ...baseLayout,
       columnWidths: normalizedWidths,
-    }));
+    });
   };
 
   const stopResize = (event: PointerEvent<HTMLDivElement>): void => {
     if (dragRef.current) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    }
+
+    const pendingLayout = pendingLayoutRef.current;
+    if (pendingLayout) {
+      applyGridLayout(pendingLayout);
+      setLayout(pendingLayout);
+      pendingLayoutRef.current = null;
     }
 
     dragRef.current = null;
+    resizingRef.current = false;
   };
 
   const gridStyle = {
-    "--monitor-column-template":
-      layout.columnWidths === null
-        ? `minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, 1fr)`
-        : `minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[0]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[1]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[2]}px) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_COLUMN_WIDTH}px, ${layout.columnWidths[3]}px)`,
-    "--monitor-row-template": `minmax(${MONITOR_MIN_TOP_ROW}px, auto) ${MONITOR_SPLITTER_SIZE}px minmax(${MONITOR_MIN_BOTTOM_ROW}px, 1fr)`,
+    "--monitor-column-template": monitorColumnTemplate(layout.columnWidths),
+    "--monitor-row-template": monitorRowTemplate(),
   } as CSSProperties;
   const monitorCards = createMonitorCards(projectState);
 

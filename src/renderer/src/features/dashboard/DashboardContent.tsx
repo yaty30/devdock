@@ -404,6 +404,17 @@ function BuildStatusPanel({
           <span className="elapsed-pill">{elapsed}</span>
         </div>
       }
+      action={
+        <ActionLink
+          onClick={() => {
+            const pomPath = projectState.settings.maven.pomXml;
+            const targetPath = pomPath.replace(/[\\/][^\\/]+$/, "\\target");
+            void window.ivsDashboard.openPath(targetPath);
+          }}
+        >
+          Open WAR folder
+        </ActionLink>
+      }
       className="build-status-panel"
     >
       <div className="branch-info">
@@ -434,17 +445,6 @@ function BuildStatusPanel({
             <time>{stage.time}</time>
           </div>
         ))}
-      </div>
-      <div className="panel-footer">
-        <ActionLink
-          onClick={() => {
-            const pomPath = projectState.settings.maven.pomXml;
-            const targetPath = pomPath.replace(/[\\/][^\\/]+$/, "\\target");
-            void window.ivsDashboard.openPath(targetPath);
-          }}
-        >
-          Open WAR folder
-        </ActionLink>
       </div>
     </Panel>
   );
