@@ -52,6 +52,7 @@ type ServiceProcess = {
   child: ChildProcessWithoutNullStreams;
   startedAt: string;
   startupLogAt?: string;
+  readyLogAt?: string;
   stopRequested?: boolean;
 };
 
@@ -77,6 +78,7 @@ type BuildRow = {
   button_name: string;
   branch: string;
   commit_hash: string;
+  commit_cleanliness: string;
   environment: string;
   triggered_by: string;
   status: string;
@@ -115,6 +117,7 @@ const LOG_BATCH_FLUSH_MS = 50;
 const STATUS_INTERVAL_MS = 5000;
 const TAIL_INTERVAL_MS = 1000;
 const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
+const WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
 
 const CHANNEL_NAME = "dashboard:event";
 
@@ -282,6 +285,107 @@ export class DashboardBackend {
     );
   }
 
+  updateProject(projectId: string, name: string, code: string): ProjectRecord {
+    const trimmedName = name.trim();
+    const trimmedCode = code.trim().toUpperCase();
+    const errors = validateProjectIdentity(trimmedName, trimmedCode);
+    if (errors.length > 0) {
+      throw new Error(errors.join("\n"));
+    }
+
+    this.db
+      .prepare("UPDATE projects SET name = ?, code = ? WHERE id = ?")
+      .run(trimmedName, trimmedCode, projectId);
+    return { id: projectId, name: trimmedName, code: trimmedCode };
+  }
+
+  createProject(name: string, code: string): ProjectRecord {
+    const trimmedName = name.trim();
+    const trimmedCode = code.trim().toUpperCase();
+    const errors = validateProjectIdentity(trimmedName, trimmedCode);
+    if (errors.length > 0) {
+      throw new Error(errors.join("\n"));
+    }
+
+    const id = this.nextProjectId(trimmedName, trimmedCode);
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        "INSERT INTO projects (id, name, code, created_at) VALUES (?, ?, ?, ?)",
+      )
+      .run(id, trimmedName, trimmedCode, now);
+    this.writeProjectConfig(id, this.defaultSettings(id));
+    this.insertActivity(
+      id,
+      "Project created",
+      trimmedName,
+      "success",
+      "system",
+    );
+    return { id, name: trimmedName, code: trimmedCode };
+  }
+
+  validateProjectSettings(
+    _projectId: string,
+    name: string,
+    code: string,
+    settings: ProjectSettingsRecord,
+  ): string[] {
+    const errors = validateProjectIdentity(name.trim(), code.trim());
+    const appLogFile = settings.appLogFile.trim();
+    const frontend = settings.services.frontend;
+    const wildfly = settings.services.wildfly;
+    const frontendDirectory = frontend.workingDirectory.trim();
+    const wildflyDirectory = wildfly.workingDirectory.trim();
+    const gitProjectDirectory = settings.gitProjectDirectory.trim();
+
+    if (!appLogFile) {
+      errors.push("Application log file is required");
+    } else if (!isExistingFile(appLogFile)) {
+      errors.push(`Application log file does not exist: ${appLogFile}`);
+    }
+
+    if (frontendDirectory) {
+      if (!isExistingDirectory(frontendDirectory)) {
+        errors.push(`Frontend directory does not exist: ${frontendDirectory}`);
+      }
+      if (!frontend.command.trim()) {
+        errors.push("Frontend command is required");
+      }
+      if (!frontend.healthUrl.trim()) {
+        errors.push("Frontend health URL is required");
+      }
+      if (!frontend.appUrl?.trim()) {
+        errors.push("Frontend app URL is required");
+      }
+    }
+
+    if (wildflyDirectory) {
+      if (!isExistingDirectory(wildflyDirectory)) {
+        errors.push(
+          `WildFly bin directory does not exist: ${wildflyDirectory}`,
+        );
+      }
+      if (!wildfly.command.trim()) {
+        errors.push("WildFly start command is required");
+      }
+      if (!wildfly.healthUrl.trim()) {
+        errors.push("WildFly health URL is required");
+      }
+      errors.push(...validateMavenConfig(settings.maven));
+    }
+
+    if (!gitProjectDirectory) {
+      errors.push("Git project directory is required");
+    } else if (!isExistingDirectory(gitProjectDirectory)) {
+      errors.push(
+        `Git project directory does not exist: ${gitProjectDirectory}`,
+      );
+    }
+
+    return errors;
+  }
+
   async deleteProject(projectId: string): Promise<void> {
     // stop any running services
     for (const service of ["frontend", "wildfly"] as ServiceName[]) {
@@ -396,6 +500,7 @@ export class DashboardBackend {
 
     const startedAt = new Date();
     const git = this.getGitStatus(projectId);
+    const commitCleanliness = buildCleanlinessFromGitStatus(git);
     const environment = environmentFromProfile(profile.profileName);
     const commandText = composeMavenCommand(settings, profile);
 
@@ -404,9 +509,9 @@ export class DashboardBackend {
     const insert = this.db
       .prepare(
         `INSERT INTO build_runs (
-          project_id, profile_name, button_name, branch, commit_hash,
+          project_id, profile_name, button_name, branch, commit_hash, commit_cleanliness,
           environment, triggered_by, status, outcome_type, started_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         projectId,
@@ -414,6 +519,7 @@ export class DashboardBackend {
         profile.buttonName,
         git.branch,
         git.commit,
+        commitCleanliness,
         environment,
         userInfo().username || "local-user",
         "running",
@@ -424,7 +530,7 @@ export class DashboardBackend {
     this.insertActivity(
       projectId,
       `${profile.buttonName} build started`,
-      `${git.branch} @ ${git.commit}`,
+      `${git.branch} @ ${git.commit}/${commitCleanliness}`,
       "accent",
       "build",
     );
@@ -566,6 +672,12 @@ export class DashboardBackend {
         const health = await checkUrl(config.healthUrl);
         const reachable =
           health.ok || (service === "wildfly" && health.reachable);
+        const wildflyReadyByLog =
+          service === "wildfly" && Boolean(runningProcess?.readyLogAt);
+        const canReportRunning =
+          service === "wildfly"
+            ? wildflyReadyByLog || (!runningProcess && reachable)
+            : reachable;
         const previousStatus = this.getStoredStatus(projectId, service);
         const startedAt =
           runningProcess?.startedAt ||
@@ -582,17 +694,20 @@ export class DashboardBackend {
                 SERVICE_STARTING_GRACE_MS));
         const status: ServiceStatusRecord = {
           service,
-          state: reachable
+          state: canReportRunning
             ? "running"
             : stillStarting
               ? "starting"
               : runningProcess
                 ? "error"
                 : "stopped",
-          message: health.message,
+          message:
+            service === "wildfly" && reachable && !canReportRunning
+              ? `Waiting for "${WILDFLY_READY_LOG_FRAGMENT}"`
+              : health.message,
           url: config.healthUrl,
           checkedAt: new Date().toISOString(),
-          startedAt: reachable
+          startedAt: canReportRunning
             ? startedAt || new Date().toISOString()
             : stillStarting
               ? startedAt
@@ -691,6 +806,7 @@ export class DashboardBackend {
         button_name TEXT NOT NULL,
         branch TEXT NOT NULL,
         commit_hash TEXT NOT NULL,
+        commit_cleanliness TEXT NOT NULL DEFAULT 'unknown',
         environment TEXT NOT NULL,
         triggered_by TEXT NOT NULL,
         status TEXT NOT NULL,
@@ -712,6 +828,20 @@ export class DashboardBackend {
     `);
 
     this.patchExistingActivityDatesToYesterday();
+    this.ensureBuildRunCleanlinessColumn();
+  }
+
+  private ensureBuildRunCleanlinessColumn(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(build_runs)")
+      .all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "commit_cleanliness")) {
+      this.db.exec(
+        "ALTER TABLE build_runs ADD COLUMN commit_cleanliness TEXT NOT NULL DEFAULT 'unknown'",
+      );
+    }
   }
 
   private markInterruptedBuilds(): void {
@@ -753,6 +883,21 @@ export class DashboardBackend {
     return this.db
       .prepare("SELECT id, name, code FROM projects ORDER BY created_at ASC")
       .all() as ProjectRecord[];
+  }
+
+  private nextProjectId(name: string, code: string): string {
+    const preferred = slugifyProjectId(code) || slugifyProjectId(name);
+    const base = preferred || `project-${Date.now()}`;
+    let id = base;
+    let suffix = 2;
+    while (
+      this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(id) !==
+      undefined
+    ) {
+      id = `${base}-${suffix}`;
+      suffix += 1;
+    }
+    return id;
   }
 
   private seedDefaults(): void {
@@ -1127,12 +1272,7 @@ export class DashboardBackend {
         child = isWindowsScript
           ? spawn(
               process.env.ComSpec ?? "cmd.exe",
-              [
-                "/d",
-                "/s",
-                "/c",
-                [quote(executable), ...args.map(quote)].join(" "),
-              ],
+              ["/d", "/s", "/c", executable, ...args],
               {
                 cwd: existsSync(pomDir) ? pomDir : undefined,
                 shell: false,
@@ -1265,8 +1405,16 @@ export class DashboardBackend {
   ): ServiceStatusRecord {
     return this.statusRecord(
       service,
-      processState ? "running" : "unknown",
-      processState ? "Process running" : fallbackMessage,
+      processState
+        ? service === "wildfly" && !processState.readyLogAt
+          ? "starting"
+          : "running"
+        : "unknown",
+      processState
+        ? service === "wildfly" && !processState.readyLogAt
+          ? `Waiting for "${WILDFLY_READY_LOG_FRAGMENT}"`
+          : "Process running"
+        : fallbackMessage,
       undefined,
       processState?.startedAt,
     );
@@ -1299,6 +1447,7 @@ export class DashboardBackend {
       whereParts.push(`(
         lower(branch) LIKE ?
         OR lower(commit_hash) LIKE ?
+        OR lower(commit_cleanliness) LIKE ?
         OR lower(profile_name) LIKE ?
         OR lower(button_name) LIKE ?
         OR lower(status) LIKE ?
@@ -1308,6 +1457,7 @@ export class DashboardBackend {
       )`);
       const pattern = `%${search}%`;
       params.push(
+        pattern,
         pattern,
         pattern,
         pattern,
@@ -1454,7 +1604,9 @@ export class DashboardBackend {
     silent = false,
   ): void {
     const key = logKey(projectId, channel);
-    const nextSeq = (this.logSeqMap.get(key) ?? 0) + 1;
+    const existingSeq = this.logSeqMap.get(key);
+    const nextSeq =
+      (existingSeq ?? this.getPersistedLogLineCount(projectId, channel)) + 1;
     this.logSeqMap.set(key, nextSeq);
     const logLine: LogLine = { seq: nextSeq, text: line };
     const existing = this.logs.get(key) ?? [];
@@ -1504,13 +1656,35 @@ export class DashboardBackend {
       return;
     }
 
+    const processState = this.serviceProcesses.get(
+      serviceProcessKey(projectId, channel),
+    );
+
+    if (
+      channel === "wildfly" &&
+      line.includes(WILDFLY_READY_LOG_FRAGMENT) &&
+      processState &&
+      !processState.stopRequested
+    ) {
+      processState.readyLogAt = new Date().toISOString();
+      const healthUrl = this.getSettings(projectId).services[channel].healthUrl;
+      this.upsertStatus(
+        projectId,
+        this.statusRecord(
+          channel,
+          "running",
+          line.trim(),
+          healthUrl,
+          processState.startedAt,
+        ),
+      );
+      return;
+    }
+
     if (!isServiceStartupLogLine(channel, line)) {
       return;
     }
 
-    const processState = this.serviceProcesses.get(
-      serviceProcessKey(projectId, channel),
-    );
     if (processState && !processState.stopRequested) {
       processState.startupLogAt = new Date().toISOString();
       const currentStatus = this.getStoredStatus(projectId, channel);
@@ -1542,8 +1716,11 @@ export class DashboardBackend {
     if (channel === "tail") {
       return this.tailLogLatest(projectId, limit);
     }
-    const all = this.logs.get(logKey(projectId, channel)) ?? [];
-    const lines = all.slice(-limit);
+    const all = this.readPersistedLogLines(projectId, channel);
+    const start = Math.max(0, all.length - limit);
+    const lines = all
+      .slice(start)
+      .map((text, index) => ({ seq: start + index + 1, text }));
     return {
       lines: [...lines],
       oldestSeq: lines[0]?.seq ?? null,
@@ -1561,16 +1738,74 @@ export class DashboardBackend {
     if (channel === "tail") {
       return this.tailLogBefore(projectId, beforeSeq, limit);
     }
-    const all = this.logs.get(logKey(projectId, channel)) ?? [];
-    const beforeIdx = all.findIndex((l) => l.seq >= beforeSeq);
-    const sliceEnd = beforeIdx === -1 ? all.length : beforeIdx;
-    const lines = all.slice(Math.max(0, sliceEnd - limit), sliceEnd);
+    const all = this.readPersistedLogLines(projectId, channel);
+    const sliceEnd = Math.min(Math.max(beforeSeq - 1, 0), all.length);
+    const start = Math.max(0, sliceEnd - limit);
+    const lines = all
+      .slice(start, sliceEnd)
+      .map((text, index) => ({ seq: start + index + 1, text }));
     return {
       lines: [...lines],
       oldestSeq: lines[0]?.seq ?? null,
       newestSeq: lines[lines.length - 1]?.seq ?? null,
-      hasMoreOlder: sliceEnd - limit > 0,
+      hasMoreOlder: start > 0,
     };
+  }
+
+  getLogAround(
+    projectId: string,
+    channel: LogChannel,
+    seq: number,
+    limit = 800,
+  ): LogQueryResult {
+    const all =
+      channel === "tail"
+        ? this.tailReadCurrentLines(projectId)
+        : this.readPersistedLogLines(projectId, channel);
+    const safeLimit = clampInteger(limit, 1, 5000, 800);
+    const targetIndex = clampInteger(
+      seq - 1,
+      0,
+      Math.max(0, all.length - 1),
+      0,
+    );
+    const before = Math.floor(safeLimit / 2);
+    const start = Math.max(0, targetIndex - before);
+    const end = Math.min(all.length, start + safeLimit);
+    const adjustedStart = Math.max(0, end - safeLimit);
+    const lines = all
+      .slice(adjustedStart, end)
+      .map((text, index) => ({ seq: adjustedStart + index + 1, text }));
+
+    return {
+      lines,
+      oldestSeq: lines[0]?.seq ?? null,
+      newestSeq: lines[lines.length - 1]?.seq ?? null,
+      hasMoreOlder: adjustedStart > 0,
+    };
+  }
+
+  searchLog(
+    projectId: string,
+    channel: LogChannel,
+    term: string,
+  ): { matchSeqs: number[]; total: number } {
+    const query = term.trim().toLowerCase();
+    if (!query) {
+      return { matchSeqs: [], total: 0 };
+    }
+
+    const lines =
+      channel === "tail"
+        ? this.tailReadCurrentLines(projectId)
+        : this.readPersistedLogLines(projectId, channel);
+    const matchSeqs: number[] = [];
+    lines.forEach((line, index) => {
+      if (line.toLowerCase().includes(query)) {
+        matchSeqs.push(index + 1);
+      }
+    });
+    return { matchSeqs, total: matchSeqs.length };
   }
 
   private tailReadLines(filePath: string): string[] {
@@ -1580,17 +1815,39 @@ export class DashboardBackend {
       .filter((l) => l.trim().length > 0);
   }
 
-  private tailLogLatest(projectId: string, limit: number): LogQueryResult {
+  private readPersistedLogLines(
+    projectId: string,
+    channel: LogChannel,
+  ): string[] {
+    const filePath = this.projectLogPath(projectId, channel);
+    return this.tailReadLines(filePath);
+  }
+
+  private getPersistedLogLineCount(
+    projectId: string,
+    channel: LogChannel,
+  ): number {
+    if (channel === "tail") {
+      return 0;
+    }
+    return this.readPersistedLogLines(projectId, channel).length;
+  }
+
+  private tailReadCurrentLines(projectId: string): string[] {
     const state = this.tailStates.get(projectId);
     const filePath = state?.path ?? this.getSettings(projectId).appLogFile;
-    if (!filePath.trim())
+    return filePath.trim() ? this.tailReadLines(filePath) : [];
+  }
+
+  private tailLogLatest(projectId: string, limit: number): LogQueryResult {
+    const all = this.tailReadCurrentLines(projectId);
+    if (all.length === 0)
       return {
         lines: [],
         oldestSeq: null,
         newestSeq: null,
         hasMoreOlder: false,
       };
-    const all = this.tailReadLines(filePath);
     const start = Math.max(0, all.length - limit);
     const lines: LogLine[] = all
       .slice(start)
@@ -1608,16 +1865,14 @@ export class DashboardBackend {
     beforeSeq: number,
     limit: number,
   ): LogQueryResult {
-    const state = this.tailStates.get(projectId);
-    const filePath = state?.path ?? this.getSettings(projectId).appLogFile;
-    if (!filePath.trim())
+    const all = this.tailReadCurrentLines(projectId);
+    if (all.length === 0)
       return {
         lines: [],
         oldestSeq: null,
         newestSeq: null,
         hasMoreOlder: false,
       };
-    const all = this.tailReadLines(filePath);
     const sliceEnd = Math.min(beforeSeq - 1, all.length);
     const start = Math.max(0, sliceEnd - limit);
     const lines: LogLine[] = all
@@ -1983,6 +2238,7 @@ function formatBuildRow(row: BuildRow): RecentBuildRecord {
     id: `#${row.id}`,
     branch: row.branch || "unavailable",
     commit: row.commit_hash || "unavailable",
+    commitCleanliness: normalizeCommitCleanliness(row.commit_cleanliness),
     profile: row.button_name || row.profile_name,
     status:
       row.status === "success"
@@ -2003,6 +2259,25 @@ function formatBuildRow(row: BuildRow): RecentBuildRecord {
   };
 }
 
+function buildCleanlinessFromGitStatus(
+  git: GitStatusRecord,
+): RecentBuildRecord["commitCleanliness"] {
+  if (git.commit === "unavailable" || git.branch === "unavailable") {
+    return "unknown";
+  }
+
+  return git.status === "Clean" ? "clean" : "dirty";
+}
+
+function normalizeCommitCleanliness(
+  value: string,
+): RecentBuildRecord["commitCleanliness"] {
+  if (value === "clean" || value === "dirty") {
+    return value;
+  }
+  return "unknown";
+}
+
 function environmentFromProfile(profile: string): string {
   const normalized = profile.toLowerCase();
   if (normalized === "prod" || normalized === "production") {
@@ -2021,6 +2296,76 @@ function splitCommand(value: string): string[] {
 
 function quote(value: string): string {
   return value.includes(" ") ? `"${value}"` : value;
+}
+
+function validateProjectIdentity(name: string, code: string): string[] {
+  const errors: string[] = [];
+  if (!name) {
+    errors.push("Project name is required");
+  } else if (name.length > 20) {
+    errors.push("Project name must be 20 characters or fewer");
+  }
+
+  if (!code) {
+    errors.push("Project tag is required");
+  } else if (code.length > 3) {
+    errors.push("Project tag must be 3 characters or fewer");
+  }
+
+  return errors;
+}
+
+function validateMavenConfig(
+  settings: ProjectSettingsRecord["maven"],
+): string[] {
+  const errors: string[] = [];
+  const executable = settings.executable.trim();
+  const settingsXml = settings.settingsXml.trim();
+  const pomXml = settings.pomXml.trim();
+
+  if (!executable) {
+    errors.push("Maven executable is required");
+  } else if (!isExistingFile(executable)) {
+    errors.push(`Maven executable does not exist: ${executable}`);
+  }
+
+  if (!settingsXml) {
+    errors.push("Maven settings.xml is required");
+  } else if (!isExistingFile(settingsXml)) {
+    errors.push(`Maven settings.xml does not exist: ${settingsXml}`);
+  }
+
+  if (!pomXml) {
+    errors.push("Maven pom.xml is required");
+  } else if (!isExistingFile(pomXml)) {
+    errors.push(`Maven pom.xml does not exist: ${pomXml}`);
+  }
+
+  return errors;
+}
+
+function isExistingFile(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function isExistingDirectory(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function slugifyProjectId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 function settingsActivityEntries(

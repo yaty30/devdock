@@ -11,6 +11,7 @@ export type {
   DashboardEvent,
   GitStatusRecord,
   LogChannel,
+  LogSearchResult,
   ProjectDashboardSummary,
   ProjectRecord,
   ProjectRuntimeState,

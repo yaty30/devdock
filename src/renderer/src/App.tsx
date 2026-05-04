@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, RotateCcw } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
@@ -33,6 +33,10 @@ const SPLASH_LOGO_SIZE = "min(90px, 11vw)";
 
 type SplashFrame = "open" | "close";
 type SplashPhase = "visible" | "exiting" | "hidden";
+type SnackbarState = {
+  message: string;
+  tone: "valid" | "invalid";
+};
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
@@ -67,11 +71,15 @@ function App(): JSX.Element {
   );
   const [splashFrame, setSplashFrame] = useState<SplashFrame>("close");
   const [splashPhase, setSplashPhase] = useState<SplashPhase>("visible");
+  const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
+  const [snackbarClosing, setSnackbarClosing] = useState(false);
   const projectLoadingTimerRef = useRef<number | null>(null);
   const projectSwitchStartedAtRef = useRef<number | null>(null);
   const splashSequenceStartedRef = useRef(false);
   const selectedProjectIdRef = useRef<string | null>(null);
   const dashboardOverviewRequestRef = useRef(0);
+  const snackbarDismissTimerRef = useRef<number | null>(null);
+  const snackbarCloseTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,6 +212,12 @@ function App(): JSX.Element {
       if (projectLoadingTimerRef.current !== null) {
         window.clearTimeout(projectLoadingTimerRef.current);
       }
+      if (snackbarDismissTimerRef.current !== null) {
+        window.clearTimeout(snackbarDismissTimerRef.current);
+      }
+      if (snackbarCloseTimerRef.current !== null) {
+        window.clearTimeout(snackbarCloseTimerRef.current);
+      }
     };
   }, []);
 
@@ -303,6 +317,81 @@ function App(): JSX.Element {
     setSettingsOpen(false);
   }
 
+  function showSnackbar(message: string, tone: SnackbarState["tone"]): void {
+    if (snackbarDismissTimerRef.current !== null) {
+      window.clearTimeout(snackbarDismissTimerRef.current);
+    }
+    if (snackbarCloseTimerRef.current !== null) {
+      window.clearTimeout(snackbarCloseTimerRef.current);
+    }
+
+    setSnackbarClosing(false);
+    setSnackbar({ message, tone });
+    snackbarDismissTimerRef.current = window.setTimeout(() => {
+      setSnackbarClosing(true);
+      snackbarCloseTimerRef.current = window.setTimeout(() => {
+        setSnackbar(null);
+        setSnackbarClosing(false);
+      }, 190);
+    }, 3600);
+  }
+
+  async function handleCreateProject(
+    name: string,
+    code: string,
+  ): Promise<boolean> {
+    const trimmedName = name.trim();
+    const trimmedCode = code.trim().toUpperCase();
+    const errors: string[] = [];
+
+    if (!trimmedName) {
+      errors.push("Project name is required");
+    } else if (trimmedName.length > 20) {
+      errors.push("Project name must be 20 characters or fewer");
+    }
+
+    if (!trimmedCode) {
+      errors.push("Project tag is required");
+    } else if (trimmedCode.length > 3) {
+      errors.push("Project tag must be 3 characters or fewer");
+    }
+
+    if (errors.length > 0) {
+      showSnackbar(errors.join(". "), "invalid");
+      return false;
+    }
+
+    try {
+      const created = await window.ivsDashboard.createProject(
+        trimmedName,
+        trimmedCode,
+      );
+      if (projectLoadingTimerRef.current !== null) {
+        window.clearTimeout(projectLoadingTimerRef.current);
+      }
+      selectedProjectIdRef.current = created.id;
+      setProjects((current) => [...current, created]);
+      setSelectedProject(created);
+      setProjectStateProjectId(null);
+      setProjectLoading(true);
+      projectSwitchStartedAtRef.current = Date.now();
+      setActiveSection("project");
+      setActiveTab("dashboard");
+      setSettingsDirty(false);
+      setSettingsOpen(true);
+      void refreshDashboardOverview();
+      showSnackbar(`${created.name} created.`, "valid");
+      return true;
+    } catch (error) {
+      console.error(error);
+      showSnackbar(
+        error instanceof Error ? error.message : "Project could not be created",
+        "invalid",
+      );
+      return false;
+    }
+  }
+
   function refreshDashboardOverview(): Promise<void> {
     const requestId = dashboardOverviewRequestRef.current + 1;
     dashboardOverviewRequestRef.current = requestId;
@@ -379,16 +468,14 @@ function App(): JSX.Element {
         className={`main-content${projectLoading ? " project-loading" : ""}`}
       >
         <header className="main-header">
-          <div>
-            <h1>
-              {activeSection === "dashboard" ? "Overview" : selectedProject.name}
-            </h1>
-            <p>
-              {activeSection === "dashboard"
-                ? "All project server status and last build results."
-                : "Monitor services, run builds, and review deployment status."}
-            </p>
-          </div>
+          {activeSection === "dashboard" ? (
+            <div>
+              <h1>Overview</h1>
+              <p>All project server status and last build results.</p>
+            </div>
+          ) : (
+            <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
+          )}
           {activeSection === "project" ? (
             activeProjectState ? (
               <HeaderActions
@@ -411,34 +498,17 @@ function App(): JSX.Element {
           />
         ) : activeSection === "project" ? (
           <>
-            <div className="tab-toolbar">
-              <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
-              {activeTab === "dashboard" || activeTab === "monitor" ? (
-                <button
-                  className="reset-panels-button"
-                  type="button"
-                  onClick={() => setPanelResetVersion((version) => version + 1)}
-                >
-                  <RotateCcw size={14} />
-                  Reset panels
-                </button>
-              ) : null}
-            </div>
             {activeTab === "dashboard" ? (
               <ProjectDashboardContent
                 projectId={selectedProject.id}
                 resetVersion={panelResetVersion}
-                projectState={
-                  activeProjectState ?? createLoadingProjectState()
-                }
+                projectState={activeProjectState ?? createLoadingProjectState()}
               />
             ) : null}
             {activeTab === "monitor" ? (
               <MonitorTab
                 resetVersion={panelResetVersion}
-                projectState={
-                  activeProjectState ?? createLoadingProjectState()
-                }
+                projectState={activeProjectState ?? createLoadingProjectState()}
                 projectId={selectedProject.id}
               />
             ) : null}
@@ -480,6 +550,7 @@ function App(): JSX.Element {
               );
               setSettingsDirty(false);
               setSettingsOpen(false);
+              void refreshDashboardOverview();
             }}
             onProjectDeleted={() => {
               const remaining = projects.filter(
@@ -491,6 +562,13 @@ function App(): JSX.Element {
               setSelectedProject(remaining[0] ?? null);
               setActiveSection("dashboard");
             }}
+            onProjectUpdated={(updated) => {
+              setProjects((current) =>
+                current.map((p) => (p.id === updated.id ? updated : p)),
+              );
+              setSelectedProject(updated);
+              void refreshDashboardOverview();
+            }}
             onDirtyChange={setSettingsDirty}
             onCancel={() => {
               setSettingsDirty(false);
@@ -501,7 +579,20 @@ function App(): JSX.Element {
       </Modal>
 
       {addProjectOpen ? (
-        <AddProjectDialog onClose={() => setAddProjectOpen(false)} />
+        <AddProjectDialog
+          onCreate={handleCreateProject}
+          onClose={() => setAddProjectOpen(false)}
+        />
+      ) : null}
+
+      {snackbar ? (
+        <div
+          className={`app-snackbar ${snackbar.tone}${snackbarClosing ? " closing" : ""}`}
+          role="status"
+          onClick={() => setSnackbar(null)}
+        >
+          {snackbar.message}
+        </div>
       ) : null}
 
       {pendingNav ? (

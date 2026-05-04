@@ -403,7 +403,7 @@ function RecentBuildsPanel({
               <tr key={build.id}>
                 <td>{build.id}</td>
                 <td>{build.branch}</td>
-                <td>{`@${build.commit}`}</td>
+                <td>{`@${build.commit}/${build.commitCleanliness}`}</td>
                 <td>{build.profile}</td>
                 <td>
                   <span

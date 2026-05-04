@@ -25,6 +25,11 @@ export type LogQueryResult = {
   hasMoreOlder: boolean;
 };
 
+export type LogSearchResult = {
+  matchSeqs: number[];
+  total: number;
+};
+
 export type ProjectRecord = {
   id: string;
   name: string;
@@ -79,6 +84,7 @@ export type RecentBuildRecord = {
   id: string;
   branch: string;
   commit: string;
+  commitCleanliness: "clean" | "dirty" | "unknown";
   profile: string;
   status: "Running" | "Success" | "Failed" | "Stopped";
   duration: string;
@@ -239,6 +245,18 @@ export type DashboardApi = {
   openPath: (path: string) => Promise<string>;
   openLog: (projectId: string, channel: LogChannel) => Promise<string>;
   deleteProject: (projectId: string) => Promise<void>;
+  createProject: (name: string, code: string) => Promise<ProjectRecord>;
+  updateProject: (
+    projectId: string,
+    name: string,
+    code: string,
+  ) => Promise<ProjectRecord>;
+  validateProjectSettings: (
+    projectId: string,
+    name: string,
+    code: string,
+    settings: ProjectSettingsRecord,
+  ) => Promise<string[]>;
   getLogLatest: (
     projectId: string,
     channel: LogChannel,
@@ -250,6 +268,17 @@ export type DashboardApi = {
     beforeSeq: number,
     limit?: number,
   ) => Promise<LogQueryResult>;
+  getLogAround: (
+    projectId: string,
+    channel: LogChannel,
+    seq: number,
+    limit?: number,
+  ) => Promise<LogQueryResult>;
+  searchLog: (
+    projectId: string,
+    channel: LogChannel,
+    term: string,
+  ) => Promise<LogSearchResult>;
   onEvent: (listener: (event: DashboardEvent) => void) => () => void;
   onShutdownStarted: (
     listener: (entries: ShutdownEntry[]) => void,

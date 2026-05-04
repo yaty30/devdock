@@ -13,6 +13,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve('src/renderer'),
+    base: './',
     plugins: [react()],
     build: { outDir: resolve('build/renderer') }
   }

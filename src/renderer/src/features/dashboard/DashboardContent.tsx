@@ -1,7 +1,7 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
+  useId,
   useRef,
   useState,
   type CSSProperties,
@@ -23,12 +23,14 @@ import {
 import { ActionLink } from "../../components/common/ActionLink";
 import { VirtualizedLogViewer } from "../../components/common/VirtualizedLogViewer";
 import { Panel } from "../../components/common/Panel";
+import { Modal } from "../../components/dialogs/Modal";
 import {
   clearUnseen,
   INITIAL_LIVE_LINES,
   initViewport,
   LOAD_OLDER_CHUNK,
   prependHistorical,
+  replaceWithHistoricalWindow,
   setFollowing,
   setLoadingOlder,
   useLogViewport,
@@ -56,6 +58,17 @@ type DragState = {
   startTopRowHeight: number;
   availableWidth: number;
   maxTopRowHeight: number;
+};
+
+type ZoomLogConfig = {
+  title: string;
+  channel: LogChannel;
+  footer: string;
+  className: string;
+  serviceState?: ProjectRuntimeState["statuses"][number]["state"];
+  openDisabled?: boolean;
+  dense?: boolean;
+  colorize?: boolean;
 };
 
 const DASHBOARD_MIN_COLUMN_WIDTH = 230;
@@ -88,28 +101,99 @@ type LogFindState = {
   findBar: JSX.Element;
 };
 
-function useLogFind(lines: LogLine[], id: string): LogFindState {
+const LOG_SEARCH_WINDOW_LINES = 1200;
+
+function useLogFind(
+  projectId: string,
+  channel: LogChannel,
+  lines: LogLine[],
+  id: string,
+): LogFindState {
   const [term, setTerm] = useState("");
   const [activePosition, setActivePosition] = useState(0);
-  const matchSeqs = useMemo(() => {
-    const query = term.trim().toLowerCase();
-    if (!query) {
-      return [];
-    }
-    return lines.reduce<number[]>((matches, line) => {
-      if (line.text.toLowerCase().includes(query)) {
-        matches.push(line.seq);
-      }
-      return matches;
-    }, []);
-  }, [lines, term]);
-  const total = matchSeqs.length;
+  const [matchSeqs, setMatchSeqs] = useState<number[]>([]);
+  const [total, setTotal] = useState(0);
+  const [searching, setSearching] = useState(false);
+  const [loadingMatch, setLoadingMatch] = useState(false);
+  const searchRequestRef = useRef(0);
+  const loadRequestRef = useRef(0);
   const safePosition = total === 0 ? 0 : Math.min(activePosition, total - 1);
-  const activeSeq = total === 0 ? null : matchSeqs[safePosition];
+  const activeSeq = total === 0 ? null : (matchSeqs[safePosition] ?? null);
+  const activeSeqLoaded =
+    activeSeq === null || lines.some((line) => line.seq === activeSeq);
 
   useEffect(() => {
-    setActivePosition(0);
-  }, [term]);
+    const query = term.trim();
+    const requestId = searchRequestRef.current + 1;
+    searchRequestRef.current = requestId;
+
+    if (!query) {
+      setMatchSeqs([]);
+      setTotal(0);
+      setActivePosition(0);
+      setSearching(false);
+      return;
+    }
+
+    setSearching(true);
+    void window.ivsDashboard
+      .searchLog(projectId, channel, query)
+      .then((result) => {
+        if (searchRequestRef.current !== requestId) {
+          return;
+        }
+
+        setMatchSeqs(result.matchSeqs);
+        setTotal(result.total);
+        const firstLoadedPosition = result.matchSeqs.findIndex((seq) =>
+          lines.some((line) => line.seq === seq),
+        );
+        setActivePosition(firstLoadedPosition >= 0 ? firstLoadedPosition : 0);
+      })
+      .catch((error) => {
+        console.error(error);
+        if (searchRequestRef.current === requestId) {
+          setMatchSeqs([]);
+          setTotal(0);
+          setActivePosition(0);
+        }
+      })
+      .finally(() => {
+        if (searchRequestRef.current === requestId) {
+          setSearching(false);
+        }
+      });
+  }, [channel, projectId, term]);
+
+  useEffect(() => {
+    setActivePosition((current) =>
+      total === 0 ? 0 : Math.min(current, total - 1),
+    );
+  }, [total]);
+
+  useEffect(() => {
+    if (activeSeq === null || activeSeqLoaded) {
+      setLoadingMatch(false);
+      return;
+    }
+
+    const requestId = loadRequestRef.current + 1;
+    loadRequestRef.current = requestId;
+    setLoadingMatch(true);
+    void window.ivsDashboard
+      .getLogAround(projectId, channel, activeSeq, LOG_SEARCH_WINDOW_LINES)
+      .then((result) => {
+        if (loadRequestRef.current === requestId) {
+          replaceWithHistoricalWindow(projectId, channel, result);
+        }
+      })
+      .catch((error) => console.error(error))
+      .finally(() => {
+        if (loadRequestRef.current === requestId) {
+          setLoadingMatch(false);
+        }
+      });
+  }, [activeSeq, activeSeqLoaded, channel, projectId]);
 
   function move(delta: number): void {
     if (total === 0) {
@@ -132,12 +216,24 @@ function useLogFind(lines: LogLine[], id: string): LogFindState {
         />
       </div>
       <span className="log-find-count">
-        {total === 0 ? "0/0" : `${safePosition + 1}/${total}`}
+        {searching || loadingMatch
+          ? "..."
+          : total === 0
+            ? "0/0"
+            : `${safePosition + 1}/${total}`}
       </span>
-      <button type="button" disabled={total === 0} onClick={() => move(-1)}>
+      <button
+        type="button"
+        disabled={total === 0 || searching}
+        onClick={() => move(-1)}
+      >
         Prev
       </button>
-      <button type="button" disabled={total === 0} onClick={() => move(1)}>
+      <button
+        type="button"
+        disabled={total === 0 || searching}
+        onClick={() => move(1)}
+      >
         Next
       </button>
       <button
@@ -296,6 +392,28 @@ function ColorizeToggle({
   );
 }
 
+function ZoomIcon(): JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+      <path d="M15.85 3.85 17.3 5.3l-2.18 2.16c-.39.39-.39 1.03 0 1.42s1.03.39 1.42 0L18.7 6.7l1.45 1.45c.31.31.85.09.85-.36V3.5c0-.28-.22-.5-.5-.5h-4.29c-.45 0-.67.54-.36.85m-12 4.3L5.3 6.7l2.16 2.18c.39.39 1.03.39 1.42 0s.39-1.03 0-1.42L6.7 5.3l1.45-1.45c.31-.31.09-.85-.36-.85H3.5c-.28 0-.5.22-.5.5v4.29c0 .45.54.67.85.36m4.3 12L6.7 18.7l2.18-2.16c.39-.39.39-1.03 0-1.42s-1.03-.39-1.42 0L5.3 17.3l-1.45-1.45c-.31-.31-.85-.09-.85.36v4.29c0 .28.22.5.5.5h4.29c.45 0 .67-.54.36-.85m12-4.3L18.7 17.3l-2.16-2.18c-.39-.39-1.03-.39-1.42 0s-.39 1.03 0 1.42l2.18 2.16-1.45 1.45c-.31.31-.09.85.36.85h4.29c.28 0 .5-.22.5-.5v-4.29c0-.45-.54-.67-.85-.36" />
+    </svg>
+  );
+}
+
+function LogZoomButton({ onClick }: { onClick: () => void }): JSX.Element {
+  return (
+    <button
+      type="button"
+      className="log-zoom-button"
+      aria-label="Open enlarged log"
+      title="Open enlarged log"
+      onClick={onClick}
+    >
+      <ZoomIcon />
+    </button>
+  );
+}
+
 function LogPanel({
   title,
   projectId,
@@ -308,6 +426,7 @@ function LogPanel({
   dense = false,
   colorize = true,
   suspendAutoFollow = false,
+  onZoom,
 }: {
   title: string;
   projectId: string;
@@ -320,6 +439,7 @@ function LogPanel({
   dense?: boolean;
   colorize?: boolean;
   suspendAutoFollow?: boolean;
+  onZoom?: () => void;
 }): JSX.Element {
   const {
     viewport,
@@ -327,8 +447,9 @@ function LogPanel({
     handleJumpToBottom,
     handleFollowingChange,
   } = useLogPanel(projectId, channel);
-  const id = `find-${title.toLowerCase().replace(/\s+/g, "-")}`;
-  const find = useLogFind(viewport.lines, id);
+  const findId = useId().replace(/:/g, "");
+  const id = `find-${title.toLowerCase().replace(/\s+/g, "-")}-${findId}`;
+  const find = useLogFind(projectId, channel, viewport.lines, id);
   const [colorizeActive, toggleColorize] = useColorizeState(
     projectId,
     channel,
@@ -351,6 +472,7 @@ function LogPanel({
           <ActionLink disabled={openDisabled} onClick={onOpen}>
             {footer}
           </ActionLink>
+          {onZoom ? <LogZoomButton onClick={onZoom} /> : null}
         </div>
       }
       className={className}
@@ -453,9 +575,13 @@ function BuildStatusPanel({
 function BuildLogPanel({
   projectId,
   suspendAutoFollow = false,
+  className = "build-log-panel",
+  onZoom,
 }: {
   projectId: string;
   suspendAutoFollow?: boolean;
+  className?: string;
+  onZoom?: () => void;
 }): JSX.Element {
   const {
     viewport,
@@ -468,7 +594,13 @@ function BuildLogPanel({
     BUILD_INITIAL_LOG_LINES,
     BUILD_LOAD_OLDER_LINES,
   );
-  const find = useLogFind(viewport.lines, "find-build-log");
+  const findId = useId().replace(/:/g, "");
+  const find = useLogFind(
+    projectId,
+    "build",
+    viewport.lines,
+    `find-build-log-${findId}`,
+  );
   const [colorizeActive, toggleColorize] = useColorizeState(
     projectId,
     "build",
@@ -486,9 +618,10 @@ function BuildLogPanel({
           >
             Open build log
           </ActionLink>
+          {onZoom ? <LogZoomButton onClick={onZoom} /> : null}
         </div>
       }
-      className="build-log-panel"
+      className={className}
       findBar={find.findBar}
     >
       <VirtualizedLogViewer
@@ -513,9 +646,13 @@ function BuildLogPanel({
 function TailLogPanel({
   projectId,
   suspendAutoFollow = false,
+  className = "tail-log-panel",
+  onZoom,
 }: {
   projectId: string;
   suspendAutoFollow?: boolean;
+  className?: string;
+  onZoom?: () => void;
 }): JSX.Element {
   const {
     viewport,
@@ -523,7 +660,13 @@ function TailLogPanel({
     handleJumpToBottom,
     handleFollowingChange,
   } = useLogPanel(projectId, "tail");
-  const find = useLogFind(viewport.lines, "find-tail-log");
+  const findId = useId().replace(/:/g, "");
+  const find = useLogFind(
+    projectId,
+    "tail",
+    viewport.lines,
+    `find-tail-log-${findId}`,
+  );
   const [colorizeActive, toggleColorize] = useColorizeState(
     projectId,
     "tail",
@@ -542,9 +685,10 @@ function TailLogPanel({
           >
             Open full log
           </ActionLink>
+          {onZoom ? <LogZoomButton onClick={onZoom} /> : null}
         </div>
       }
-      className="tail-log-panel"
+      className={className}
       findBar={find.findBar}
     >
       <VirtualizedLogViewer
@@ -904,6 +1048,7 @@ export function ProjectDashboardContent({
   const [layout, setLayout] = useState<DashboardLayout>(() =>
     readStoredLayout(projectId),
   );
+  const [zoomLog, setZoomLog] = useState<ZoomLogConfig | null>(null);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const [isResizing, setIsResizing] = useState(false);
@@ -1134,8 +1279,30 @@ export function ProjectDashboardContent({
           openDisabled={!frontendRunning}
           suspendAutoFollow={isResizing}
           onOpen={() => void window.ivsDashboard.openLog(projectId, "frontend")}
+          onZoom={() =>
+            setZoomLog({
+              title: "Frontend",
+              channel: "frontend",
+              footer: "Open full log",
+              className: "frontend-panel log-zoom-panel",
+              serviceState: frontendStatus?.state,
+              openDisabled: !frontendRunning,
+            })
+          }
         />
-        <BuildLogPanel projectId={projectId} suspendAutoFollow={isResizing} />
+        <BuildLogPanel
+          projectId={projectId}
+          suspendAutoFollow={isResizing}
+          onZoom={() =>
+            setZoomLog({
+              title: "Build Log",
+              channel: "build",
+              footer: "Open build log",
+              className: "build-log-panel log-zoom-panel",
+              dense: true,
+            })
+          }
+        />
         <BuildStatusPanel projectId={projectId} projectState={projectState} />
         <LogPanel
           title="WildFly"
@@ -1149,8 +1316,32 @@ export function ProjectDashboardContent({
           openDisabled={!wildflyRunning}
           suspendAutoFollow={isResizing}
           onOpen={() => void window.ivsDashboard.openLog(projectId, "wildfly")}
+          onZoom={() =>
+            setZoomLog({
+              title: "WildFly",
+              channel: "wildfly",
+              footer: "Open full log",
+              className: "wildfly-panel log-zoom-panel",
+              serviceState: wildflyStatus?.state,
+              openDisabled: !wildflyRunning,
+              dense: true,
+              colorize: false,
+            })
+          }
         />
-        <TailLogPanel projectId={projectId} suspendAutoFollow={isResizing} />
+        <TailLogPanel
+          projectId={projectId}
+          suspendAutoFollow={isResizing}
+          onZoom={() =>
+            setZoomLog({
+              title: "Tail Log",
+              channel: "tail",
+              footer: "Open full log",
+              className: "tail-log-panel log-zoom-panel",
+              dense: true,
+            })
+          }
+        />
         <div
           className="grid-splitter column-splitter column-splitter-one"
           role="separator"
@@ -1182,6 +1373,44 @@ export function ProjectDashboardContent({
           onPointerCancel={stopResize}
         />
       </div>
+
+      <Modal
+        open={zoomLog !== null}
+        title={zoomLog?.title ?? "Log"}
+        subtitle="Expanded log view"
+        size="xl"
+        className="log-zoom-modal"
+        contentClassName="log-zoom-modal-content"
+        closeLabel="Close log view"
+        onClose={() => setZoomLog(null)}
+      >
+        {zoomLog?.channel === "build" ? (
+          <BuildLogPanel
+            projectId={projectId}
+            className="build-log-panel log-zoom-panel"
+          />
+        ) : zoomLog?.channel === "tail" ? (
+          <TailLogPanel
+            projectId={projectId}
+            className="tail-log-panel log-zoom-panel"
+          />
+        ) : zoomLog ? (
+          <LogPanel
+            title={zoomLog.title}
+            projectId={projectId}
+            channel={zoomLog.channel}
+            footer={zoomLog.footer}
+            className={zoomLog.className}
+            serviceState={zoomLog.serviceState}
+            openDisabled={zoomLog.openDisabled}
+            dense={zoomLog.dense}
+            colorize={zoomLog.colorize}
+            onOpen={() =>
+              void window.ivsDashboard.openLog(projectId, zoomLog.channel)
+            }
+          />
+        ) : null}
+      </Modal>
     </section>
   );
 }

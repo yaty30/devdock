@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ComponentProps,
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
@@ -26,13 +27,14 @@ function FieldRow({
   browse = false,
   onChange,
   onBrowse,
+  ...props
 }: {
   label: string;
   value: string;
   browse?: boolean;
   onChange: (value: string) => void;
   onBrowse?: () => void;
-}): JSX.Element {
+} & Omit<ComponentProps<"input">, "value" | "onChange">): JSX.Element {
   return (
     <label className="settings-field-row">
       <span>{label}</span>
@@ -40,6 +42,7 @@ function FieldRow({
         type="text"
         value={value}
         onChange={(event) => onChange(event.target.value)}
+        {...props}
       />
       {browse ? (
         <button type="button" onClick={onBrowse}>
@@ -230,6 +233,7 @@ export function SettingsContent({
   settings,
   onSettingsSaved,
   onProjectDeleted,
+  onProjectUpdated,
   onDirtyChange,
   onCancel,
 }: {
@@ -237,6 +241,7 @@ export function SettingsContent({
   settings: ProjectSettingsRecord;
   onSettingsSaved: (settings: ProjectSettingsRecord) => void;
   onProjectDeleted: () => void;
+  onProjectUpdated: (project: Project) => void;
   onDirtyChange: (dirty: boolean) => void;
   onCancel: () => void;
 }): JSX.Element {
@@ -246,6 +251,12 @@ export function SettingsContent({
     null,
   );
   const [draft, setDraft] = useState<ProjectSettingsRecord>(settings);
+  const [projectNameDraft, setProjectNameDraft] = useState(
+    selectedProject.name,
+  );
+  const [projectCodeDraft, setProjectCodeDraft] = useState(
+    selectedProject.code,
+  );
   const [saving, setSaving] = useState(false);
   const [validationBanner, setValidationBanner] = useState<{
     valid: boolean;
@@ -267,12 +278,24 @@ export function SettingsContent({
   onDirtyChangeRef.current = onDirtyChange;
 
   const isDirty = useMemo(
-    () => JSON.stringify(draft) !== JSON.stringify(settings),
-    [draft, settings],
+    () =>
+      JSON.stringify(draft) !== JSON.stringify(settings) ||
+      projectNameDraft !== selectedProject.name ||
+      projectCodeDraft !== selectedProject.code,
+    [draft, settings, projectNameDraft, projectCodeDraft, selectedProject],
   );
   const savedProfileIds = useMemo(
     () => new Set(settings.buildProfiles.map((profile) => profile.id)),
     [settings.buildProfiles],
+  );
+  const mavenConfigComplete = useMemo(
+    () =>
+      Boolean(
+        draft.maven.executable.trim() &&
+        draft.maven.settingsXml.trim() &&
+        draft.maven.pomXml.trim(),
+      ),
+    [draft.maven.executable, draft.maven.pomXml, draft.maven.settingsXml],
   );
 
   useEffect(() => {
@@ -330,10 +353,12 @@ export function SettingsContent({
     );
     profileDeleteTimersRef.current.clear();
     setDraft(settings);
+    setProjectNameDraft(selectedProject.name);
+    setProjectCodeDraft(selectedProject.code);
     setProfileFieldErrors({});
     setDeletingProfileIds(new Set());
     previousProfileCountRef.current = settings.buildProfiles.length;
-  }, [settings]);
+  }, [settings, selectedProject]);
 
   useEffect(() => {
     const currentProfileCount = draft.buildProfiles.length;
@@ -353,6 +378,17 @@ export function SettingsContent({
 
     return () => window.cancelAnimationFrame(animationFrame);
   }, [activeSettingsTab, draft.buildProfiles.length]);
+
+  useEffect(() => {
+    if (mavenConfigComplete || !draft.maven.skipTests) {
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      maven: { ...current.maven, skipTests: false },
+    }));
+  }, [draft.maven.skipTests, mavenConfigComplete]);
 
   function updateService(
     service: ServiceName,
@@ -489,28 +525,24 @@ export function SettingsContent({
     return classes.length > 0 ? classes.join(" ") : undefined;
   }
 
-  function validateSettingsDraft(): {
+  function normalizeDraft(): ProjectSettingsRecord {
+    return {
+      ...draft,
+      defaultBranch: draft.defaultBranch.trim() || "main",
+      remote: draft.remote.trim() || "origin",
+      maven: {
+        ...draft.maven,
+        skipTests: mavenConfigComplete ? draft.maven.skipTests : false,
+      },
+    };
+  }
+
+  function validateProfiles(): {
     errors: string[];
     profileErrors: BuildProfileFieldErrors;
   } {
     const errors: string[] = [];
     const profileErrors: BuildProfileFieldErrors = {};
-    if (!draft.maven.executable.trim())
-      errors.push("Maven: executable path is required");
-    if (!draft.maven.pomXml.trim())
-      errors.push("Maven: pom.xml path is required");
-    if (!draft.services.frontend.workingDirectory.trim())
-      errors.push("Frontend: working directory is required");
-    if (!draft.services.frontend.command.trim())
-      errors.push("Frontend: start command is required");
-    if (!draft.services.frontend.healthUrl.trim())
-      errors.push("Frontend: health URL is required");
-    if (!draft.services.wildfly.workingDirectory.trim())
-      errors.push("WildFly: bin directory is required");
-    if (!draft.services.wildfly.command.trim())
-      errors.push("WildFly: start command is required");
-    if (!draft.services.wildfly.healthUrl.trim())
-      errors.push("WildFly: health URL is required");
 
     const seenNames = new Set<string>();
     const duplicateNames = new Set<string>();
@@ -568,33 +600,106 @@ export function SettingsContent({
     return { errors, profileErrors };
   }
 
-  function save(): void {
-    const { errors, profileErrors } = validateSettingsDraft();
+  async function validateAll(showResult: boolean): Promise<{
+    valid: boolean;
+    errors: string[];
+    profileErrors: BuildProfileFieldErrors;
+    settings: ProjectSettingsRecord;
+    name: string;
+    code: string;
+  }> {
+    const trimmedName = projectNameDraft.trim();
+    const trimmedCode = projectCodeDraft.trim().toUpperCase();
+    const normalizedSettings = normalizeDraft();
+    const { errors: profileErrorsList, profileErrors } = validateProfiles();
     setProfileFieldErrors(profileErrors);
-    if (errors.length > 0) {
-      showBanner({ valid: false, errors });
+    let backendErrors: string[] = [];
+
+    try {
+      backendErrors = await window.ivsDashboard.validateProjectSettings(
+        selectedProject.id,
+        trimmedName,
+        trimmedCode,
+        normalizedSettings,
+      );
+    } catch (error) {
+      backendErrors = [
+        error instanceof Error ? error.message : "Validation failed",
+      ];
+    }
+
+    const errors = [...backendErrors, ...profileErrorsList];
+    if (showResult) {
+      showBanner({ valid: errors.length === 0, errors });
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+      profileErrors,
+      settings: normalizedSettings,
+      name: trimmedName,
+      code: trimmedCode,
+    };
+  }
+
+  async function save(): Promise<void> {
+    const validation = await validateAll(false);
+    if (!validation.valid) {
+      showBanner({ valid: false, errors: validation.errors });
       return;
     }
 
+    const {
+      settings: normalizedSettings,
+      name: trimmedName,
+      code: trimmedCode,
+    } = validation;
+
     setSaving(true);
-    window.ivsDashboard
-      .saveProjectSettings(selectedProject.id, draft)
-      .then((saved) => {
-        onSettingsSaved(saved);
+    const settingsSave = window.ivsDashboard.saveProjectSettings(
+      selectedProject.id,
+      normalizedSettings,
+    );
+    const nameChanged =
+      trimmedName !== selectedProject.name ||
+      trimmedCode !== selectedProject.code;
+    const projectSave = nameChanged
+      ? window.ivsDashboard.updateProject(
+          selectedProject.id,
+          trimmedName,
+          trimmedCode,
+        )
+      : Promise.resolve(null);
+
+    Promise.all([settingsSave, projectSave])
+      .then(([saved, updatedProject]) => {
+        setSaving(false);
+        setDraft(saved);
+        if (updatedProject) {
+          onProjectUpdated(updatedProject);
+        }
         showBanner({ valid: true, errors: [], message: "Settings saved." });
+        onSettingsSaved(saved);
       })
-      .catch((error) => console.error(error))
-      .finally(() => setSaving(false));
+      .catch((error) => {
+        console.error(error);
+        setSaving(false);
+        showBanner({
+          valid: false,
+          errors: [error instanceof Error ? error.message : "Save failed"],
+        });
+      });
   }
 
   function validateDraft(): void {
-    const { errors, profileErrors } = validateSettingsDraft();
-    setProfileFieldErrors(profileErrors);
-    showBanner({ valid: errors.length === 0, errors });
+    void validateAll(true);
   }
 
   function cancel(): void {
     setDraft(settings);
+    setProjectNameDraft(selectedProject.name);
+    setProjectCodeDraft(selectedProject.code);
     setProfileFieldErrors({});
     onDirtyChangeRef.current(false);
     onCancel();
@@ -677,8 +782,10 @@ export function SettingsContent({
           <div className="settings-grid">
             <Panel title="Current Project" className="settings-summary-panel">
               <div className="settings-summary">
-                <span>Project</span>
+                <span>Name</span>
                 <strong>{selectedProject.name}</strong>
+                <span>Tag</span>
+                <strong>{selectedProject.code}</strong>
                 <span>Project ID</span>
                 <strong>{selectedProject.id}</strong>
                 <span>Runtime</span>
@@ -710,7 +817,19 @@ export function SettingsContent({
                 </div>
               </div>
             </Panel>
-            <Panel title="Project Paths" className="settings-form-panel">
+            <Panel title="Project" className="settings-form-panel">
+              <FieldRow
+                label="Project name"
+                value={projectNameDraft}
+                onChange={(value) => setProjectNameDraft(value)}
+                maxLength={20}
+              />
+              <FieldRow
+                label="Project tag"
+                value={projectCodeDraft}
+                onChange={(value) => setProjectCodeDraft(value.toUpperCase())}
+                maxLength={3}
+              />
               <FieldRow
                 label="Application Log File"
                 value={draft.appLogFile}
@@ -726,28 +845,6 @@ export function SettingsContent({
                       setDraft((current) => ({
                         ...current,
                         appLogFile: value,
-                      })),
-                  )
-                }
-              />
-              <FieldRow
-                label="Git Project Directory"
-                value={draft.gitProjectDirectory}
-                browse
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    gitProjectDirectory: value,
-                  }))
-                }
-                onBrowse={() =>
-                  browseDirectory(
-                    "Select Git project directory",
-                    draft.gitProjectDirectory,
-                    (value) =>
-                      setDraft((current) => ({
-                        ...current,
-                        gitProjectDirectory: value,
                       })),
                   )
                 }
@@ -971,7 +1068,8 @@ export function SettingsContent({
                 <span className="skip-tests-control">
                   <input
                     type="checkbox"
-                    checked={draft.maven.skipTests}
+                    checked={mavenConfigComplete && draft.maven.skipTests}
+                    disabled={!mavenConfigComplete}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,

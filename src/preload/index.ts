@@ -27,7 +27,8 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:serviceAction", projectId, service, action),
   runBuild: (projectId, profileId) =>
     ipcRenderer.invoke("dashboard:runBuild", projectId, profileId),
-  stopBuild: (projectId) => ipcRenderer.invoke("dashboard:stopBuild", projectId),
+  stopBuild: (projectId) =>
+    ipcRenderer.invoke("dashboard:stopBuild", projectId),
   getBuilds: (projectId: string, options?: BuildQueryOptions) =>
     ipcRenderer.invoke("dashboard:getBuilds", projectId, options),
   refreshStatus: (projectId) =>
@@ -43,6 +44,18 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:openLog", projectId, channel),
   deleteProject: (projectId) =>
     ipcRenderer.invoke("dashboard:deleteProject", projectId),
+  createProject: (name, code) =>
+    ipcRenderer.invoke("dashboard:createProject", name, code),
+  updateProject: (projectId, name, code) =>
+    ipcRenderer.invoke("dashboard:updateProject", projectId, name, code),
+  validateProjectSettings: (projectId, name, code, settings) =>
+    ipcRenderer.invoke(
+      "dashboard:validateProjectSettings",
+      projectId,
+      name,
+      code,
+      settings,
+    ),
   getLogLatest: (projectId: string, channel: LogChannel, limit?: number) =>
     ipcRenderer.invoke("logs:get-latest", projectId, channel, limit),
   getLogBefore: (
@@ -52,6 +65,14 @@ const api: DashboardApi = {
     limit?: number,
   ) =>
     ipcRenderer.invoke("logs:get-before", projectId, channel, beforeSeq, limit),
+  getLogAround: (
+    projectId: string,
+    channel: LogChannel,
+    seq: number,
+    limit?: number,
+  ) => ipcRenderer.invoke("logs:get-around", projectId, channel, seq, limit),
+  searchLog: (projectId: string, channel: LogChannel, term: string) =>
+    ipcRenderer.invoke("logs:search", projectId, channel, term),
   onEvent: (listener: (event: DashboardEvent) => void) => {
     const handler = (
       _event: Electron.IpcRendererEvent,

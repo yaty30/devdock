@@ -248,6 +248,28 @@ export function prependHistorical(
   notify(k);
 }
 
+export function replaceWithHistoricalWindow(
+  projectId: string,
+  channel: LogChannel,
+  result: LogQueryResult,
+): void {
+  const k = makeKey(projectId, channel);
+  const seqSet = new Set<number>();
+  for (const line of result.lines) seqSet.add(line.seq);
+  loadedSeqs.set(k, seqSet);
+
+  viewports.set(k, {
+    lines: [...result.lines],
+    oldestLoadedSeq: result.oldestSeq,
+    newestLoadedSeq: result.newestSeq,
+    isFollowing: false,
+    isLoadingOlder: false,
+    hasMoreOlder: result.hasMoreOlder,
+    unseenNewLineCount: 0,
+  });
+  notify(k);
+}
+
 /** Mark a historical fetch as in-flight to prevent duplicate requests. */
 export function setLoadingOlder(
   projectId: string,

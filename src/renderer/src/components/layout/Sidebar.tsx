@@ -104,11 +104,23 @@ export function Sidebar({
             <Plus className="add-project-icon" size={16} />
             <span>Add Project</span>
           </button>
+
+        {collapsed ? (
+          <button
+            className="nav-item add-project-collapsed-btn"
+            type="button"
+            onClick={onAddProject}
+            aria-label="Add project"
+            title="Add project"
+          >
+            <Plus size={18} style={{color: "var(--accent)"}} />
+          </button>
+        ) : null}
         </div>
       </nav>
 
       <div className="sidebar-footer">
-        {!collapsed ? <span className="sidebar-version">v0.5.0</span> : null}
+        {!collapsed ? <span className="sidebar-version">v0.6.0</span> : null}
         <button
           className="theme-toggle sidebar-icon-button"
           type="button"

@@ -126,6 +126,33 @@ function registerIpc(): void {
     ),
   );
   ipcMain.handle(
+    "dashboard:createProject",
+    (_event, name: string, code: string) =>
+      withLoggedErrors("dashboard:createProject", () =>
+        getBackend().createProject(name, code),
+      ),
+  );
+  ipcMain.handle(
+    "dashboard:updateProject",
+    (_event, projectId: string, name: string, code: string) =>
+      withLoggedErrors("dashboard:updateProject", () =>
+        getBackend().updateProject(projectId, name, code),
+      ),
+  );
+  ipcMain.handle(
+    "dashboard:validateProjectSettings",
+    (
+      _event,
+      projectId: string,
+      name: string,
+      code: string,
+      settings: ProjectSettingsRecord,
+    ) =>
+      withLoggedErrors("dashboard:validateProjectSettings", () =>
+        getBackend().validateProjectSettings(projectId, name, code, settings),
+      ),
+  );
+  ipcMain.handle(
     "logs:get-latest",
     (_event, projectId: string, channel: LogChannel, limit?: number) =>
       withLoggedErrors("logs:get-latest", () =>
@@ -143,6 +170,26 @@ function registerIpc(): void {
     ) =>
       withLoggedErrors("logs:get-before", () =>
         getBackend().getLogBefore(projectId, channel, beforeSeq, limit),
+      ),
+  );
+  ipcMain.handle(
+    "logs:get-around",
+    (
+      _event,
+      projectId: string,
+      channel: LogChannel,
+      seq: number,
+      limit?: number,
+    ) =>
+      withLoggedErrors("logs:get-around", () =>
+        getBackend().getLogAround(projectId, channel, seq, limit),
+      ),
+  );
+  ipcMain.handle(
+    "logs:search",
+    (_event, projectId: string, channel: LogChannel, term: string) =>
+      withLoggedErrors("logs:search", () =>
+        getBackend().searchLog(projectId, channel, term),
       ),
   );
 }
