@@ -1,6 +1,6 @@
 {
   "name": "ivs-dashboard-electron",
-  "version": "0.6.0",
+  "version": "0.6.3",
   "description": "Static Electron React TypeScript prototype for an IVS Dashboard.",
   "main": "build/main/index.js",
   "productName": "IVS Dashboard",
@@ -18,10 +18,8 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.24",
-    "@vitejs/plugin-react": "^5.0.4",
     "better-sqlite3": "^12.9.0",
     "electron-squirrel-startup": "^1.0.1",
-    "electron-vite": "^4.0.0",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -35,11 +33,14 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron/fuses": "^1.8.0",
+    "@types/electron-squirrel-startup": "^1.0.2",
     "@types/node": "^22.10.2",
     "@types/react": "^18.3.17",
     "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^5.0.4",
     "electron": "^33.2.1",
     "electron-rebuild": "^3.2.9",
+    "electron-vite": "^4.0.0",
     "prettier": "^3.8.3",
     "typescript": "^5.7.2",
     "vite": "^6.0.3"

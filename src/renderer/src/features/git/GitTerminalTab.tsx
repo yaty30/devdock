@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { Copy, Search } from "lucide-react";
-import { quickGitCommands } from "../../data/mockData";
 import type { GitStatusRecord } from "../../types";
 
 type GitCommandHistoryItem = {
@@ -17,6 +16,14 @@ type GitCommandHistoryRow =
 
 const GIT_HISTORY_PAGE_SIZE = 30;
 const GIT_HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const quickGitCommands = [
+  "status",
+  "branch",
+  "log --oneline",
+  "fetch",
+  "pull",
+  "diff",
+];
 
 export function GitTerminalTab({
   projectId,

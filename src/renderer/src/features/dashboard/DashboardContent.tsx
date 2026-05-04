@@ -1376,8 +1376,8 @@ export function ProjectDashboardContent({
 
       <Modal
         open={zoomLog !== null}
-        title={zoomLog?.title ?? "Log"}
-        subtitle="Expanded log view"
+        title={zoomLog?.title ?? ""}
+        subtitle={zoomLog !== null ? `Project: ${projectId}` : undefined}
         size="xl"
         className="log-zoom-modal"
         contentClassName="log-zoom-modal-content"

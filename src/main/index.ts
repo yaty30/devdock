@@ -1,3 +1,4 @@
+import started from "electron-squirrel-startup";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import type { OpenDialogOptions } from "electron";
 import { join } from "node:path";
@@ -10,6 +11,11 @@ import type {
   BrowsePathOptions,
   LogChannel,
 } from "../shared/dashboardTypes";
+
+if (started) {
+  app.quit();
+  process.exit(0);
+}
 
 let backend: DashboardBackend | null = null;
 let mainWindow: BrowserWindow | null = null;

@@ -10,12 +10,14 @@ import {
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
 import type {
   BuildProfileRecord,
+  FontSizeMode,
   GitStatusRecord,
   ProjectSettingsRecord,
   RecentBuildRecord,
   ServiceName,
   ServiceStatusRecord,
 } from "../../types";
+import { RUNNING_SERVER_LIMIT_MESSAGE } from "../../../../shared/appLimits";
 
 export function HeaderActions({
   projectId,
@@ -23,7 +25,10 @@ export function HeaderActions({
   statuses,
   recentBuilds,
   gitStatus,
+  fontSizeMode,
+  onFontSizeChange,
   onSettingsClick,
+  onServiceWarning,
   disabled = false,
 }: {
   projectId: string;
@@ -31,7 +36,10 @@ export function HeaderActions({
   statuses: ServiceStatusRecord[];
   recentBuilds: RecentBuildRecord[];
   gitStatus: GitStatusRecord;
+  fontSizeMode: FontSizeMode;
+  onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
+  onServiceWarning: (message: string) => void;
   disabled?: boolean;
 }): JSX.Element {
   return (
@@ -39,6 +47,7 @@ export function HeaderActions({
       <ServiceControlGroup
         projectId={projectId}
         statuses={statuses}
+        onServiceWarning={onServiceWarning}
         disabled={disabled}
       />
       <BuildActionsDropdown
@@ -47,6 +56,11 @@ export function HeaderActions({
         statuses={statuses}
         recentBuilds={recentBuilds}
         gitStatus={gitStatus}
+        disabled={disabled}
+      />
+      <FontSizeDropdown
+        value={fontSizeMode}
+        onChange={onFontSizeChange}
         disabled={disabled}
       />
       <button
@@ -60,6 +74,123 @@ export function HeaderActions({
         <Settings size={18} />
       </button>
     </div>
+  );
+}
+
+const FONT_SIZE_OPTIONS: Array<{ value: FontSizeMode; label: string }> = [
+  { value: "large", label: "Large" },
+  { value: "regular", label: "Regular" },
+  { value: "small", label: "Small" },
+];
+
+function FontSizeDropdown({
+  value,
+  onChange,
+  disabled = false,
+}: {
+  value: FontSizeMode;
+  onChange: (mode: FontSizeMode) => void;
+  disabled?: boolean;
+}): JSX.Element {
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [openMode, setOpenMode] = useState<"hover" | "click" | null>(null);
+  const open = openMode !== null;
+
+  useEffect(() => {
+    if (openMode !== "click") {
+      return undefined;
+    }
+
+    function closeOnOutsideClick(event: MouseEvent): void {
+      if (!dropdownRef.current?.contains(event.target as Node)) {
+        setOpenMode(null);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [openMode]);
+
+  useEffect(() => {
+    if (disabled) {
+      setOpenMode(null);
+    }
+  }, [disabled]);
+
+  return (
+    <div
+      className="build-dropdown font-size-dropdown"
+      ref={dropdownRef}
+      onMouseEnter={() => {
+        if (!disabled && openMode !== "click") {
+          setOpenMode("hover");
+        }
+      }}
+      onMouseLeave={() => {
+        if (openMode === "hover") {
+          setOpenMode(null);
+        }
+      }}
+    >
+      <button
+        className={`icon-button secondary header-settings-button font-size-dropdown-trigger${
+          open ? " open" : ""
+        }`}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Font size"
+        title="Font size"
+        disabled={disabled}
+        onClick={() =>
+          setOpenMode((current) => (current === "click" ? null : "click"))
+        }
+      >
+        <FontSizeIcon />
+      </button>
+
+      <div
+        className={`build-dropdown-popover${open ? " open" : ""}`}
+        aria-hidden={!open}
+      >
+        <div className="build-dropdown-menu" role="menu">
+          {FONT_SIZE_OPTIONS.map((option) => (
+            <button
+              className={value === option.value ? "active" : undefined}
+              type="button"
+              role="menuitemradio"
+              aria-checked={value === option.value}
+              key={option.value}
+              onClick={() => {
+                onChange(option.value);
+                setOpenMode(null);
+              }}
+            >
+              <span className={`font-size-option-swatch ${option.value}`}>
+                A
+              </span>
+              <span>{option.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FontSizeIcon(): JSX.Element {
+  return (
+    <svg
+      focusable="false"
+      aria-hidden="true"
+      viewBox="0 0 24 24"
+      width="19"
+      height="19"
+      fill="currentColor"
+    >
+      <path d="M9.93 13.5h4.14L12 7.98zM20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2m-4.29 15.88-.9-2.38H9.17l-.89 2.37c-.14.38-.5.63-.91.63-.68 0-1.15-.69-.9-1.32l4.25-10.81c.22-.53.72-.87 1.28-.87s1.06.34 1.27.87l4.25 10.81c.25.63-.22 1.32-.9 1.32-.4 0-.76-.25-.91-.62" />
+    </svg>
   );
 }
 
@@ -350,10 +481,12 @@ function gitChangeLines(gitStatus: GitStatusRecord): string[] {
 function ServiceControlGroup({
   projectId,
   statuses,
+  onServiceWarning,
   disabled = false,
 }: {
   projectId: string;
   statuses: ServiceStatusRecord[];
+  onServiceWarning: (message: string) => void;
   disabled?: boolean;
 }): JSX.Element {
   const [busyService, setBusyService] = useState<ServiceName | null>(null);
@@ -372,6 +505,11 @@ function ServiceControlGroup({
     setBusyAction(action);
     window.ivsDashboard
       .serviceAction(projectId, service, action)
+      .then((status) => {
+        if (status.message === RUNNING_SERVER_LIMIT_MESSAGE) {
+          onServiceWarning(status.message);
+        }
+      })
       .catch((error) => console.error(error))
       .finally(() => {
         setBusyService(null);

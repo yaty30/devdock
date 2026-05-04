@@ -16,10 +16,12 @@ import { SettingsContent } from "./features/settings/SettingsContent";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import closeMouthLogo from "./assets/close-mouth-logo.png";
 import openMouthLogo from "./assets/open-mouth-logo.png";
+import { MAX_PROJECTS } from "../../shared/appLimits";
 import type {
   AppSection,
   DashboardTab,
   DashboardEvent,
+  FontSizeMode,
   Project,
   ProjectDashboardSummary,
   ProjectRuntimeState,
@@ -55,6 +57,9 @@ function App(): JSX.Element {
     string | null
   >(null);
   const [theme, setTheme] = useState<Theme>(() => readStoredTheme());
+  const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>(() =>
+    readStoredFontSizeMode(),
+  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -97,6 +102,9 @@ function App(): JSX.Element {
         snapshot.projects[0] ??
         null;
       setSelectedProject(active);
+      if (active === null) {
+        setProjectLoading(false);
+      }
       setInitialStateLoaded(true);
     }
 
@@ -114,6 +122,10 @@ function App(): JSX.Element {
   useEffect(() => {
     window.localStorage.setItem("ivs-dashboard-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem("ivs-dashboard-font-size", fontSizeMode);
+  }, [fontSizeMode]);
 
   useEffect(() => {
     if (!selectedProject) {
@@ -336,6 +348,18 @@ function App(): JSX.Element {
     }, 3600);
   }
 
+  function openAddProjectDialog(): void {
+    if (projects.length >= MAX_PROJECTS) {
+      showSnackbar(
+        `Project limit reached. You can create up to ${MAX_PROJECTS} projects.`,
+        "invalid",
+      );
+      return;
+    }
+
+    setAddProjectOpen(true);
+  }
+
   async function handleCreateProject(
     name: string,
     code: string,
@@ -358,6 +382,14 @@ function App(): JSX.Element {
 
     if (errors.length > 0) {
       showSnackbar(errors.join(". "), "invalid");
+      return false;
+    }
+
+    if (projects.length >= MAX_PROJECTS) {
+      showSnackbar(
+        `Project limit reached. You can create up to ${MAX_PROJECTS} projects.`,
+        "invalid",
+      );
       return false;
     }
 
@@ -429,9 +461,13 @@ function App(): JSX.Element {
       </div>
     ) : null;
 
-  if (!selectedProject) {
+  if (!selectedProject && !initialStateLoaded) {
     return (
-      <div className="app-shell" data-theme={theme}>
+      <div
+        className="app-shell"
+        data-theme={theme}
+        data-font-size={fontSizeMode}
+      >
         <main className="main-content project-loading">
           <header className="main-header">
             <div>
@@ -445,10 +481,66 @@ function App(): JSX.Element {
     );
   }
 
+  if (!selectedProject) {
+    return (
+      <div
+        className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+        data-theme={theme}
+        data-font-size={fontSizeMode}
+      >
+        <Sidebar
+          projects={projects}
+          selectedProjectId=""
+          activeSection="dashboard"
+          theme={theme}
+          collapsed={sidebarCollapsed}
+          onProjectChange={switchProject}
+          onSectionChange={() => setActiveSection("dashboard")}
+          onAddProject={openAddProjectDialog}
+          onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
+          onThemeToggle={() =>
+            setTheme((current) => (current === "light" ? "dark" : "light"))
+          }
+        />
+        <main className="main-content">
+          <header className="main-header">
+            <div>
+              <h1>Overview</h1>
+              <p>All project server status and last build results.</p>
+            </div>
+          </header>
+
+          <DashboardContent
+            projects={dashboardOverview}
+            loading={dashboardOverviewLoading}
+          />
+        </main>
+        {snackbar ? (
+          <div
+            className={`app-snackbar ${snackbar.tone}${
+              snackbarClosing ? " closing" : ""
+            }`}
+            role="status"
+          >
+            {snackbar.message}
+          </div>
+        ) : null}
+        {addProjectOpen ? (
+          <AddProjectDialog
+            onCreate={handleCreateProject}
+            onClose={() => setAddProjectOpen(false)}
+          />
+        ) : null}
+        {splashOverlay}
+      </div>
+    );
+  }
+
   return (
     <div
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
       data-theme={theme}
+      data-font-size={fontSizeMode}
     >
       <Sidebar
         projects={projects}
@@ -458,7 +550,7 @@ function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onProjectChange={switchProject}
         onSectionChange={handleSectionChange}
-        onAddProject={() => setAddProjectOpen(true)}
+        onAddProject={openAddProjectDialog}
         onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
         onThemeToggle={() =>
           setTheme((current) => (current === "light" ? "dark" : "light"))
@@ -485,7 +577,10 @@ function App(): JSX.Element {
                 statuses={activeProjectState.statuses}
                 recentBuilds={activeProjectState.recentBuilds}
                 gitStatus={activeProjectState.gitStatus}
+                fontSizeMode={fontSizeMode}
+                onFontSizeChange={setFontSizeMode}
                 onSettingsClick={() => setSettingsOpen(true)}
+                onServiceWarning={(message) => showSnackbar(message, "invalid")}
               />
             ) : null
           ) : null}
@@ -542,6 +637,7 @@ function App(): JSX.Element {
       >
         {activeProjectState ? (
           <SettingsContent
+            key={selectedProject.id}
             selectedProject={selectedProject}
             settings={activeProjectState.settings}
             onSettingsSaved={(settings) => {
@@ -745,4 +841,9 @@ export default App;
 function readStoredTheme(): Theme {
   const stored = window.localStorage.getItem("ivs-dashboard-theme");
   return stored === "dark" ? "dark" : "light";
+}
+
+function readStoredFontSizeMode(): FontSizeMode {
+  const stored = window.localStorage.getItem("ivs-dashboard-font-size");
+  return stored === "large" || stored === "small" ? stored : "regular";
 }

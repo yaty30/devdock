@@ -17,7 +17,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { userInfo } from "node:os";
@@ -47,6 +47,11 @@ import type {
   ServiceStatusRecord,
   ShutdownEntry,
 } from "../shared/dashboardTypes";
+import {
+  MAX_PROJECTS,
+  MAX_RUNNING_SERVICES,
+  RUNNING_SERVER_LIMIT_MESSAGE,
+} from "../shared/appLimits";
 
 type ServiceProcess = {
   child: ChildProcessWithoutNullStreams;
@@ -144,7 +149,6 @@ export class DashboardBackend {
     this.db.pragma("journal_mode = WAL");
     this.initializeSchema();
     this.markInterruptedBuilds();
-    this.seedDefaults();
   }
 
   getSnapshot(): DashboardSnapshot {
@@ -305,6 +309,15 @@ export class DashboardBackend {
     const errors = validateProjectIdentity(trimmedName, trimmedCode);
     if (errors.length > 0) {
       throw new Error(errors.join("\n"));
+    }
+
+    const projectCount = this.db
+      .prepare("SELECT COUNT(*) AS count FROM projects")
+      .get() as { count: number };
+    if (projectCount.count >= MAX_PROJECTS) {
+      throw new Error(
+        `Project limit reached. You can create up to ${MAX_PROJECTS} projects.`,
+      );
     }
 
     const id = this.nextProjectId(trimmedName, trimmedCode);
@@ -900,110 +913,34 @@ export class DashboardBackend {
     return id;
   }
 
-  private seedDefaults(): void {
-    const count = this.db
-      .prepare("SELECT COUNT(*) AS count FROM projects")
-      .get() as { count: number };
-    if (count.count > 0) {
-      return;
-    }
-
-    const now = new Date().toISOString();
-    const projects: ProjectRecord[] = [
-      { id: "iap", name: "Project IAP", code: "IAP" },
-      { id: "ivs-core", name: "Project IVS Core", code: "IVS" },
-    ];
-
-    for (const project of projects) {
-      this.db
-        .prepare(
-          "INSERT INTO projects (id, name, code, created_at) VALUES (?, ?, ?, ?)",
-        )
-        .run(project.id, project.name, project.code, now);
-      this.saveProjectSettings(project.id, this.defaultSettings(project.id));
-    }
-  }
-
-  private defaultSettings(projectId: string): ProjectSettingsRecord {
-    const stockNewsFrontend =
-      "C:\\Users\\user\\Documents\\Codes\\stock-news\\stock-news-vite";
-    const dummyRoot = resolve(this.repoRoot, "dummy");
-    const wildflyReal = join(dummyRoot, "wildfly-real");
-    const dummyWarPom = join(dummyRoot, "java-war", "pom.xml");
-    const dummyMavenSettings = join(dummyRoot, "maven", "settings.xml");
-    const localMaven = join(
-      this.repoRoot,
-      "tools",
-      "apache-maven-3.9.15",
-      "bin",
-      "mvn.cmd",
-    );
-    const wildflyCommand =
-      process.platform === "win32"
-        ? "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\start.ps1"
-        : "pwsh -NoProfile -File ./scripts/start.ps1";
-
+  private defaultSettings(_projectId: string): ProjectSettingsRecord {
     return {
       appLogFile: "",
-      gitProjectDirectory: this.repoRoot,
-      defaultBranch: "main",
-      remote: "origin",
+      gitProjectDirectory: "",
+      defaultBranch: "",
+      remote: "",
       services: {
         frontend: {
-          workingDirectory: existsSync(stockNewsFrontend)
-            ? stockNewsFrontend
-            : join(dummyRoot, "frontend"),
-          command: "npm run dev -- --host 127.0.0.1 --port 5174",
-          healthUrl: "http://127.0.0.1:5174/",
-          appUrl: "http://127.0.0.1:5174/",
+          workingDirectory: "",
+          command: "",
+          healthUrl: "",
+          appUrl: "",
         },
         wildfly: {
-          workingDirectory: wildflyReal,
-          command: wildflyCommand,
-          healthUrl:
-            "http://127.0.0.1:9990/management?operation=attribute&name=server-state",
-          appUrl: "http://127.0.0.1:8080/",
-          managementUrl: "http://127.0.0.1:9990/console",
+          workingDirectory: "",
+          command: "",
+          healthUrl: "",
+          appUrl: "",
+          managementUrl: "",
         },
       },
       maven: {
-        executable: existsSync(localMaven)
-          ? localMaven
-          : "D:\\bd-rvdwp-tools\\apache-maven-3.9.8-bin\\apache-maven-3.9.8\\bin\\mvn.cmd",
-        settingsXml: existsSync(dummyMavenSettings)
-          ? dummyMavenSettings
-          : "D:\\Users\\yipsy1\\Desktop\\Projects\\setting xml\\settings-iap.xml",
-        pomXml: existsSync(dummyWarPom)
-          ? dummyWarPom
-          : "D:\\Users\\yipsy1\\Desktop\\IVS\\IAP\\rvdiap\\pom.xml",
-        skipTests: true,
+        executable: "",
+        settingsXml: "",
+        pomXml: "",
+        skipTests: false,
       },
-      buildProfiles: [
-        {
-          id: "local",
-          buttonName: "Local",
-          profileName: "local",
-          goals: "clean install",
-          confirm: false,
-          outcomeType: "build-only",
-        },
-        {
-          id: "sit",
-          buttonName: "SIT",
-          profileName: "sit",
-          goals: "clean package",
-          confirm: false,
-          outcomeType: "build-and-deploy",
-        },
-        {
-          id: "prod",
-          buttonName: "Production",
-          profileName: "prod",
-          goals: "clean package",
-          confirm: true,
-          outcomeType: "build-and-deploy",
-        },
-      ],
+      buildProfiles: [],
     };
   }
 
@@ -1056,6 +993,21 @@ export class DashboardBackend {
         "Already running",
       );
       this.upsertStatus(projectId, status);
+      return status;
+    }
+
+    const runningServiceCount = [...this.serviceProcesses.values()].filter(
+      (processState) => processState.child.exitCode === null,
+    ).length;
+    if (runningServiceCount >= MAX_RUNNING_SERVICES) {
+      const status = this.statusRecord(
+        service,
+        "error",
+        RUNNING_SERVER_LIMIT_MESSAGE,
+        config.healthUrl,
+      );
+      this.upsertStatus(projectId, status);
+      this.appendLog(projectId, service, stamp(RUNNING_SERVER_LIMIT_MESSAGE));
       return status;
     }
 

@@ -39,6 +39,12 @@
   --control-lg: 40px;
   --space-panel: 16px;
   --space-section: 16px;
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 13px;
+  --font-lg: 14px;
+  --font-xl: 16px;
+  --font-title: 27px;
 }
 
 [data-theme="dark"] {
@@ -256,9 +262,38 @@ body {
   width: 100vw;
   height: 100dvh;
   padding: 8px;
+  font-size: var(--font-md);
   overflow: hidden;
   background: var(--app-bg);
   transition: grid-template-columns 180ms ease;
+}
+
+.app-shell[data-font-size="large"] {
+  --control-sm: 35px;
+  --control-md: 41px;
+  --control-lg: 48px;
+  --space-panel: 20px;
+  --space-section: 20px;
+  --font-xs: 13px;
+  --font-sm: 14px;
+  --font-md: 15px;
+  --font-lg: 17px;
+  --font-xl: 19px;
+  --font-title: 32px;
+}
+
+.app-shell[data-font-size="small"] {
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 38px;
+  --space-panel: 14px;
+  --space-section: 14px;
+  --font-xs: 10.5px;
+  --font-sm: 11.5px;
+  --font-md: 12px;
+  --font-lg: 13px;
+  --font-xl: 15px;
+  --font-title: 25px;
 }
 
 .app-shell.sidebar-collapsed {
@@ -437,6 +472,27 @@ body {
   transform: rotate(180deg);
 }
 
+.project-nav-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.project-count-badge {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 6px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  background: var(--accent-soft);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
 .project-list {
   display: grid;
   gap: 3px;
@@ -455,7 +511,7 @@ body {
 }
 
 .project-list.open {
-  max-height: 140px;
+  max-height: 394px;
   margin-bottom: 6px;
   opacity: 1;
   pointer-events: auto;
@@ -603,7 +659,7 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 20px 24px 22px;
+  padding: 20px 20px 22px 16px;
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -622,7 +678,7 @@ body {
 
 .main-header h1 {
   margin: 0 0 7px;
-  font-size: 27px;
+  font-size: var(--font-title);
   line-height: 1.08;
   letter-spacing: 0;
 }
@@ -630,7 +686,7 @@ body {
 .main-header p {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--font-lg);
 }
 
 .header-actions {
@@ -789,16 +845,54 @@ body {
   background: var(--accent-soft);
 }
 
+.build-dropdown-menu button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.font-size-dropdown {
+  --build-dropdown-width: 144px;
+}
+
+.font-size-dropdown-trigger {
+  min-width: 42px;
+}
+
+.font-size-option-swatch {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  font-weight: 850;
+  line-height: 1;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+
+.font-size-option-swatch.large {
+  font-size: 15px;
+}
+
+.font-size-option-swatch.regular {
+  font-size: 13px;
+}
+
+.font-size-option-swatch.small {
+  font-size: 11px;
+}
+
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 9px;
   min-width: 136px;
-  height: 42px;
+  height: calc(var(--control-lg) + 2px);
   padding: 0 16px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 650;
   white-space: nowrap;
   box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
@@ -2243,7 +2337,7 @@ body {
   justify-content: center;
   gap: 8px;
   min-height: 132px;
-  padding: 10px;
+  padding: 10px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -3700,6 +3794,8 @@ select option {
 
 .settings-body {
   min-height: 0;
+  padding: 4px 12px 14px 4px;
+  margin: -4px -12px -14px -4px;
   overflow: auto;
 }
 
@@ -4130,6 +4226,91 @@ select option {
   border-color: #dc262600;
 }
 
+.app-shell[data-font-size] .nav-item,
+.app-shell[data-font-size] .project-item,
+.app-shell[data-font-size] .button,
+.app-shell[data-font-size] .build-dropdown-menu button,
+.app-shell[data-font-size] .tab,
+.app-shell[data-font-size] .service-control-card span,
+.app-shell[data-font-size] .settings-tab,
+.app-shell[data-font-size] .settings-summary,
+.app-shell[data-font-size] .settings-field-row,
+.app-shell[data-font-size] .skip-tests-row,
+.app-shell[data-font-size] .auto-start-checks,
+.app-shell[data-font-size] .settings-inline-input,
+.app-shell[data-font-size] .custom-select-trigger,
+.app-shell[data-font-size] .custom-select-option,
+.app-shell[data-font-size] .monitor-card-rows,
+.app-shell[data-font-size] .dashboard-status-grid,
+.app-shell[data-font-size] .git-command-input {
+  font-size: var(--font-md);
+}
+
+.app-shell[data-font-size] .sidebar-version,
+.app-shell[data-font-size] .project-code,
+.app-shell[data-font-size] .project-count-badge,
+.app-shell[data-font-size] .build-running-profile,
+.app-shell[data-font-size] .button.compact,
+.app-shell[data-font-size] .elapsed-pill,
+.app-shell[data-font-size] .status-pill,
+.app-shell[data-font-size] .monitor-card .status-pill,
+.app-shell[data-font-size] .settings-note,
+.app-shell[data-font-size] .settings-footer,
+.app-shell[data-font-size] .modal-header p,
+.app-shell[data-font-size] .build-profiles-table,
+.app-shell[data-font-size] .recent-builds-table,
+.app-shell[data-font-size] .git-history-copy strong,
+.app-shell[data-font-size] .git-history-copy span,
+.app-shell[data-font-size] .git-history-copy p,
+.app-shell[data-font-size] .log-search-count,
+.app-shell[data-font-size] .log-jump-bar button {
+  font-size: var(--font-sm);
+}
+
+.app-shell[data-font-size] .panel-header h2,
+.app-shell[data-font-size] .build-status-panel .panel-header h2,
+.app-shell[data-font-size] .monitor-card h2,
+.app-shell[data-font-size] .modal-header h2 {
+  font-size: var(--font-xl);
+}
+
+.app-shell[data-font-size] .header-settings-button {
+  width: calc(var(--control-lg) + 2px);
+  height: calc(var(--control-lg) + 2px);
+}
+
+.app-shell[data-font-size] .build-dropdown-menu button {
+  height: calc(var(--control-md) + 2px);
+  line-height: calc(var(--control-md) + 2px);
+}
+
+.app-shell[data-font-size] .settings-field-row input,
+.app-shell[data-font-size] .builder-profile-row input,
+.app-shell[data-font-size] .settings-field-row button,
+.app-shell[data-font-size] .builder-profile-row button,
+.app-shell[data-font-size] .build-profiles-table input[type="text"],
+.app-shell[data-font-size] .build-profiles-table input:not([type]),
+.app-shell[data-font-size] .build-profiles-table select,
+.app-shell[data-font-size] .build-profiles-table .custom-select-trigger {
+  height: var(--control-md);
+  line-height: var(--control-md);
+}
+
+.app-shell[data-font-size] .tabs {
+  height: calc(var(--control-md) + 4px);
+}
+
+.app-shell[data-font-size] .tab,
+.app-shell[data-font-size] .settings-tab {
+  height: calc(var(--control-md) + 2px);
+  min-height: calc(var(--control-md) + 2px);
+}
+
+.app-shell[data-font-size] .log-lines,
+.app-shell[data-font-size] .terminal-line {
+  font-size: calc(var(--font-xs) + 0.5px);
+}
+
 .settings-footer {
   display: flex;
   flex-direction: column;
@@ -4247,14 +4428,14 @@ select option {
 
 [data-theme="dark"] .app-snackbar.valid {
   color: #9ae6b4;
-  background: rgba(74, 222, 128, 0.12);
-  border-color: rgba(74, 222, 128, 0.3);
+  background: #1a3d2b;
+  border-color: #2d6a3f;
 }
 
 [data-theme="dark"] .app-snackbar.invalid {
   color: #fc8181;
-  background: rgba(245, 101, 101, 0.1);
-  border-color: rgba(245, 101, 101, 0.3);
+  background: #3d1515;
+  border-color: #6b2020;
 }
 
 [data-theme="dark"] .validation-banner.invalid {

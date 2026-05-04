@@ -27,6 +27,7 @@ export type {
 
 export type AppSection = "dashboard" | "project";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal";
+export type FontSizeMode = "large" | "regular" | "small";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
 

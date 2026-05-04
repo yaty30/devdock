@@ -10,6 +10,7 @@ import {
   Plus,
   Sun,
 } from "lucide-react";
+import { APP_VERSION } from "../../../../shared/appVersion";
 import type { AppSection, Project, Theme } from "../../types";
 
 export function Sidebar({
@@ -67,11 +68,14 @@ export function Sidebar({
             }
           }}
           aria-expanded={collapsed ? false : projectsOpen}
-          aria-label="Projects"
-          title="Projects"
+          aria-label={`Projects (${projects.length})`}
+          title={`Projects (${projects.length})`}
         >
           <FolderKanban size={18} />
-          <span className="nav-label">Projects</span>
+          <span className="nav-label project-nav-label">
+            <span>Projects</span>
+            <span className="project-count-badge">{projects.length}</span>
+          </span>
           {!collapsed ? <ChevronDown className="chevron" size={16} /> : null}
         </button>
 
@@ -105,22 +109,24 @@ export function Sidebar({
             <span>Add Project</span>
           </button>
 
-        {collapsed ? (
-          <button
-            className="nav-item add-project-collapsed-btn"
-            type="button"
-            onClick={onAddProject}
-            aria-label="Add project"
-            title="Add project"
-          >
-            <Plus size={18} style={{color: "var(--accent)"}} />
-          </button>
-        ) : null}
+          {collapsed ? (
+            <button
+              className="nav-item add-project-collapsed-btn"
+              type="button"
+              onClick={onAddProject}
+              aria-label="Add project"
+              title="Add project"
+            >
+              <Plus size={18} style={{ color: "var(--accent)" }} />
+            </button>
+          ) : null}
         </div>
       </nav>
 
       <div className="sidebar-footer">
-        {!collapsed ? <span className="sidebar-version">v0.6.0</span> : null}
+        {!collapsed ? (
+          <span className="sidebar-version">v{APP_VERSION}</span>
+        ) : null}
         <button
           className="theme-toggle sidebar-icon-button"
           type="button"
