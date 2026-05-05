@@ -5724,6 +5724,7 @@ select option {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  padding-top: 14px;
 }
 
 .collapsed-add-project-button {

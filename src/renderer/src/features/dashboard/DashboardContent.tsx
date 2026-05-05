@@ -1461,6 +1461,9 @@ function buildStatusClass(status: string): string {
   if (status === "Running") {
     return "running";
   }
+  if (status === "Stopped") {
+    return "stopped";
+  }
   return "failed";
 }
 

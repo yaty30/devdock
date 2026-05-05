@@ -464,7 +464,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
 
       <Modal
         open={expandedSheet !== null}
-        title={expandedSheet?.title ?? "Note"}
+        title={expandedSheet?.title ?? ""}
         subtitle={
           expandedSheet
             ? `Last updated: ${formatUpdatedAt(expandedSheet.updatedAt)}`
@@ -631,6 +631,104 @@ function ExpandedNoteHeaderActions({
   );
 }
 
+type LinkDialogState = { initialUrl: string; initialLabel: string };
+
+function LinkDialog({
+  initialUrl,
+  initialLabel,
+  onConfirm,
+  onClose,
+}: {
+  initialUrl: string;
+  initialLabel: string;
+  onConfirm: (url: string, label: string) => void;
+  onClose: () => void;
+}): JSX.Element {
+  const [url, setUrl] = useState(initialUrl);
+  const [label, setLabel] = useState(initialLabel);
+  const [isClosing, setIsClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+    };
+  }, []);
+
+  function closeDialog(): void {
+    if (isClosing) return;
+    setIsClosing(true);
+    closeTimerRef.current = window.setTimeout(onClose, 170);
+  }
+
+  function handleSubmit(): void {
+    onConfirm(url, label);
+    closeDialog();
+  }
+
+  return (
+    <div
+      className={`dialog-backdrop${isClosing ? " closing" : ""}`}
+      role="presentation"
+      onClick={closeDialog}
+    >
+      <section
+        className={`add-project-dialog${isClosing ? " closing" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="link-dialog-title"
+        onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            handleSubmit();
+          }
+        }}
+      >
+        <h2 id="link-dialog-title">Insert Link</h2>
+        <div className="add-project-fields">
+          <label>
+            <span>Label</span>
+            <input
+              autoFocus
+              type="text"
+              value={label}
+              placeholder="Link text"
+              onChange={(event) => setLabel(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>URL</span>
+            <input
+              type="url"
+              value={url}
+              placeholder="https://"
+              onChange={(event) => setUrl(event.target.value)}
+            />
+          </label>
+        </div>
+        <div className="dialog-actions">
+          <button
+            className="button primary compact"
+            type="button"
+            onClick={handleSubmit}
+            disabled={!url.trim()}
+          >
+            Apply
+          </button>
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={closeDialog}
+          >
+            Cancel
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ExpandedNoteEditor({
   sheet,
   contentJson,
@@ -651,6 +749,7 @@ function ExpandedNoteEditor({
   const [findTerm, setFindTerm] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [textColor, setTextColor] = useState(DEFAULT_TEXT_COLOR);
+  const [linkDialog, setLinkDialog] = useState<LinkDialogState | null>(null);
   const savedSelectionRef = useRef<{ from: number; to: number } | null>(null);
   const contentSignature = useMemo(
     () => JSON.stringify(contentJson),
@@ -766,22 +865,43 @@ function ExpandedNoteEditor({
 
   function setLink(event: ReactMouseEvent<HTMLButtonElement>): void {
     runEditorCommand(event, () => {
-      const currentHref = editor?.getAttributes("link").href as
+      if (!editor) return;
+      const currentHref = editor.getAttributes("link").href as
         | string
         | undefined;
-      const nextHref = window.prompt("Link URL", currentHref ?? "https://");
-      if (nextHref === null) return;
-      if (!nextHref.trim()) {
-        editor?.chain().focus().extendMarkRange("link").unsetLink().run();
-        return;
-      }
-      editor
-        ?.chain()
-        .focus()
-        .extendMarkRange("link")
-        .setLink({ href: nextHref.trim() })
-        .run();
+      const { from, to } = editor.state.selection;
+      const selectedText =
+        from !== to ? editor.state.doc.textBetween(from, to) : "";
+      setLinkDialog({ initialUrl: currentHref ?? "", initialLabel: selectedText });
     });
+  }
+
+  function applyLink(url: string, label: string): void {
+    if (!editor) return;
+    restoreSelection();
+    if (!url.trim()) {
+      editor.chain().focus().extendMarkRange("link").unsetLink().run();
+      return;
+    }
+    const href = url.trim();
+    const { from, to } = editor.state.selection;
+    const hasSelection = from !== to;
+    const initialLabel = linkDialog?.initialLabel ?? "";
+    if (label.trim() && (!hasSelection || label.trim() !== initialLabel)) {
+      const chain = editor.chain().focus();
+      if (hasSelection) {
+        chain.deleteSelection();
+      }
+      chain
+        .insertContent({
+          type: "text",
+          text: label.trim(),
+          marks: [{ type: "link", attrs: { href } }],
+        })
+        .run();
+    } else {
+      editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
+    }
   }
 
   function applyTextColor(nextColor: string): void {
@@ -981,6 +1101,14 @@ function ExpandedNoteEditor({
           </button>
         ) : null}
       </footer>
+      {linkDialog !== null ? (
+        <LinkDialog
+          initialUrl={linkDialog.initialUrl}
+          initialLabel={linkDialog.initialLabel}
+          onConfirm={applyLink}
+          onClose={() => setLinkDialog(null)}
+        />
+      ) : null}
     </article>
   );
 }
