@@ -131,6 +131,10 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
   );
   const saveTimersRef = useRef<Map<string, number>>(new Map());
   const draftRevisionRef = useRef<Map<string, number>>(new Map());
+  const frozenPreviewRef = useRef<{
+    sheetId: string;
+    contentJson: SheetContentJson;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +147,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
     setSaveStatuses({});
     setExpandedSheetId(null);
     setExpandedEditEnabled(false);
+    frozenPreviewRef.current = null;
     draftRevisionRef.current.clear();
     clearAllSaveTimers(saveTimersRef.current);
 
@@ -183,16 +188,29 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
     return drafts[sheet.id] ?? sheet.contentJson ?? EMPTY_CONTENT;
   }
 
+  function previewContent(sheet: Sheet): SheetContentJson {
+    const frozenPreview = frozenPreviewRef.current;
+    if (frozenPreview?.sheetId === sheet.id) {
+      return frozenPreview.contentJson;
+    }
+    return sheetContent(sheet);
+  }
+
   function setSheetStatus(sheetId: string, status: SaveStatus): void {
     setSaveStatuses((current) => ({ ...current, [sheetId]: status }));
   }
 
   function openNote(sheetId: string): void {
+    const sheet = sheets.find((item) => item.id === sheetId);
+    frozenPreviewRef.current = sheet
+      ? { sheetId, contentJson: sheetContent(sheet) }
+      : null;
     setExpandedSheetId(sheetId);
     setExpandedEditEnabled(false);
   }
 
   function closeExpandedNote(): void {
+    frozenPreviewRef.current = null;
     setExpandedSheetId(null);
     setExpandedEditEnabled(false);
   }
@@ -437,7 +455,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
               <NotePreviewCard
                 key={sheet.id}
                 sheet={sheet}
-                contentJson={sheetContent(sheet)}
+                contentJson={previewContent(sheet)}
                 onOpen={() => openNote(sheet.id)}
                 onDelete={() => setDeleteTarget(sheet)}
               />
@@ -449,7 +467,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
           sheets={sheets}
           dirtyIds={dirtyIds}
           saveStatuses={saveStatuses}
-          getContent={sheetContent}
+          getContent={previewContent}
           onOpen={(sheet) => openNote(sheet.id)}
           onDelete={setDeleteTarget}
         />
@@ -505,6 +523,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
                 contentJson: sheetContent(expandedSheet),
               })
             }
+            onExitEditMode={() => setExpandedEditEnabled(false)}
           />
         ) : null}
       </Modal>
@@ -651,7 +670,8 @@ function LinkDialog({
 
   useEffect(() => {
     return () => {
-      if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
+      if (closeTimerRef.current !== null)
+        window.clearTimeout(closeTimerRef.current);
     };
   }, []);
 
@@ -698,11 +718,11 @@ function LinkDialog({
             />
           </label>
           <label>
-            <span>URL</span>
+            <span>URL or file path</span>
             <input
-              type="url"
+              type="text"
               value={url}
-              placeholder="https://"
+              placeholder="https:// or C:\path\to\file"
               onChange={(event) => setUrl(event.target.value)}
             />
           </label>
@@ -737,6 +757,7 @@ function ExpandedNoteEditor({
   editEnabled,
   onContentChange,
   onManualSave,
+  onExitEditMode,
 }: {
   sheet: Sheet;
   contentJson: SheetContentJson;
@@ -745,6 +766,7 @@ function ExpandedNoteEditor({
   editEnabled: boolean;
   onContentChange: (contentJson: SheetContentJson) => void;
   onManualSave: () => void;
+  onExitEditMode: () => void;
 }): JSX.Element {
   const [findTerm, setFindTerm] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
@@ -765,6 +787,9 @@ function ExpandedNoteEditor({
         openOnClick: false,
         autolink: true,
         linkOnPaste: true,
+        protocols: ["file"],
+        isAllowedUri: (url, { defaultValidate }) =>
+          isLocalHref(url) || defaultValidate(url),
       }),
       CharacterCount,
       Highlight.configure({ multicolor: true }),
@@ -836,6 +861,32 @@ function ExpandedNoteEditor({
     );
   }, [activeMatchIndex, editEnabled, editor, trimmedFindTerm]);
 
+  // Capture-phase Escape handler: intercept before Modal's document listener.
+  // Priority: close link dialog → exit edit mode → let Modal close.
+  useEffect(() => {
+    if (!editEnabled && linkDialog === null) return undefined;
+
+    function handleEscape(event: globalThis.KeyboardEvent): void {
+      if (event.key !== "Escape") return;
+
+      if (linkDialog !== null) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setLinkDialog(null);
+        return;
+      }
+
+      if (editEnabled) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        onExitEditMode();
+      }
+    }
+
+    document.addEventListener("keydown", handleEscape, true);
+    return () => document.removeEventListener("keydown", handleEscape, true);
+  }, [editEnabled, linkDialog, onExitEditMode]);
+
   function preserveSelection(): void {
     if (!editor) return;
     savedSelectionRef.current = {
@@ -866,13 +917,21 @@ function ExpandedNoteEditor({
   function setLink(event: ReactMouseEvent<HTMLButtonElement>): void {
     runEditorCommand(event, () => {
       if (!editor) return;
+      restoreSelection();
       const currentHref = editor.getAttributes("link").href as
         | string
         | undefined;
+      if (currentHref) {
+        editor.chain().focus().extendMarkRange("link").run();
+      }
       const { from, to } = editor.state.selection;
       const selectedText =
         from !== to ? editor.state.doc.textBetween(from, to) : "";
-      setLinkDialog({ initialUrl: currentHref ?? "", initialLabel: selectedText });
+      savedSelectionRef.current = { from, to };
+      setLinkDialog({
+        initialUrl: currentHref ?? "",
+        initialLabel: selectedText,
+      });
     });
   }
 
@@ -883,11 +942,12 @@ function ExpandedNoteEditor({
       editor.chain().focus().extendMarkRange("link").unsetLink().run();
       return;
     }
-    const href = url.trim();
+    const href = normalizeHref(url);
     const { from, to } = editor.state.selection;
     const hasSelection = from !== to;
     const initialLabel = linkDialog?.initialLabel ?? "";
-    if (label.trim() && (!hasSelection || label.trim() !== initialLabel)) {
+    const nextLabel = label.trim() || (!hasSelection ? href : "");
+    if (nextLabel && (!hasSelection || nextLabel !== initialLabel)) {
       const chain = editor.chain().focus();
       if (hasSelection) {
         chain.deleteSelection();
@@ -895,13 +955,23 @@ function ExpandedNoteEditor({
       chain
         .insertContent({
           type: "text",
-          text: label.trim(),
+          text: nextLabel,
           marks: [{ type: "link", attrs: { href } }],
         })
         .run();
     } else {
       editor.chain().focus().extendMarkRange("link").setLink({ href }).run();
     }
+  }
+
+  function handleEditorLinkClick(event: ReactMouseEvent<HTMLDivElement>): void {
+    const target = event.target as HTMLElement;
+    const anchor = target.closest("a");
+    if (!anchor) return;
+    const href = anchor.getAttribute("href");
+    if (!href) return;
+    event.preventDefault();
+    openLink(href);
   }
 
   function applyTextColor(nextColor: string): void {
@@ -1069,6 +1139,7 @@ function ExpandedNoteEditor({
           <div
             className="sheet-editor-shell note-editor-shell editing"
             onMouseDown={focusEditorSurface}
+            onClick={handleEditorLinkClick}
           >
             <EditorContent editor={editor} />
           </div>
@@ -1463,7 +1534,7 @@ function renderStaticNode(
     case "doc":
       return <>{children}</>;
     case "paragraph":
-      return <p key={key}>{children}</p>;
+      return <p key={key}>{children.length > 0 ? children : <br />}</p>;
     case "heading": {
       const level = Math.min(3, Math.max(1, numberAttr(node.attrs?.level, 2)));
       const Tag = `h${level}` as "h1" | "h2" | "h3";
@@ -1593,9 +1664,11 @@ function applyStaticMarks(
           <a
             href={href}
             key={markKey}
-            rel="noreferrer"
-            target="_blank"
-            onClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openLink(href);
+            }}
           >
             {current}
           </a>
@@ -1646,4 +1719,72 @@ function clearAllSaveTimers(timers: Map<string, number>): void {
     window.clearTimeout(timer);
   }
   timers.clear();
+}
+
+function normalizeHref(input: string): string {
+  const raw = input.trim().replace(/^["']|["']$/g, "");
+  if (isWindowsDrivePath(raw) || isWindowsUncPath(raw)) {
+    return fileHrefFromPath(raw);
+  }
+  if (/^file:/i.test(raw)) {
+    const localPath = filePathFromHref(raw);
+    return localPath ? fileHrefFromPath(localPath) : raw;
+  }
+  return raw;
+}
+
+function openLink(href: string): void {
+  const trimmed = href.trim();
+  const localPath = filePathFromHref(trimmed);
+  if (localPath) {
+    void window.ivsDashboard.openPath(localPath);
+    return;
+  }
+  if (isWindowsDrivePath(trimmed) || isWindowsUncPath(trimmed)) {
+    void window.ivsDashboard.openPath(trimmed);
+    return;
+  }
+  window.open(trimmed, "_blank", "noreferrer");
+}
+
+function isLocalHref(value: string | undefined): boolean {
+  if (!value) return false;
+  return (
+    /^file:/i.test(value) ||
+    isWindowsDrivePath(value) ||
+    isWindowsUncPath(value)
+  );
+}
+
+function isWindowsDrivePath(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value.trim());
+}
+
+function isWindowsUncPath(value: string): boolean {
+  return value.trim().startsWith("\\\\");
+}
+
+function fileHrefFromPath(path: string): string {
+  const trimmed = path.trim();
+  if (isWindowsUncPath(trimmed)) {
+    return `file://${encodeURI(trimmed.slice(2).replace(/\\/g, "/"))}`;
+  }
+  return `file:///${encodeURI(trimmed.replace(/\\/g, "/"))}`;
+}
+
+function filePathFromHref(href: string): string | null {
+  if (!/^file:/i.test(href.trim())) return null;
+  try {
+    const url = new URL(href.trim());
+    const pathname = decodeURIComponent(url.pathname);
+    if (url.hostname) {
+      return `\\\\${url.hostname}${pathname.replace(/\//g, "\\")}`;
+    }
+    return pathname.replace(/^\/([a-zA-Z]:)/, "$1").replace(/\//g, "\\");
+  } catch {
+    const path = href.trim().replace(/^file:\/+/i, "");
+    return decodeURIComponent(path)
+      .replace(/^\/([a-zA-Z]:)/, "$1")
+      .replace(/\//g, "\\");
+  }
 }
