@@ -33,16 +33,30 @@ export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
 
 export type DatabaseConnectionStatus = "connected" | "disconnected" | "error";
+export type DatabaseConnectionType = "MySQL" | "Oracle";
+export type DatabaseSslMode = "disabled" | "preferred" | "required";
+export type OracleConnectionMode = "serviceName" | "sid" | "connectString";
 
 export type DatabaseConnection = {
   id: string;
   name: string;
-  type: string;
+  type: DatabaseConnectionType;
   status: DatabaseConnectionStatus;
   host: string;
   port: string;
   user: string;
   schema: string;
+  password?: string;
+  savePassword?: boolean;
+  connectionTimeoutMs?: number;
+  database?: string;
+  sslMode?: DatabaseSslMode;
+  connectionMode?: OracleConnectionMode;
+  serviceName?: string;
+  sid?: string;
+  connectString?: string;
+  role?: string;
+  walletPath?: string;
   latency: string;
   uptime: string;
   activeSessions: number;

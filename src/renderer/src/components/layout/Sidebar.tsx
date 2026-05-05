@@ -165,26 +165,32 @@ export function Sidebar({
           }`}
           aria-hidden={!collapsed && !databasesOpen}
         >
-          {databaseConnections.map((connection) => (
-            <button
-              className={`project-item database-item${
-                activeSection === "database" &&
-                connection.id === selectedDatabaseConnectionId
-                  ? " active"
-                  : ""
-              }`}
-              type="button"
-              key={connection.id}
-              tabIndex={databasesOpen || collapsed ? 0 : -1}
-              onClick={() => onDatabaseConnectionChange(connection)}
-            >
-              <span className={`database-status-dot ${connection.status}`} />
-              <span className="database-connection-name">
-                {connection.name}
-              </span>
-              <span className="database-type-label">{connection.type}</span>
-            </button>
-          ))}
+          {databaseConnections.map((connection) => {
+            const displayName = getConnectionDisplayName(connection);
+            return (
+              <button
+                className={`project-item database-item${
+                  activeSection === "database" &&
+                  connection.id === selectedDatabaseConnectionId
+                    ? " active"
+                    : ""
+                }`}
+                type="button"
+                key={connection.id}
+                tabIndex={databasesOpen || collapsed ? 0 : -1}
+                title={formatDatabaseConnectionTooltip(connection)}
+                aria-label={formatDatabaseConnectionTooltip(connection)}
+                onClick={() => onDatabaseConnectionChange(connection)}
+              >
+                <span className={`database-status-dot ${connection.status}`} />
+                <span className="database-connection-initials">
+                  {getConnectionInitials(connection)}
+                </span>
+                <span className="database-connection-name">{displayName}</span>
+                <span className="database-type-label">{connection.type}</span>
+              </button>
+            );
+          })}
           <button
             className="project-item add-project-item"
             type="button"
@@ -238,4 +244,40 @@ export function Sidebar({
       </div>
     </aside>
   );
+}
+
+function getConnectionInitials(connection: DatabaseConnection): string {
+  const nameInitials = connection.name
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(0, 2)
+    .toUpperCase();
+
+  if (nameInitials) {
+    return nameInitials;
+  }
+
+  return (
+    connection.id
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(0, 2)
+      .toUpperCase() || "DB"
+  );
+}
+
+function getConnectionDisplayName(connection: DatabaseConnection): string {
+  return connection.name.trim() || connection.id.trim() || "Database";
+}
+
+function formatDatabaseConnectionTooltip(
+  connection: DatabaseConnection,
+): string {
+  const hostPort = [connection.host, connection.port].filter(Boolean).join(":");
+  return [
+    getConnectionDisplayName(connection),
+    connection.type,
+    connection.status,
+    hostPort,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

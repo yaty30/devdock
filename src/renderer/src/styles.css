@@ -59,7 +59,7 @@
   background: #101113;
   --app-bg: #101113;
   --surface: #18191d;
-  --border: #2c2e35;
+  --border: #24262c;
   --text: #f9fafb;
   --muted: #a1a1aa;
   --accent: #8b8df8;
@@ -548,7 +548,7 @@ body {
   padding: 0;
 }
 
-.sidebar.collapsed .project-item > span:not(.project-code) {
+.sidebar.collapsed .project-item:not(.database-item) > span:not(.project-code) {
   display: none;
 }
 
@@ -2699,6 +2699,15 @@ body {
   border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
 }
 
+.custom-select-trigger:disabled,
+.custom-select-trigger:disabled:hover {
+  color: var(--muted);
+  cursor: not-allowed;
+  background: var(--subtle-bg);
+  border-color: var(--border);
+  opacity: 0.68;
+}
+
 .custom-select-trigger:focus {
   outline: none;
   border-color: var(--accent);
@@ -2751,8 +2760,10 @@ body {
   user-select: none;
 }
 
-.custom-select-option:hover {
+.custom-select-option:hover,
+.custom-select-option.focused {
   border-color: var(--border);
+  background: var(--accent-soft);
 }
 
 .custom-select-option.selected .custom-select-option-label {
@@ -2796,6 +2807,11 @@ select option {
   right: 0;
   left: auto;
   min-width: 168px;
+}
+
+.custom-select-dropdown-portal {
+  max-height: min(260px, calc(100dvh - 24px));
+  overflow: auto;
 }
 
 .activity-feed-panel {
@@ -2889,7 +2905,6 @@ select option {
 
 [data-theme="dark"] .recent-builds-table tbody tr:hover td {
   background-color: var(--accent-soft);
-  border-right-color: var(--accent-soft);
 }
 
 .recent-builds-sentinel {
@@ -3703,14 +3718,19 @@ select option {
   border-bottom: 1px solid var(--border);
 }
 
+.modal-header.no-subtitle {
+  min-height: 54px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
 .modal-header h2 {
-  margin: 0 0 4px;
   font-size: 18px;
   line-height: 1.2;
 }
 
 .modal-header p {
-  margin: 0;
+  margin: 4px 0 0 0;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
@@ -4281,10 +4301,25 @@ select option {
 }
 
 .database-connection-name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.database-connection-initials {
+  display: none;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 850;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 8px;
 }
 
 .database-type-label {
@@ -4297,6 +4332,10 @@ select option {
 
 .sidebar.collapsed .database-item .database-status-dot {
   display: inline-block;
+}
+
+.sidebar.collapsed .database-item .database-connection-initials {
+  display: grid;
 }
 
 .sidebar.collapsed .database-item .database-connection-name,
@@ -4358,6 +4397,17 @@ select option {
 
 .database-screen {
   overflow: hidden;
+}
+
+.database-workspace-view {
+  display: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.database-workspace-view.active {
+  display: flex;
 }
 
 .database-workspace-grid {
@@ -4451,12 +4501,35 @@ select option {
 }
 
 .database-object-tree {
+  position: relative;
   display: grid;
   align-content: start;
   gap: 4px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+}
+
+.database-object-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 74px;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  text-align: center;
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.database-object-state.error {
+  flex-direction: column;
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 30%, var(--border));
 }
 
 .database-tree-group > button {
@@ -4853,13 +4926,41 @@ select option {
 }
 
 .database-query-panel {
+  position: relative;
   grid-column: 3;
   min-width: 600px;
   display: grid;
+  grid-template-rows: auto minmax(160px, 1fr);
+  gap: 0;
+}
+
+.database-query-panel.has-output {
   grid-template-rows:
     auto minmax(160px, var(--database-editor-height, 260px)) 14px
     minmax(160px, 1fr);
-  gap: 0;
+}
+
+.database-query-panel.loading .database-sql-editor-shell,
+.database-query-panel.loading .database-editor-result-splitter,
+.database-query-panel.loading .database-output-panel {
+  pointer-events: none;
+  opacity: 0.58;
+}
+
+.database-workspace-loading-overlay {
+  position: absolute;
+  inset: 56px 14px 14px 14px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  backdrop-filter: blur(2px);
 }
 
 .database-sheet-tree-item.active,
@@ -4926,6 +5027,142 @@ select option {
 .database-context-menu button:hover {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.database-connection-modal {
+  width: min(680px, calc(100vw - 64px));
+}
+
+.database-connection-modal-content {
+  padding: 20px 24px 22px;
+  overflow: auto;
+}
+
+.database-connection-form {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+}
+
+.database-connection-section {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.database-connection-section-title {
+  margin: 0;
+  color: var(--nav-text);
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.database-connection-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.database-specific-fields {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.database-connection-field {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.database-connection-field input,
+.database-connection-field select,
+.database-connection-field .custom-select-trigger {
+  width: 100%;
+  height: var(--control-md);
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+}
+
+.database-connection-field .custom-select {
+  width: 100%;
+}
+
+.database-connection-field .custom-select-dropdown {
+  z-index: 1300;
+}
+
+.database-connection-field input:focus,
+.database-connection-field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.database-connection-field input:disabled {
+  color: var(--muted);
+  background: var(--subtle-bg);
+}
+
+.database-connection-field strong {
+  color: var(--error);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.database-connection-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: end;
+  min-height: var(--control-md);
+  color: var(--nav-text);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.database-test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+
+.database-test-result.success {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 36%, var(--border));
+}
+
+.database-test-result.error {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 36%, var(--border));
+}
+
+.database-connection-actions {
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 2px;
+}
+
+.database-connection-actions-right {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .database-tree-button,
@@ -5108,6 +5345,11 @@ select option {
   border-radius: 8px;
 }
 
+.database-sql-editor-shell .cm-editor .cm-selectionBackground,
+.database-sql-editor-shell .cm-editor.cm-focused .cm-selectionBackground {
+  background-color: rgba(99, 102, 241, 0.28) !important;
+}
+
 .database-sql-editor-shell .cm-editor {
   height: 100%;
   outline: none;
@@ -5281,6 +5523,13 @@ select option {
   align-items: center;
   gap: 7px;
   margin-left: auto;
+}
+
+.database-page-size-select .custom-select-trigger {
+  min-width: 92px;
+  height: 28px;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .database-pagination-controls select {
@@ -5535,6 +5784,12 @@ select option {
   border: 1px solid #fc8181;
 }
 
+.app-snackbar.warning {
+  color: #713f12;
+  background: #fffbeb;
+  border: 1px solid #fbbf24;
+}
+
 [data-theme="dark"] .app-snackbar.valid {
   color: #9ae6b4;
   background: #1a3d2b;
@@ -5545,6 +5800,12 @@ select option {
   color: #fc8181;
   background: #3d1515;
   border-color: #6b2020;
+}
+
+[data-theme="dark"] .app-snackbar.warning {
+  color: #fde68a;
+  background: #3f2d0c;
+  border-color: #92400e;
 }
 
 [data-theme="dark"] .validation-banner.invalid {

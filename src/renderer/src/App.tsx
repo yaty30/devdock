@@ -10,9 +10,10 @@ import {
 import { Sidebar } from "./components/layout/Sidebar";
 import { SegmentedTabs } from "./components/navigation/SegmentedTabs";
 import {
+  DatabaseConnectionModal,
   DatabaseWorkspace,
   DatabaseWorkspaceTabs,
-} from "./features/databases/DatabaseWorkspace";
+} from "./features/databases";
 import {
   DashboardContent,
   ProjectDashboardContent,
@@ -53,6 +54,11 @@ const DUMMY_DATABASE_CONNECTIONS: DatabaseConnection[] = [
     port: "3306",
     user: "ivsd_mysql",
     schema: "sakila",
+    password: "ivsd_mysql",
+    savePassword: true,
+    connectionTimeoutMs: 10000,
+    database: "sakila",
+    sslMode: "disabled",
     latency: "2.3 ms",
     uptime: "3h 42m",
     activeSessions: 4,
@@ -63,16 +69,19 @@ type SplashFrame = "open" | "close";
 type SplashPhase = "visible" | "exiting" | "hidden";
 type SnackbarState = {
   message: string;
-  tone: "valid" | "invalid";
+  tone: "valid" | "invalid" | "warning";
 };
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [projects, setProjects] = useState<Project[]>([]);
-  const [databaseConnections] = useState<DatabaseConnection[]>(
-    DUMMY_DATABASE_CONNECTIONS,
-  );
+  const [databaseConnections, setDatabaseConnections] = useState<
+    DatabaseConnection[]
+  >(() => DUMMY_DATABASE_CONNECTIONS);
+  const [databaseConnectionModal, setDatabaseConnectionModal] = useState<
+    "add" | "edit" | null
+  >(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedDatabaseConnectionId, setSelectedDatabaseConnectionId] =
     useState<string | null>(DUMMY_DATABASE_CONNECTIONS[0]?.id ?? null);
@@ -424,10 +433,45 @@ function App(): JSX.Element {
   }
 
   function handleAddDatabaseConnection(): void {
-    showSnackbar(
-      "New database connection setup is not available yet.",
-      "invalid",
+    setDatabaseConnectionModal("add");
+  }
+
+  function openDatabaseConnectionSettings(): void {
+    if (!selectedDatabaseConnection) {
+      showSnackbar("Select a database connection first.", "invalid");
+      return;
+    }
+
+    setDatabaseConnectionModal("edit");
+  }
+
+  function handleSaveDatabaseConnection(
+    savedConnection: DatabaseConnection,
+  ): void {
+    if (databaseConnectionModal === "add") {
+      setDatabaseConnections((current) => [...current, savedConnection]);
+      setSelectedDatabaseConnectionId(savedConnection.id);
+      setActiveDatabaseTab("connection");
+      setActiveSection("database");
+      setDatabaseConnectionModal(null);
+      showSnackbar("Connection saved", "valid");
+      return;
+    }
+
+    setDatabaseConnections((current) =>
+      current.map((connection) =>
+        connection.id === savedConnection.id
+          ? {
+              ...connection,
+              ...savedConnection,
+              name: savedConnection.name || connection.name,
+            }
+          : connection,
+      ),
     );
+    setSelectedDatabaseConnectionId(savedConnection.id);
+    setDatabaseConnectionModal(null);
+    showSnackbar("Connection settings saved", "valid");
   }
 
   function handleDatabaseExecution(record: DatabaseExecutionRecord): void {
@@ -543,6 +587,24 @@ function App(): JSX.Element {
       </div>
     ) : null;
 
+  const databaseConnectionDialog = (
+    <DatabaseConnectionModal
+      open={
+        databaseConnectionModal !== null &&
+        (databaseConnectionModal !== "edit" ||
+          selectedDatabaseConnection !== null)
+      }
+      mode={databaseConnectionModal ?? "add"}
+      connection={
+        databaseConnectionModal === "edit" ? selectedDatabaseConnection : null
+      }
+      connections={databaseConnections}
+      onClose={() => setDatabaseConnectionModal(null)}
+      onSave={handleSaveDatabaseConnection}
+      onTestStatus={showSnackbar}
+    />
+  );
+
   if (!selectedProject && !initialStateLoaded) {
     return (
       <div
@@ -611,9 +673,7 @@ function App(): JSX.Element {
                 connection={selectedDatabaseConnection}
                 fontSizeMode={fontSizeMode}
                 onFontSizeChange={setFontSizeMode}
-                onSettingsClick={() =>
-                  showSnackbar("Select a project to open settings.", "invalid")
-                }
+                onSettingsClick={openDatabaseConnectionSettings}
               />
             ) : null}
           </header>
@@ -627,6 +687,7 @@ function App(): JSX.Element {
               lastRefreshTime={databaseLastRefreshTime}
               onExecution={handleDatabaseExecution}
               onRefresh={refreshDatabaseMetadata}
+              onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
             />
           ) : (
             <DashboardContent
@@ -651,6 +712,7 @@ function App(): JSX.Element {
             onClose={() => setAddProjectOpen(false)}
           />
         ) : null}
+        {databaseConnectionDialog}
         {splashOverlay}
       </div>
     );
@@ -724,13 +786,7 @@ function App(): JSX.Element {
               connection={selectedDatabaseConnection}
               fontSizeMode={fontSizeMode}
               onFontSizeChange={setFontSizeMode}
-              onSettingsClick={() => {
-                if (activeProjectState) {
-                  setSettingsOpen(true);
-                  return;
-                }
-                showSnackbar("Project settings are not loaded yet.", "invalid");
-              }}
+              onSettingsClick={openDatabaseConnectionSettings}
             />
           ) : null}
         </header>
@@ -749,6 +805,7 @@ function App(): JSX.Element {
             lastRefreshTime={databaseLastRefreshTime}
             onExecution={handleDatabaseExecution}
             onRefresh={refreshDatabaseMetadata}
+            onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
           />
         ) : activeSection === "project" ? (
           <>
@@ -839,6 +896,8 @@ function App(): JSX.Element {
           onClose={() => setAddProjectOpen(false)}
         />
       ) : null}
+
+      {databaseConnectionDialog}
 
       {snackbar ? (
         <div

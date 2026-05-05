@@ -52,11 +52,16 @@ import {
   X,
 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
+import { AppSelect, type AppSelectOption } from "../../components/common/AppSelect";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
+import { Modal } from "../../components/dialogs/Modal";
 import type {
   DatabaseConnection,
+  DatabaseConnectionType,
   DatabaseExecutionRecord,
+  DatabaseSslMode,
   DatabaseWorkspaceTab,
+  OracleConnectionMode,
 } from "../../types";
 import { clamp } from "../../utils/math";
 
@@ -66,6 +71,22 @@ type QuerySheet = {
   sql: string;
   savedName: string;
   savedSql: string;
+  output: SheetOutputState;
+};
+
+type SheetOutputTab = "results" | "messages";
+
+type SheetOutputState = {
+  hasExecuted: boolean;
+  activeOutputTab: SheetOutputTab;
+  resultRows: ResultRow[];
+  resultColumns: ResultColumn[];
+  resultMeta: ResultMeta;
+  resultPage: number;
+  resultPageSize: number;
+  resultColumnWidths: Partial<Record<ResultColumnKey, number>>;
+  messages: MessageEntry[];
+  lastExecutionTarget: LastExecutionTarget | null;
 };
 
 type SheetConnectionState = {
@@ -86,6 +107,7 @@ type ResultRow = {
 };
 
 type ResultMeta = {
+  hasRun: boolean;
   rows: number;
   duration: string;
   queriedAt: string;
@@ -111,6 +133,19 @@ type DatabaseTable = {
   name: string;
   columns: DatabaseColumn[];
 };
+
+type DatabaseMetadata = {
+  schemas: string[];
+  tables: DatabaseTable[];
+  views: string[];
+  routines: string[];
+};
+
+type DatabaseMetadataState =
+  | { status: "idle"; metadata: DatabaseMetadata; errorMessage?: undefined }
+  | { status: "loading"; metadata: DatabaseMetadata; errorMessage?: undefined }
+  | { status: "loaded"; metadata: DatabaseMetadata; errorMessage?: undefined }
+  | { status: "error"; metadata: DatabaseMetadata; errorMessage: string };
 
 type DatabaseDragState = {
   startX: number;
@@ -151,7 +186,9 @@ type ResultColumnKey = keyof ResultRow;
 type ResultColumn = {
   key: ResultColumnKey;
   label: string;
+  kind: "number" | "text" | "date" | "unknown";
   minWidth: number;
+  weight: number;
 };
 
 type ResultColumnDragState = {
@@ -165,6 +202,38 @@ type DatabaseCompletionData = {
   tables: string[];
   columns: string[];
 };
+
+type DatabaseConnectionModalMode = "add" | "edit";
+
+type DatabaseConnectionDraft = {
+  id?: string;
+  name: string;
+  type: DatabaseConnectionType;
+  host: string;
+  port: string;
+  user: string;
+  password: string;
+  savePassword: boolean;
+  connectionTimeoutSeconds: string;
+  database: string;
+  sslMode: DatabaseSslMode;
+  connectionMode: OracleConnectionMode;
+  serviceName: string;
+  sid: string;
+  connectString: string;
+  role: string;
+  walletPath: string;
+};
+
+type ConnectionFormErrors = Partial<
+  Record<keyof DatabaseConnectionDraft, string>
+>;
+
+type TestConnectionState =
+  | { status: "idle"; message: string }
+  | { status: "testing"; message: string }
+  | { status: "success"; message: string }
+  | { status: "error"; message: string };
 
 const DEFAULT_SQL = `select actor_id, first_name, last_name, last_update
 from sakila.actor
@@ -181,20 +250,65 @@ const DEFAULT_EDITOR_HEIGHT = 260;
 const DATABASE_EDITOR_MIN_HEIGHT = 160;
 const DATABASE_OUTPUT_MIN_HEIGHT = 160;
 const DATABASE_EDITOR_SPLITTER_SIZE = 14;
+const DEFAULT_CONNECTION_TIMEOUT_SECONDS = "10";
 
-const RESULT_COLUMNS: ResultColumn[] = [
-  { key: "actor_id", label: "actor_id", minWidth: 92 },
-  { key: "first_name", label: "first_name", minWidth: 132 },
-  { key: "last_name", label: "last_name", minWidth: 132 },
-  { key: "last_update", label: "last_update", minWidth: 210 },
+const DATABASE_TYPE_OPTIONS: Array<
+  AppSelectOption<DatabaseConnectionType>
+> = [
+  { value: "MySQL", label: "MySQL", dotColor: "#2563eb" },
+  { value: "Oracle", label: "Oracle", dotColor: "#ef4444" },
 ];
 
-const DEFAULT_RESULT_COLUMN_WIDTHS: Record<ResultColumnKey, number> = {
-  actor_id: 110,
-  first_name: 160,
-  last_name: 160,
-  last_update: 240,
-};
+const MYSQL_SSL_OPTIONS: Array<AppSelectOption<DatabaseSslMode>> = [
+  { value: "disabled", label: "Disabled" },
+  { value: "preferred", label: "Preferred" },
+  { value: "required", label: "Required" },
+];
+
+const ORACLE_CONNECTION_MODES: Array<
+  AppSelectOption<OracleConnectionMode>
+> = [
+  { value: "serviceName", label: "Service name" },
+  { value: "sid", label: "SID" },
+  { value: "connectString", label: "Connection string" },
+];
+
+const PAGE_SIZE_OPTIONS: Array<AppSelectOption<string>> = [
+  { value: "5", label: "5 rows" },
+  { value: "10", label: "10 rows" },
+  { value: "25", label: "25 rows" },
+];
+
+const RESULT_COLUMNS: ResultColumn[] = [
+  {
+    key: "actor_id",
+    label: "actor_id",
+    kind: "number",
+    minWidth: 80,
+    weight: 0.7,
+  },
+  {
+    key: "first_name",
+    label: "first_name",
+    kind: "text",
+    minWidth: 140,
+    weight: 1,
+  },
+  {
+    key: "last_name",
+    label: "last_name",
+    kind: "text",
+    minWidth: 140,
+    weight: 1,
+  },
+  {
+    key: "last_update",
+    label: "last_update",
+    kind: "date",
+    minWidth: 200,
+    weight: 1.3,
+  },
+];
 
 const sqlHighlightStyle = HighlightStyle.define([
   { tag: tags.keyword, color: "var(--cm-sql-keyword)", fontWeight: "800" },
@@ -379,32 +493,29 @@ const SAMPLE_TABLES: DatabaseTable[] = [
   },
 ];
 
-const SAMPLE_RESULT_ROWS: ResultRow[] = [
-  {
-    actor_id: 1,
-    first_name: "PENELOPE",
-    last_name: "GUINESS",
+const SAMPLE_ACTOR_NAMES = [
+  ["PENELOPE", "GUINESS"],
+  ["NICK", "WAHLBERG"],
+  ["ED", "CHASE"],
+  ["JENNIFER", "DAVIS"],
+  ["JOHNNY", "LOLLOBRIGIDA"],
+  ["BETTE", "NICHOLSON"],
+  ["GRACE", "MOSTEL"],
+  ["MATTHEW", "JOHANSSON"],
+  ["JOE", "SWANK"],
+  ["CHRISTIAN", "GABLE"],
+  ["ZERO", "CAGE"],
+  ["KARL", "BERRY"],
+] as const;
+
+const SAMPLE_RESULT_ROWS: ResultRow[] = SAMPLE_ACTOR_NAMES.map(
+  ([firstName, lastName], index) => ({
+    actor_id: index + 1,
+    first_name: firstName,
+    last_name: lastName,
     last_update: "2026-05-05 09:18:22",
-  },
-  {
-    actor_id: 2,
-    first_name: "NICK",
-    last_name: "WAHLBERG",
-    last_update: "2026-05-05 09:18:22",
-  },
-  {
-    actor_id: 3,
-    first_name: "ED",
-    last_name: "CHASE",
-    last_update: "2026-05-05 09:18:22",
-  },
-  {
-    actor_id: 4,
-    first_name: "JENNIFER",
-    last_name: "DAVIS",
-    last_update: "2026-05-05 09:18:22",
-  },
-];
+  }),
+);
 
 export function DatabaseWorkspaceTabs({
   connectionName,
@@ -443,6 +554,432 @@ export function DatabaseWorkspaceTabs({
   );
 }
 
+export function DatabaseConnectionModal({
+  open,
+  mode,
+  connection,
+  connections,
+  onClose,
+  onSave,
+  onTestStatus,
+}: {
+  open: boolean;
+  mode: DatabaseConnectionModalMode;
+  connection?: DatabaseConnection | null;
+  connections: DatabaseConnection[];
+  onClose: () => void;
+  onSave: (connection: DatabaseConnection) => void;
+  onTestStatus: (
+    message: string,
+    tone: "valid" | "invalid" | "warning",
+  ) => void;
+}): JSX.Element {
+  const [draft, setDraft] = useState<DatabaseConnectionDraft>(() =>
+    createConnectionDraft(connection),
+  );
+  const [errors, setErrors] = useState<ConnectionFormErrors>({});
+  const [saving, setSaving] = useState(false);
+  const [testState, setTestState] = useState<TestConnectionState>({
+    status: "idle",
+    message: "",
+  });
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+
+  const baselineDraft = createConnectionDraft(connection);
+  const dirty =
+    mode === "edit" && !areConnectionDraftsEqual(draft, baselineDraft);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    setDraft(createConnectionDraft(connection));
+    setErrors({});
+    setSaving(false);
+    setTestState({ status: "idle", message: "" });
+    setDiscardConfirmOpen(false);
+  }, [connection, open]);
+
+  function requestClose(): void {
+    if (dirty) {
+      setDiscardConfirmOpen(true);
+      return;
+    }
+
+    onClose();
+  }
+
+  function updateDraft<K extends keyof DatabaseConnectionDraft>(
+    key: K,
+    value: DatabaseConnectionDraft[K],
+  ): void {
+    setDraft((current) => ({ ...current, [key]: value }));
+    setErrors((current) => ({ ...current, [key]: undefined }));
+    setTestState({ status: "idle", message: "" });
+  }
+
+  function updateDatabaseType(type: DatabaseConnectionType): void {
+    setDraft((current) => ({
+      ...current,
+      type,
+      port: type === "MySQL" ? "3306" : "1521",
+      sslMode: type === "MySQL" ? current.sslMode : "disabled",
+      connectionMode:
+        type === "Oracle" ? current.connectionMode : "serviceName",
+      serviceName: type === "Oracle" ? current.serviceName || "XEPDB1" : "",
+      sid: type === "Oracle" ? current.sid : "",
+      connectString: type === "Oracle" ? current.connectString : "",
+      role: type === "Oracle" ? current.role : "",
+      walletPath: type === "Oracle" ? current.walletPath : "",
+    }));
+    setErrors({});
+    setTestState({ status: "idle", message: "" });
+  }
+
+  function validateDraft(): ConnectionFormErrors {
+    return validateConnectionDraft(draft, connections, connection?.id);
+  }
+
+  async function testConnection(): Promise<void> {
+    if (testState.status === "testing") {
+      return;
+    }
+
+    onTestStatus("Testing connection...", "warning");
+    const nextErrors = validateDraft();
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      setTestState({
+        status: "error",
+        message: "Fix validation errors before testing.",
+      });
+      onTestStatus("Connection test failed", "invalid");
+      return;
+    }
+
+    setTestState({ status: "testing", message: "Testing connection..." });
+    await new Promise((resolve) => window.setTimeout(resolve, 450));
+
+    const failurePattern = /\b(fail|error)\b/i;
+    if (
+      failurePattern.test(draft.name) ||
+      failurePattern.test(draft.host) ||
+      failurePattern.test(draft.user)
+    ) {
+      setTestState({
+        status: "error",
+        message: "Mock connection failed for the supplied connection details.",
+      });
+      onTestStatus("Connection test failed", "invalid");
+      return;
+    }
+
+    // TODO: wire real MySQL/Oracle connection testing through the Electron backend.
+    setTestState({ status: "success", message: "Connection test succeeded." });
+    onTestStatus("Connection test successful", "valid");
+  }
+
+  function saveConnection(): void {
+    if (saving) {
+      return;
+    }
+
+    const nextErrors = validateDraft();
+    setErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0) {
+      setTestState({
+        status: "error",
+        message: "Fix validation errors to save.",
+      });
+      return;
+    }
+
+    setSaving(true);
+    onSave(createConnectionFromDraft(draft, connection));
+    setSaving(false);
+  }
+
+  const isOracleConnectString =
+    draft.type === "Oracle" && draft.connectionMode === "connectString";
+
+  return (
+    <Modal
+      open={open}
+      title={mode === "add" ? "New database connection" : "Connection settings"}
+      subtitle={mode === "add" ? "Database" : connection?.name}
+      size="md"
+      className="database-connection-modal"
+      contentClassName="database-connection-modal-content"
+      closeLabel="Close connection dialog"
+      onClose={requestClose}
+    >
+      <form
+        className="database-connection-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          saveConnection();
+        }}
+      >
+        <section className="database-connection-section">
+          <h3 className="database-connection-section-title">Connection</h3>
+          <div className="database-connection-form-grid">
+            <ConnectionField label="Connection name" error={errors.name}>
+              <input
+                autoFocus
+                type="text"
+                value={draft.name}
+                onChange={(event) => updateDraft("name", event.target.value)}
+              />
+            </ConnectionField>
+            <ConnectionField label="Database type" error={errors.type}>
+              <AppSelect
+                className="database-form-select"
+                value={draft.type}
+                options={DATABASE_TYPE_OPTIONS}
+                onChange={updateDatabaseType}
+                ariaLabel="Database type"
+              />
+            </ConnectionField>
+          </div>
+        </section>
+
+        <section className="database-connection-section">
+          <h3 className="database-connection-section-title">Server</h3>
+          <div className="database-connection-form-grid">
+            <ConnectionField label="Host" error={errors.host}>
+              <input
+                type="text"
+                value={draft.host}
+                disabled={isOracleConnectString}
+                placeholder={
+                  isOracleConnectString
+                    ? "Using connection string"
+                    : "localhost"
+                }
+                onChange={(event) => updateDraft("host", event.target.value)}
+              />
+            </ConnectionField>
+            <ConnectionField label="Port" error={errors.port}>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={draft.port}
+                onChange={(event) => updateDraft("port", event.target.value)}
+              />
+            </ConnectionField>
+            <ConnectionField label="Username" error={errors.user}>
+              <input
+                type="text"
+                value={draft.user}
+                onChange={(event) => updateDraft("user", event.target.value)}
+              />
+            </ConnectionField>
+            <ConnectionField label="Password" error={errors.password}>
+              <input
+                type="password"
+                value={draft.password}
+                onChange={(event) =>
+                  updateDraft("password", event.target.value)
+                }
+              />
+            </ConnectionField>
+            <ConnectionField
+              label="Connection timeout (seconds)"
+              error={errors.connectionTimeoutSeconds}
+            >
+              <input
+                type="text"
+                inputMode="numeric"
+                value={draft.connectionTimeoutSeconds}
+                onChange={(event) =>
+                  updateDraft("connectionTimeoutSeconds", event.target.value)
+                }
+              />
+            </ConnectionField>
+            <label className="database-connection-checkbox">
+              <input
+                type="checkbox"
+                checked={draft.savePassword}
+                onChange={(event) =>
+                  updateDraft("savePassword", event.target.checked)
+                }
+              />
+              <span>Save password</span>
+            </label>
+          </div>
+        </section>
+
+        {draft.type === "MySQL" ? (
+          <section className="database-connection-section database-specific-fields">
+            <h3 className="database-connection-section-title">MySQL options</h3>
+            <div className="database-connection-form-grid">
+              <ConnectionField label="Default database/schema">
+                <input
+                  type="text"
+                  value={draft.database}
+                  placeholder="sakila"
+                  onChange={(event) =>
+                    updateDraft("database", event.target.value)
+                  }
+                />
+              </ConnectionField>
+              <ConnectionField label="SSL mode">
+                <AppSelect
+                  className="database-form-select"
+                  value={draft.sslMode}
+                  options={MYSQL_SSL_OPTIONS}
+                  onChange={(value) => updateDraft("sslMode", value)}
+                  ariaLabel="SSL mode"
+                />
+              </ConnectionField>
+            </div>
+          </section>
+        ) : (
+          <section className="database-connection-section database-specific-fields">
+            <h3 className="database-connection-section-title">
+              Oracle options
+            </h3>
+            <div className="database-connection-form-grid">
+              <ConnectionField label="Connection mode">
+                <AppSelect
+                  className="database-form-select"
+                  value={draft.connectionMode}
+                  options={ORACLE_CONNECTION_MODES}
+                  onChange={(value) => updateDraft("connectionMode", value)}
+                  ariaLabel="Connection mode"
+                />
+              </ConnectionField>
+              {draft.connectionMode === "serviceName" ? (
+                <ConnectionField
+                  label="Service name"
+                  error={errors.serviceName}
+                >
+                  <input
+                    type="text"
+                    value={draft.serviceName}
+                    placeholder="XEPDB1"
+                    onChange={(event) =>
+                      updateDraft("serviceName", event.target.value)
+                    }
+                  />
+                </ConnectionField>
+              ) : null}
+              {draft.connectionMode === "sid" ? (
+                <ConnectionField label="SID" error={errors.sid}>
+                  <input
+                    type="text"
+                    value={draft.sid}
+                    onChange={(event) => updateDraft("sid", event.target.value)}
+                  />
+                </ConnectionField>
+              ) : null}
+              {draft.connectionMode === "connectString" ? (
+                <ConnectionField
+                  label="Connection string"
+                  error={errors.connectString}
+                >
+                  <input
+                    type="text"
+                    value={draft.connectString}
+                    placeholder="localhost:1521/XEPDB1"
+                    onChange={(event) =>
+                      updateDraft("connectString", event.target.value)
+                    }
+                  />
+                </ConnectionField>
+              ) : null}
+              <ConnectionField label="Role">
+                <input
+                  type="text"
+                  value={draft.role}
+                  placeholder="Optional"
+                  onChange={(event) => updateDraft("role", event.target.value)}
+                />
+              </ConnectionField>
+              <ConnectionField label="Wallet / TCPS">
+                <input
+                  type="text"
+                  value={draft.walletPath}
+                  placeholder="Optional wallet path"
+                  onChange={(event) =>
+                    updateDraft("walletPath", event.target.value)
+                  }
+                />
+              </ConnectionField>
+            </div>
+          </section>
+        )}
+
+        {testState.message ? (
+          <p className={`database-test-result ${testState.status}`}>
+            {testState.message}
+          </p>
+        ) : null}
+
+        <div className="dialog-actions database-connection-actions">
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={() => void testConnection()}
+            disabled={testState.status === "testing" || saving}
+          >
+            {testState.status === "testing" ? "Testing" : "Test connection"}
+          </button>
+          <div className="database-connection-actions-right">
+            <button
+              className="button secondary compact"
+              type="button"
+              onClick={requestClose}
+            >
+              Cancel
+            </button>
+            <button
+              className="button primary compact"
+              type="submit"
+              disabled={saving}
+            >
+              {mode === "add" ? "Save connection" : "Save changes"}
+            </button>
+          </div>
+        </div>
+      </form>
+      {discardConfirmOpen ? (
+        <ConfirmDialog
+          title="Discard connection changes?"
+          message="You have unsaved connection settings. Close without saving?"
+          confirmLabel="Discard changes"
+          cancelLabel="Cancel"
+          variant="warning"
+          onClose={() => setDiscardConfirmOpen(false)}
+          onConfirm={() => {
+            setDiscardConfirmOpen(false);
+            onClose();
+          }}
+        />
+      ) : null}
+    </Modal>
+  );
+}
+
+function ConnectionField({
+  label,
+  error,
+  children,
+}: {
+  label: string;
+  error?: string;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <label className="database-connection-field">
+      <span>{label}</span>
+      {children}
+      {error ? <strong>{error}</strong> : null}
+    </label>
+  );
+}
+
 export function DatabaseWorkspace({
   connection,
   activeTab,
@@ -451,6 +988,7 @@ export function DatabaseWorkspace({
   lastRefreshTime,
   onExecution,
   onRefresh,
+  onSheetSaved,
 }: {
   connection: DatabaseConnection;
   activeTab: DatabaseWorkspaceTab;
@@ -459,23 +997,30 @@ export function DatabaseWorkspace({
   lastRefreshTime: string;
   onExecution: (record: DatabaseExecutionRecord) => void;
   onRefresh: () => void;
+  onSheetSaved: () => void;
 }): JSX.Element {
   return (
     <section className="database-screen resizable-panel-screen">
-      {activeTab === "connection" ? (
+      <div
+        className={`database-workspace-view${activeTab === "connection" ? " active" : ""}`}
+      >
         <ConnectionActionWorkspace
           connection={connection}
           onExecution={onExecution}
           onRefresh={onRefresh}
+          onSheetSaved={onSheetSaved}
         />
-      ) : (
+      </div>
+      <div
+        className={`database-workspace-view${activeTab === "monitor" ? " active" : ""}`}
+      >
         <DatabaseMonitor
           connection={connection}
           executionHistory={executionHistory}
           queryCount={queryCount}
           lastRefreshTime={lastRefreshTime}
         />
-      )}
+      </div>
     </section>
   );
 }
@@ -484,10 +1029,12 @@ function ConnectionActionWorkspace({
   connection,
   onExecution,
   onRefresh,
+  onSheetSaved,
 }: {
   connection: DatabaseConnection;
   onExecution: (record: DatabaseExecutionRecord) => void;
   onRefresh: () => void;
+  onSheetSaved: () => void;
 }): JSX.Element {
   const initialSheet = useMemo(() => createQuerySheet("Untitled-1"), []);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -515,36 +1062,12 @@ function ConnectionActionWorkspace({
   );
   const [renamingSheetId, setRenamingSheetId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
-  const [activeOutputTab, setActiveOutputTab] = useState<
-    "results" | "messages"
-  >("results");
-  const [resultRows, setResultRows] = useState<ResultRow[]>(SAMPLE_RESULT_ROWS);
-  const [resultMeta, setResultMeta] = useState<ResultMeta>({
-    rows: SAMPLE_RESULT_ROWS.length,
-    duration: "0.0 ms",
-    queriedAt: new Date().toISOString(),
-    status: "success",
-  });
-  const [resultPage, setResultPage] = useState(1);
-  const [resultPageSize, setResultPageSize] = useState(DEFAULT_PAGE_SIZE);
-  const [messages, setMessages] = useState<MessageEntry[]>([
-    {
-      id: "initial-message",
-      tone: "success",
-      text: "Ready. Mock execution is available for local UI development.",
-      time: new Date().toISOString(),
-    },
-  ]);
   const [explorerWidth, setExplorerWidth] = useState(DEFAULT_EXPLORER_WIDTH);
   const [editorHeight, setEditorHeight] = useState(DEFAULT_EDITOR_HEIGHT);
-  const [lastExecutionTarget, setLastExecutionTarget] =
-    useState<LastExecutionTarget | null>(null);
   const [isExecuting, setIsExecuting] = useState(false);
-
-  const completionData = useMemo(
-    () => createDatabaseCompletionData(SAMPLE_TABLES),
-    [],
-  );
+  const [metadataStateByConnection, setMetadataStateByConnection] = useState<
+    Record<string, DatabaseMetadataState>
+  >({});
 
   useEffect(() => {
     setSheetStateByConnection((current) => {
@@ -552,7 +1075,7 @@ function ConnectionActionWorkspace({
         return current;
       }
 
-      const sheet = createQuerySheet("Untitled-1");
+      const sheet = createQuerySheet("Untitled-1", "");
       return {
         ...current,
         [connection.id]: {
@@ -563,6 +1086,51 @@ function ConnectionActionWorkspace({
       };
     });
   }, [connection.id]);
+
+  useEffect(() => {
+    if (metadataStateByConnection[connection.id]) {
+      return;
+    }
+
+    let cancelled = false;
+    setMetadataStateByConnection((current) => ({
+      ...current,
+      [connection.id]: createLoadingMetadataState(
+        current[connection.id]?.metadata,
+      ),
+    }));
+
+    void fetchDatabaseMetadata(connection)
+      .then((metadataResult) => {
+        if (cancelled) {
+          return;
+        }
+        setMetadataStateByConnection((current) => ({
+          ...current,
+          [connection.id]: { status: "loaded", metadata: metadataResult },
+        }));
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setMetadataStateByConnection((current) => ({
+          ...current,
+          [connection.id]: {
+            status: "error",
+            metadata: current[connection.id]?.metadata ?? createMockMetadata(),
+            errorMessage:
+              error instanceof Error
+                ? error.message
+                : "Database metadata could not be loaded.",
+          },
+        }));
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connection]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -600,17 +1168,28 @@ function ConnectionActionWorkspace({
     openSheets.find((sheet) => sheet.id === sheetState.activeSheetId) ??
     openSheets[0] ??
     null;
+  const activeOutput = activeSheet?.output ?? createEmptySheetOutput();
+  const metadataState =
+    metadataStateByConnection[connection.id] ?? createIdleMetadataState();
+  const metadata = metadataState.metadata;
+  const metadataLoading = metadataState.status === "loading";
   const filteredTables = useMemo(() => {
     const normalized = filter.trim().toLowerCase();
     if (!normalized) {
-      return SAMPLE_TABLES;
+      return metadata.tables;
     }
-    return SAMPLE_TABLES.filter(
+    return metadata.tables.filter(
       (table) =>
-        table.name.includes(normalized) ||
-        table.columns.some((column) => column.name.includes(normalized)),
+        table.name.toLowerCase().includes(normalized) ||
+        table.columns.some((column) =>
+          column.name.toLowerCase().includes(normalized),
+        ),
     );
-  }, [filter]);
+  }, [filter, metadata.tables]);
+  const completionData = useMemo(
+    () => createDatabaseCompletionData(metadata.tables),
+    [metadata.tables],
+  );
 
   const gridStyle = {
     "--database-explorer-width": `${explorerWidth}px`,
@@ -626,9 +1205,64 @@ function ConnectionActionWorkspace({
     });
   }
 
+  function updateSheetOutput(
+    sheetId: string,
+    updater: (output: SheetOutputState) => SheetOutputState,
+  ): void {
+    updateCurrentConnectionState((state) => ({
+      ...state,
+      sheets: state.sheets.map((sheet) =>
+        sheet.id === sheetId
+          ? { ...sheet, output: updater(sheet.output) }
+          : sheet,
+      ),
+    }));
+  }
+
+  function updateActiveSheetOutput(
+    updater: (output: SheetOutputState) => SheetOutputState,
+  ): void {
+    if (!activeSheet) {
+      return;
+    }
+
+    updateSheetOutput(activeSheet.id, updater);
+  }
+
+  function refreshMetadata(): void {
+    setMetadataStateByConnection((current) => ({
+      ...current,
+      [connection.id]: createLoadingMetadataState(
+        current[connection.id]?.metadata,
+      ),
+    }));
+
+    void fetchDatabaseMetadata(connection)
+      .then((metadataResult) => {
+        setMetadataStateByConnection((current) => ({
+          ...current,
+          [connection.id]: { status: "loaded", metadata: metadataResult },
+        }));
+        onRefresh();
+      })
+      .catch((error: unknown) => {
+        setMetadataStateByConnection((current) => ({
+          ...current,
+          [connection.id]: {
+            status: "error",
+            metadata: current[connection.id]?.metadata ?? createMockMetadata(),
+            errorMessage:
+              error instanceof Error
+                ? error.message
+                : "Database metadata could not be loaded.",
+          },
+        }));
+      });
+  }
+
   function createNewSheet(): void {
     updateCurrentConnectionState((state) => {
-      const sheet = createQuerySheet(nextUntitledName(state.sheets));
+      const sheet = createQuerySheet(nextUntitledName(state.sheets), "");
       return {
         sheets: [...state.sheets, sheet],
         activeSheetId: sheet.id,
@@ -710,7 +1344,7 @@ function ConnectionActionWorkspace({
       const remaining = state.sheets.filter((sheet) => sheet.id !== sheetId);
 
       if (remaining.length === 0) {
-        const replacement = createQuerySheet("Untitled-1");
+        const replacement = createQuerySheet("Untitled-1", "");
         return {
           sheets: [replacement],
           activeSheetId: replacement.id,
@@ -796,31 +1430,34 @@ function ConnectionActionWorkspace({
       ...state,
       sheets: state.sheets.map((sheet) =>
         sheet.id === activeSheet.id
-          ? { ...sheet, savedName: sheet.name, savedSql: sheet.sql }
+          ? {
+              ...sheet,
+              savedName: sheet.name,
+              savedSql: sheet.sql,
+              output: prependSheetMessage(
+                sheet.output,
+                "success",
+                `${sheet.name} saved locally for this session.`,
+              ),
+            }
           : sheet,
       ),
     }));
-    setMessages((current) => [
-      {
-        id: `message-${Date.now()}`,
-        tone: "success",
-        text: `${activeSheet.name} saved locally for this session.`,
-        time: new Date().toISOString(),
-      },
-      ...current,
-    ]);
+    onSheetSaved();
   }
 
-  function addMessage(tone: MessageEntry["tone"], text: string): void {
-    setMessages((current) => [
-      {
-        id: `message-${Date.now()}-${Math.round(Math.random() * 10000)}`,
-        tone,
-        text,
-        time: new Date().toISOString(),
-      },
-      ...current,
-    ]);
+  function addMessage(
+    tone: MessageEntry["tone"],
+    text: string,
+    sheetId = activeSheet?.id,
+  ): void {
+    if (!sheetId) {
+      return;
+    }
+
+    updateSheetOutput(sheetId, (output) =>
+      prependSheetMessage(output, tone, text, true),
+    );
   }
 
   async function runMockQuery(
@@ -843,36 +1480,48 @@ function ConnectionActionWorkspace({
         query.length === 0 ||
         !/^\s*(select|desc|insert|update|delete)\b/i.test(query) ||
         /\b(error|fail|invalid)\b/i.test(query);
+      const isSelect = /^\s*(select|desc)\b/i.test(query);
+      const isEmptySelect = isSelect && /\b(limit\s+0|where\s+1\s*=\s*0)\b/i.test(query);
       const durationMs = Math.max(
         2,
         Date.now() - startedAt + 8 + Math.random() * 18,
       );
       const duration = `${durationMs.toFixed(1)} ms`;
-      const rows = isError ? 0 : SAMPLE_RESULT_ROWS.length;
+      const rows = isError || !isSelect || isEmptySelect ? 0 : SAMPLE_RESULT_ROWS.length;
       const status = isError ? "error" : "success";
       const now = new Date().toISOString();
       const errorMessage =
         "Mock SQL execution failed. Use a valid-looking SQL statement without error keywords.";
 
-      setResultRows(isError ? [] : SAMPLE_RESULT_ROWS);
-      setResultMeta({
-        rows,
-        duration,
-        queriedAt: now,
-        status,
-        errorMessage: isError ? errorMessage : undefined,
-      });
-      setResultPage(1);
-      addMessage(
-        status,
-        isError
-          ? errorMessage
-          : source === "reload"
-            ? `Last SQL fragment reloaded. ${rows} rows returned in ${duration}.`
-            : `Query executed successfully. ${rows} rows returned in ${duration}.`,
+      updateSheetOutput(sheetId, (output) =>
+        prependSheetMessage(
+          {
+            ...output,
+            hasExecuted: true,
+            activeOutputTab: isError || !isSelect ? "messages" : "results",
+            resultRows: isError || !isSelect || isEmptySelect ? [] : SAMPLE_RESULT_ROWS,
+            resultColumns: !isError && isSelect ? RESULT_COLUMNS : [],
+            resultMeta: {
+              hasRun: true,
+              rows,
+              duration,
+              queriedAt: now,
+              status,
+              errorMessage: isError ? errorMessage : undefined,
+            },
+            resultPage: 1,
+            lastExecutionTarget: { ...target, sheetId },
+          },
+          status,
+          isError
+            ? errorMessage
+            : !isSelect
+              ? `Statement executed successfully in ${duration}.`
+            : source === "reload"
+              ? `Last SQL fragment reloaded. ${rows} rows returned in ${duration}.`
+              : `Query executed successfully. ${rows} rows returned in ${duration}.`,
+        ),
       );
-      setActiveOutputTab(isError ? "messages" : "results");
-      setLastExecutionTarget({ ...target, sheetId });
 
       // TODO: replace mock SQL execution with a backend/main-process database executor.
       onExecution({
@@ -893,31 +1542,36 @@ function ConnectionActionWorkspace({
 
   const executeFromEditorView = useCallback(
     (view: EditorView): void => {
-      if (!activeSheet || executingRef.current) {
+      if (!activeSheet || executingRef.current || metadataLoading) {
         return;
       }
 
       const target = getExecutionTarget(view.state);
       if (!target) {
-        addMessage(
-          "error",
-          "No executable SQL statement was found at the cursor.",
-        );
-        setActiveOutputTab("messages");
+        addMessage("error", "No executable SQL statement was found at the cursor.");
+        updateActiveSheetOutput((output) => ({
+          ...output,
+          hasExecuted: true,
+          activeOutputTab: "messages",
+        }));
         return;
       }
 
       view.dispatch({ effects: setExecutedSqlRange.of(target) });
       void runMockQuery(target, activeSheet.id, "execute");
     },
-    [activeSheet, connection.name, connection.user],
+    [activeSheet, connection.name, connection.user, metadataLoading],
   );
 
   function executeFromActiveEditor(): void {
     const view = editorViewRef.current;
     if (!view) {
       addMessage("error", "SQL editor is not ready yet.");
-      setActiveOutputTab("messages");
+      updateActiveSheetOutput((output) => ({
+        ...output,
+        hasExecuted: true,
+        activeOutputTab: "messages",
+      }));
       return;
     }
 
@@ -925,24 +1579,30 @@ function ConnectionActionWorkspace({
   }
 
   function reloadLastExecution(): void {
-    if (executingRef.current) {
+    if (executingRef.current || metadataLoading) {
       return;
     }
 
-    if (!lastExecutionTarget) {
+    if (!activeOutput.lastExecutionTarget) {
       addMessage("error", "No previous SQL execution is available to reload.");
-      setActiveOutputTab("messages");
+      updateActiveSheetOutput((output) => ({
+        ...output,
+        hasExecuted: true,
+        activeOutputTab: "messages",
+      }));
       return;
     }
 
     const view = editorViewRef.current;
-    if (view && activeSheet?.id === lastExecutionTarget.sheetId) {
-      view.dispatch({ effects: setExecutedSqlRange.of(lastExecutionTarget) });
+    if (view && activeSheet?.id === activeOutput.lastExecutionTarget.sheetId) {
+      view.dispatch({
+        effects: setExecutedSqlRange.of(activeOutput.lastExecutionTarget),
+      });
     }
 
     void runMockQuery(
-      lastExecutionTarget,
-      lastExecutionTarget.sheetId,
+      activeOutput.lastExecutionTarget,
+      activeOutput.lastExecutionTarget.sheetId,
       "reload",
     );
   }
@@ -1079,9 +1739,14 @@ function ConnectionActionWorkspace({
             type="button"
             aria-label="Refresh database objects"
             title="Refresh database objects"
-            onClick={onRefresh}
+            onClick={refreshMetadata}
+            disabled={metadataLoading}
           >
-            <RefreshCcw size={16} />
+            {metadataLoading ? (
+              <LoaderCircle className="button-spinner" size={16} />
+            ) : (
+              <RefreshCcw size={16} />
+            )}
           </button>
         }
       >
@@ -1105,11 +1770,35 @@ function ConnectionActionWorkspace({
         </label> */}
 
         <div className="database-object-tree">
-          <ObjectTreeGroup title="Schemas" defaultOpen>
-            <div className="database-tree-item schema-item">
-              <Database size={15} />
-              <span>sakila</span>
+          {metadataLoading ? (
+            <div className="database-object-state">
+              <LoaderCircle className="button-spinner" size={18} />
+              <span>Loading database objects...</span>
             </div>
+          ) : null}
+          {metadataState.status === "error" ? (
+            <div className="database-object-state error">
+              <span>{metadataState.errorMessage}</span>
+              <button
+                className="button secondary compact"
+                type="button"
+                onClick={refreshMetadata}
+              >
+                Retry
+              </button>
+            </div>
+          ) : null}
+          <ObjectTreeGroup title="Schemas" defaultOpen>
+            {metadata.schemas.length > 0 ? (
+              metadata.schemas.map((schema) => (
+                <div className="database-tree-item schema-item" key={schema}>
+                  <Database size={15} />
+                  <span>{schema}</span>
+                </div>
+              ))
+            ) : (
+              <div className="database-tree-empty">No schemas loaded.</div>
+            )}
           </ObjectTreeGroup>
           <ObjectTreeGroup
             title="Sheets"
@@ -1156,7 +1845,7 @@ function ConnectionActionWorkspace({
             })}
           </ObjectTreeGroup>
           <ObjectTreeGroup
-            title={`Tables (${SAMPLE_TABLES.length})`}
+            title={`Tables (${metadata.tables.length})`}
             defaultOpen
           >
             {filteredTables.length > 0 ? (
@@ -1168,10 +1857,28 @@ function ConnectionActionWorkspace({
             )}
           </ObjectTreeGroup>
           <ObjectTreeGroup title="Views">
-            <div className="database-tree-empty">No dummy views.</div>
+            {metadata.views.length > 0 ? (
+              metadata.views.map((viewName) => (
+                <div className="database-tree-item" key={viewName}>
+                  <Table2 size={15} />
+                  <span>{viewName}</span>
+                </div>
+              ))
+            ) : (
+              <div className="database-tree-empty">No views loaded.</div>
+            )}
           </ObjectTreeGroup>
           <ObjectTreeGroup title="Procedures / Functions">
-            <div className="database-tree-empty">Not configured.</div>
+            {metadata.routines.length > 0 ? (
+              metadata.routines.map((routine) => (
+                <div className="database-tree-item" key={routine}>
+                  <Cpu size={15} />
+                  <span>{routine}</span>
+                </div>
+              ))
+            ) : (
+              <div className="database-tree-empty">No routines loaded.</div>
+            )}
           </ObjectTreeGroup>
         </div>
       </Panel>
@@ -1188,10 +1895,21 @@ function ConnectionActionWorkspace({
       />
 
       <section
-        className="panel database-query-panel"
+        className={`panel database-query-panel${metadataLoading ? " loading" : ""}${
+          activeOutput.hasExecuted ? " has-output" : " no-output"
+        }`}
         ref={queryPanelRef}
         style={gridStyle}
         onPointerDown={clearExecutedSqlHighlight}
+        onKeyDown={(event) => {
+          if (
+            (event.ctrlKey || event.metaKey) &&
+            event.key.toLowerCase() === "s"
+          ) {
+            event.preventDefault();
+            saveActiveSheet();
+          }
+        }}
       >
         <div className="query-workspace-header">
           <div
@@ -1246,7 +1964,7 @@ function ConnectionActionWorkspace({
               className="button primary compact"
               type="button"
               onClick={executeFromActiveEditor}
-              disabled={!activeSheet || isExecuting}
+              disabled={!activeSheet || isExecuting || metadataLoading}
             >
               {isExecuting ? (
                 <LoaderCircle className="button-spinner" size={15} />
@@ -1262,22 +1980,31 @@ function ConnectionActionWorkspace({
           value={activeSheet?.sql ?? ""}
           onChange={updateActiveSheetSql}
           onExecute={executeFromEditorView}
+          onSave={saveActiveSheet}
           onViewReady={(view) => {
             editorViewRef.current = view;
           }}
           completionData={completionData}
         />
-        <div
-          className="grid-splitter row-splitter database-editor-result-splitter"
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize SQL editor and results area"
-          onPointerDown={startEditorResize}
-          onPointerMove={resizeEditorLayout}
-          onPointerUp={stopEditorResize}
-          onPointerCancel={stopEditorResize}
-        />
-        <div className="database-output-panel">
+        {metadataLoading ? (
+          <div className="database-workspace-loading-overlay">
+            <LoaderCircle className="button-spinner" size={18} />
+            <span>Loading metadata...</span>
+          </div>
+        ) : null}
+        {activeOutput.hasExecuted ? (
+          <>
+            <div
+              className="grid-splitter row-splitter database-editor-result-splitter"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize SQL editor and results area"
+              onPointerDown={startEditorResize}
+              onPointerMove={resizeEditorLayout}
+              onPointerUp={stopEditorResize}
+              onPointerCancel={stopEditorResize}
+            />
+            <div className="database-output-panel">
           <div className="database-output-toolbar">
             <div
               className="database-output-tabs"
@@ -1285,22 +2012,38 @@ function ConnectionActionWorkspace({
               aria-label="Query output"
             >
               <button
-                className={activeOutputTab === "results" ? "active" : undefined}
+                className={
+                  activeOutput.activeOutputTab === "results"
+                    ? "active"
+                    : undefined
+                }
                 type="button"
                 role="tab"
-                aria-selected={activeOutputTab === "results"}
-                onClick={() => setActiveOutputTab("results")}
+                aria-selected={activeOutput.activeOutputTab === "results"}
+                onClick={() =>
+                  updateActiveSheetOutput((output) => ({
+                    ...output,
+                    activeOutputTab: "results",
+                  }))
+                }
               >
                 Results
               </button>
               <button
                 className={
-                  activeOutputTab === "messages" ? "active" : undefined
+                  activeOutput.activeOutputTab === "messages"
+                    ? "active"
+                    : undefined
                 }
                 type="button"
                 role="tab"
-                aria-selected={activeOutputTab === "messages"}
-                onClick={() => setActiveOutputTab("messages")}
+                aria-selected={activeOutput.activeOutputTab === "messages"}
+                onClick={() =>
+                  updateActiveSheetOutput((output) => ({
+                    ...output,
+                    activeOutputTab: "messages",
+                  }))
+                }
               >
                 Messages
               </button>
@@ -1311,27 +2054,49 @@ function ConnectionActionWorkspace({
               aria-label="Reload results"
               title="Reload results"
               onClick={reloadLastExecution}
-              disabled={!lastExecutionTarget || isExecuting}
+              disabled={
+                !activeOutput.lastExecutionTarget ||
+                isExecuting ||
+                metadataLoading
+              }
             >
               <RefreshCcw size={15} />
             </button>
           </div>
-          {activeOutputTab === "results" ? (
+          {activeOutput.activeOutputTab === "results" ? (
             <ResultGrid
-              rows={resultRows}
-              meta={resultMeta}
-              page={resultPage}
-              pageSize={resultPageSize}
-              onPageChange={setResultPage}
+              rows={activeOutput.resultRows}
+              columns={activeOutput.resultColumns}
+              meta={activeOutput.resultMeta}
+              page={activeOutput.resultPage}
+              pageSize={activeOutput.resultPageSize}
+              columnWidths={activeOutput.resultColumnWidths}
+              onColumnWidthsChange={(columnWidths) =>
+                updateActiveSheetOutput((output) => ({
+                  ...output,
+                  resultColumnWidths: columnWidths,
+                }))
+              }
+              onPageChange={(resultPage) =>
+                updateActiveSheetOutput((output) => ({
+                  ...output,
+                  resultPage,
+                }))
+              }
               onPageSizeChange={(pageSize) => {
-                setResultPageSize(pageSize);
-                setResultPage(1);
+                updateActiveSheetOutput((output) => ({
+                  ...output,
+                  resultPageSize: pageSize,
+                  resultPage: 1,
+                }));
               }}
             />
           ) : (
-            <MessageLog messages={messages} />
+            <MessageLog messages={activeOutput.messages} />
           )}
-        </div>
+            </div>
+          </>
+        ) : null}
       </section>
 
       {contextMenu ? (
@@ -1521,6 +2286,7 @@ function SqlEditor({
   value,
   onChange,
   onExecute,
+  onSave,
   onViewReady,
   completionData,
 }: {
@@ -1528,6 +2294,7 @@ function SqlEditor({
   value: string;
   onChange: (value: string) => void;
   onExecute: (view: EditorView) => void;
+  onSave: () => void;
   onViewReady: (view: EditorView) => void;
   completionData: DatabaseCompletionData;
 }): JSX.Element {
@@ -1535,14 +2302,16 @@ function SqlEditor({
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
   const onExecuteRef = useRef(onExecute);
+  const onSaveRef = useRef(onSave);
   const completionDataRef = useRef(completionData);
   const activeSheetIdRef = useRef(sheetId);
 
   useEffect(() => {
     onChangeRef.current = onChange;
     onExecuteRef.current = onExecute;
+    onSaveRef.current = onSave;
     completionDataRef.current = completionData;
-  }, [completionData, onChange, onExecute]);
+  }, [completionData, onChange, onExecute, onSave]);
 
   useEffect(() => {
     const host = editorHostRef.current;
@@ -1560,6 +2329,7 @@ function SqlEditor({
             onChangeRef.current(nextValue);
           },
           (view) => onExecuteRef.current(view),
+          () => onSaveRef.current(),
         ),
       }),
     });
@@ -1603,29 +2373,66 @@ function SqlEditor({
 
 function ResultGrid({
   rows,
+  columns,
   meta,
   page,
   pageSize,
+  columnWidths,
+  onColumnWidthsChange,
   onPageChange,
   onPageSizeChange,
 }: {
   rows: ResultRow[];
+  columns: ResultColumn[];
   meta: ResultMeta;
   page: number;
   pageSize: number;
+  columnWidths: Partial<Record<ResultColumnKey, number>>;
+  onColumnWidthsChange: (
+    columnWidths: Partial<Record<ResultColumnKey, number>>,
+  ) => void;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
 }): JSX.Element {
+  const resultScrollRef = useRef<HTMLDivElement>(null);
   const columnDragRef = useRef<ResultColumnDragState | null>(null);
-  const [columnWidths, setColumnWidths] = useState<
-    Record<ResultColumnKey, number>
-  >(DEFAULT_RESULT_COLUMN_WIDTHS);
+  const [panelWidth, setPanelWidth] = useState(0);
+  const hasColumns = columns.length > 0;
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
   const currentPage = clamp(page, 1, pageCount);
   const pageRows = rows.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
+  const calculatedColumns = useMemo(
+    () => calculateResultColumnWidths(columns, panelWidth, columnWidths),
+    [columns, panelWidth, columnWidths],
+  );
+  const totalColumnWidth = calculatedColumns.reduce(
+    (total, column) => total + column.width,
+    0,
+  );
+  const tableWidth =
+    panelWidth > 0 && totalColumnWidth <= panelWidth
+      ? "100%"
+      : `${totalColumnWidth}px`;
+
+  useEffect(() => {
+    const element = resultScrollRef.current;
+    if (!element) {
+      return undefined;
+    }
+
+    setPanelWidth(element.clientWidth);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) {
+        setPanelWidth(entry.contentRect.width);
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const startColumnResize = (
     column: ResultColumn,
@@ -1637,7 +2444,9 @@ function ResultGrid({
     columnDragRef.current = {
       key: column.key,
       startX: event.clientX,
-      startWidth: columnWidths[column.key],
+      startWidth:
+        calculatedColumns.find((item) => item.key === column.key)?.width ??
+        column.minWidth,
     };
   };
 
@@ -1647,18 +2456,18 @@ function ResultGrid({
       return;
     }
 
-    const column = RESULT_COLUMNS.find((item) => item.key === drag.key);
+    const column = columns.find((item) => item.key === drag.key);
     if (!column) {
       return;
     }
 
-    setColumnWidths((current) => ({
-      ...current,
+    onColumnWidthsChange({
+      ...columnWidths,
       [drag.key]: Math.max(
         column.minWidth,
         drag.startWidth + event.clientX - drag.startX,
       ),
-    }));
+    });
   };
 
   const stopColumnResize = (event: PointerEvent<HTMLSpanElement>): void => {
@@ -1671,21 +2480,28 @@ function ResultGrid({
     columnDragRef.current = null;
   };
 
+  const resetColumnWidth = (column: ResultColumn): void => {
+    const next = { ...columnWidths };
+    delete next[column.key];
+    onColumnWidthsChange(next);
+  };
+
   return (
     <div className="database-result-region">
-      <div className="database-result-scroll">
-        <table className="recent-builds-table database-result-table">
+      <div className="database-result-scroll" ref={resultScrollRef}>
+        {hasColumns ? (
+          <table
+            className="recent-builds-table database-result-table"
+            style={{ width: tableWidth, minWidth: tableWidth }}
+          >
           <colgroup>
-            {RESULT_COLUMNS.map((column) => (
-              <col
-                key={column.key}
-                style={{ width: `${columnWidths[column.key]}px` }}
-              />
+            {calculatedColumns.map((column) => (
+              <col key={column.key} style={{ width: `${column.width}px` }} />
             ))}
           </colgroup>
           <thead>
             <tr>
-              {RESULT_COLUMNS.map((column) => (
+              {columns.map((column) => (
                 <th key={column.key}>
                   <span className="database-result-th-content">
                     {column.label}
@@ -1700,6 +2516,7 @@ function ResultGrid({
                       onPointerMove={resizeColumn}
                       onPointerUp={stopColumnResize}
                       onPointerCancel={stopColumnResize}
+                      onDoubleClick={() => resetColumnWidth(column)}
                     >
                       <ArrowLeftRight size={13} />
                     </span>
@@ -1711,7 +2528,7 @@ function ResultGrid({
           <tbody>
             {pageRows.map((row) => (
               <tr key={row.actor_id}>
-                {RESULT_COLUMNS.map((column) => (
+                {columns.map((column) => (
                   <td key={`${row.actor_id}-${column.key}`}>
                     {row[column.key]}
                   </td>
@@ -1719,7 +2536,8 @@ function ResultGrid({
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        ) : null}
         {rows.length === 0 ? (
           <p className="database-empty-state">No result rows.</p>
         ) : null}
@@ -1728,28 +2546,30 @@ function ResultGrid({
         className={`database-result-footer${meta.status === "error" ? " error" : ""}`}
       >
         <span className="database-result-footer-summary">
-          {meta.status === "error"
-            ? `Error · ${meta.errorMessage ?? "Execution failed"}`
-            : `${meta.rows} rows fetched · Page ${currentPage} of ${pageCount} · ${meta.duration}`}
+          {!meta.hasRun
+            ? "No query executed for this sheet"
+            : meta.status === "error"
+              ? `Error · ${meta.errorMessage ?? "Execution failed"}`
+              : `${meta.rows} rows fetched · Page ${currentPage} of ${pageCount} · ${meta.duration}`}
         </span>
-        <time>{formatCompactTime(meta.queriedAt)}</time>
+        <time>{meta.hasRun ? formatCompactTime(meta.queriedAt) : ""}</time>
         <div className="database-pagination-controls">
-          <select
-            value={pageSize}
-            aria-label="Result page size"
-            onChange={(event) => onPageSizeChange(Number(event.target.value))}
-            disabled={meta.status === "error"}
-          >
-            {[5, 10, 25].map((size) => (
-              <option value={size} key={size}>{`${size} rows`}</option>
-            ))}
-          </select>
+          <AppSelect
+            className="database-page-size-select"
+            value={String(pageSize)}
+            ariaLabel="Result page size"
+            options={PAGE_SIZE_OPTIONS}
+            onChange={(nextPageSize) => onPageSizeChange(Number(nextPageSize))}
+            disabled={!meta.hasRun || meta.status === "error"}
+          />
           <button
             className="icon-button secondary"
             type="button"
             aria-label="Previous result page"
             title="Previous result page"
-            disabled={meta.status === "error" || currentPage <= 1}
+            disabled={
+              !meta.hasRun || meta.status === "error" || currentPage <= 1
+            }
             onClick={() => onPageChange(Math.max(1, currentPage - 1))}
           >
             <ChevronLeft size={15} />
@@ -1759,7 +2579,11 @@ function ResultGrid({
             type="button"
             aria-label="Next result page"
             title="Next result page"
-            disabled={meta.status === "error" || currentPage >= pageCount}
+            disabled={
+              !meta.hasRun ||
+              meta.status === "error" ||
+              currentPage >= pageCount
+            }
             onClick={() => onPageChange(Math.min(pageCount, currentPage + 1))}
           >
             <ChevronRight size={15} />
@@ -1773,6 +2597,9 @@ function ResultGrid({
 function MessageLog({ messages }: { messages: MessageEntry[] }): JSX.Element {
   return (
     <div className="database-message-log">
+      {messages.length === 0 ? (
+        <p className="database-empty-state">No messages for this sheet.</p>
+      ) : null}
       {messages.map((message) => (
         <div className={`database-message ${message.tone}`} key={message.id}>
           <time>{formatCompactTime(message.time)}</time>
@@ -1957,6 +2784,194 @@ function StatusPill({
   return <span className={`status-pill ${className}`}>{label}</span>;
 }
 
+function createConnectionDraft(
+  connection?: DatabaseConnection | null,
+): DatabaseConnectionDraft {
+  if (connection) {
+    return {
+      id: connection.id,
+      name: connection.name,
+      type: connection.type,
+      host: connection.host,
+      port: connection.port,
+      user: connection.user,
+      password: connection.password ?? "",
+      savePassword: connection.savePassword ?? true,
+      connectionTimeoutSeconds: String(
+        Math.round((connection.connectionTimeoutMs ?? 10000) / 1000),
+      ),
+      database: connection.database ?? connection.schema ?? "",
+      sslMode: connection.sslMode ?? "disabled",
+      connectionMode: connection.connectionMode ?? "serviceName",
+      serviceName: connection.serviceName ?? connection.schema ?? "",
+      sid: connection.sid ?? "",
+      connectString: connection.connectString ?? "",
+      role: connection.role ?? "",
+      walletPath: connection.walletPath ?? "",
+    };
+  }
+
+  return {
+    name: "",
+    type: "MySQL",
+    host: "localhost",
+    port: "3306",
+    user: "",
+    password: "",
+    savePassword: true,
+    connectionTimeoutSeconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
+    database: "",
+    sslMode: "disabled",
+    connectionMode: "serviceName",
+    serviceName: "XEPDB1",
+    sid: "",
+    connectString: "",
+    role: "",
+    walletPath: "",
+  };
+}
+
+function areConnectionDraftsEqual(
+  first: DatabaseConnectionDraft,
+  second: DatabaseConnectionDraft,
+): boolean {
+  const keys: Array<keyof DatabaseConnectionDraft> = [
+    "name",
+    "type",
+    "host",
+    "port",
+    "user",
+    "password",
+    "savePassword",
+    "connectionTimeoutSeconds",
+    "database",
+    "sslMode",
+    "connectionMode",
+    "serviceName",
+    "sid",
+    "connectString",
+    "role",
+    "walletPath",
+  ];
+
+  return keys.every((key) => first[key] === second[key]);
+}
+
+function validateConnectionDraft(
+  draft: DatabaseConnectionDraft,
+  connections: DatabaseConnection[],
+  editingConnectionId?: string,
+): ConnectionFormErrors {
+  const errors: ConnectionFormErrors = {};
+  const trimmedName = draft.name.trim();
+  const duplicateName = connections.some(
+    (connection) =>
+      connection.id !== editingConnectionId &&
+      connection.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+  );
+
+  if (!trimmedName) {
+    errors.name = "Required";
+  } else if (duplicateName) {
+    errors.name = "Must be unique";
+  }
+
+  if (!draft.type) {
+    errors.type = "Required";
+  }
+
+  if (!(draft.type === "Oracle" && draft.connectionMode === "connectString")) {
+    if (!draft.host.trim()) {
+      errors.host = "Required";
+    }
+  }
+
+  if (!draft.port.trim()) {
+    errors.port = "Required";
+  } else if (!/^\d+$/.test(draft.port.trim())) {
+    errors.port = "Use numbers only";
+  }
+
+  if (!draft.user.trim()) {
+    errors.user = "Required";
+  }
+
+  if (!draft.password) {
+    errors.password = "Required";
+  }
+
+  if (
+    draft.connectionTimeoutSeconds.trim() &&
+    (!/^\d+$/.test(draft.connectionTimeoutSeconds.trim()) ||
+      Number(draft.connectionTimeoutSeconds) <= 0)
+  ) {
+    errors.connectionTimeoutSeconds = "Use a positive number";
+  }
+
+  if (draft.type === "Oracle") {
+    if (draft.connectionMode === "serviceName" && !draft.serviceName.trim()) {
+      errors.serviceName = "Required";
+    }
+    if (draft.connectionMode === "sid" && !draft.sid.trim()) {
+      errors.sid = "Required";
+    }
+    if (
+      draft.connectionMode === "connectString" &&
+      !draft.connectString.trim()
+    ) {
+      errors.connectString = "Required";
+    }
+  }
+
+  return errors;
+}
+
+function createConnectionFromDraft(
+  draft: DatabaseConnectionDraft,
+  existing?: DatabaseConnection | null,
+): DatabaseConnection {
+  const timeoutSeconds = draft.connectionTimeoutSeconds.trim()
+    ? Number(draft.connectionTimeoutSeconds)
+    : Number(DEFAULT_CONNECTION_TIMEOUT_SECONDS);
+  const schema =
+    draft.type === "MySQL"
+      ? draft.database.trim()
+      : draft.connectionMode === "sid"
+        ? draft.sid.trim()
+        : draft.connectionMode === "connectString"
+          ? draft.connectString.trim()
+          : draft.serviceName.trim();
+
+  // TODO: store saved passwords in secure Electron/OS credential storage.
+  return {
+    ...(existing ?? {}),
+    id:
+      existing?.id ??
+      `database-${Date.now()}-${Math.round(Math.random() * 10000)}`,
+    name: draft.name.trim(),
+    type: draft.type,
+    status: existing?.status ?? "connected",
+    host: draft.host.trim(),
+    port: draft.port.trim(),
+    user: draft.user.trim(),
+    password: draft.password,
+    savePassword: draft.savePassword,
+    connectionTimeoutMs: timeoutSeconds * 1000,
+    database: draft.database.trim(),
+    schema,
+    sslMode: draft.sslMode,
+    connectionMode: draft.connectionMode,
+    serviceName: draft.serviceName.trim(),
+    sid: draft.sid.trim(),
+    connectString: draft.connectString.trim(),
+    role: draft.role.trim(),
+    walletPath: draft.walletPath.trim(),
+    latency: existing?.latency ?? "Not tested",
+    uptime: existing?.uptime ?? "Session",
+    activeSessions: existing?.activeSessions ?? 1,
+  };
+}
+
 function createQuerySheet(name: string, sql = DEFAULT_SQL): QuerySheet {
   querySheetSequence += 1;
   return {
@@ -1965,6 +2980,102 @@ function createQuerySheet(name: string, sql = DEFAULT_SQL): QuerySheet {
     sql,
     savedName: name,
     savedSql: sql,
+    output: createEmptySheetOutput(),
+  };
+}
+
+function createEmptySheetOutput(): SheetOutputState {
+  return {
+    hasExecuted: false,
+    activeOutputTab: "results",
+    resultRows: [],
+    resultColumns: [],
+    resultMeta: {
+      rows: 0,
+      duration: "0.0 ms",
+      queriedAt: new Date().toISOString(),
+      hasRun: false,
+      status: "success",
+    },
+    resultPage: 1,
+    resultPageSize: DEFAULT_PAGE_SIZE,
+    resultColumnWidths: {},
+    messages: [],
+    lastExecutionTarget: null,
+  };
+}
+
+function prependSheetMessage(
+  output: SheetOutputState,
+  tone: MessageEntry["tone"],
+  text: string,
+  markExecuted = false,
+): SheetOutputState {
+  return {
+    ...output,
+    hasExecuted: output.hasExecuted || markExecuted,
+    messages: [
+      {
+        id: `message-${Date.now()}-${Math.round(Math.random() * 10000)}`,
+        tone,
+        text,
+        time: new Date().toISOString(),
+      },
+      ...output.messages,
+    ],
+  };
+}
+
+function createMockMetadata(): DatabaseMetadata {
+  return {
+    schemas: ["sakila"],
+    tables: SAMPLE_TABLES,
+    views: ["actor_info", "customer_list", "film_list"],
+    routines: ["rewards_report", "get_customer_balance"],
+  };
+}
+
+function createIdleMetadataState(): DatabaseMetadataState {
+  return { status: "idle", metadata: createMockMetadata() };
+}
+
+function createLoadingMetadataState(
+  metadata = createMockMetadata(),
+): DatabaseMetadataState {
+  return { status: "loading", metadata };
+}
+
+async function fetchDatabaseMetadata(
+  connection: DatabaseConnection,
+): Promise<DatabaseMetadata> {
+  type OptionalDatabaseApi = typeof window.ivsDashboard & {
+    getDatabaseMetadata?: (
+      connection: DatabaseConnection,
+    ) => Promise<Partial<DatabaseMetadata>>;
+  };
+  const api = window.ivsDashboard as OptionalDatabaseApi;
+
+  if (api.getDatabaseMetadata) {
+    const metadata = await api.getDatabaseMetadata(connection);
+    return normalizeDatabaseMetadata(metadata);
+  }
+
+  // TODO: replace this fallback when the Electron database introspection API is available.
+  await new Promise((resolve) => window.setTimeout(resolve, 220));
+  return createMockMetadata();
+}
+
+function normalizeDatabaseMetadata(
+  metadata: Partial<DatabaseMetadata>,
+): DatabaseMetadata {
+  const fallback = createMockMetadata();
+  return {
+    schemas: Array.isArray(metadata.schemas)
+      ? metadata.schemas
+      : fallback.schemas,
+    tables: Array.isArray(metadata.tables) ? metadata.tables : fallback.tables,
+    views: Array.isArray(metadata.views) ? metadata.views : [],
+    routines: Array.isArray(metadata.routines) ? metadata.routines : [],
   };
 }
 
@@ -1993,6 +3104,7 @@ function createSqlEditorExtensions(
   getCompletionData: () => DatabaseCompletionData,
   onChange: (value: string) => void,
   onExecute: (view: EditorView) => void,
+  onSave: () => void,
 ): Extension[] {
   return [
     basicSetup,
@@ -2020,6 +3132,20 @@ function createSqlEditorExtensions(
     }),
     Prec.highest(
       keymap.of([
+        {
+          key: "Mod-s",
+          run() {
+            onSave();
+            return true;
+          },
+        },
+        {
+          key: "Ctrl-s",
+          run() {
+            onSave();
+            return true;
+          },
+        },
         {
           key: "Ctrl-Enter",
           run(view) {
@@ -2253,6 +3379,63 @@ function buildSqlCompletionOptions(
   return [...keywordOptions, ...tableOptions, ...columnOptions];
 }
 
+function calculateResultColumnWidths(
+  columns: ResultColumn[],
+  panelWidth: number,
+  userColumnWidths: Partial<Record<ResultColumnKey, number>>,
+): Array<ResultColumn & { width: number }> {
+  const userSizedColumns = columns.filter(
+    (column) => userColumnWidths[column.key] !== undefined,
+  );
+  const autoColumns = columns.filter(
+    (column) => userColumnWidths[column.key] === undefined,
+  );
+  const userSizedTotal = userSizedColumns.reduce(
+    (total, column) =>
+      total + Math.max(column.minWidth, userColumnWidths[column.key] ?? 0),
+    0,
+  );
+  const autoMinimumTotal = autoColumns.reduce(
+    (total, column) => total + column.minWidth,
+    0,
+  );
+  const fallbackPanelWidth = columns.reduce(
+    (total, column) => total + column.minWidth * column.weight,
+    0,
+  );
+  const availableWidth = Math.max(panelWidth || fallbackPanelWidth, 0);
+  const autoAvailableWidth = Math.max(
+    autoMinimumTotal,
+    availableWidth - userSizedTotal,
+  );
+  const evenlyDistributeAutoColumns =
+    autoColumns.length > 0 &&
+    autoColumns.every((column) => column.kind === autoColumns[0].kind);
+  const totalWeight = evenlyDistributeAutoColumns
+    ? autoColumns.length
+    : autoColumns.reduce((total, column) => total + column.weight, 0) || 1;
+
+  return columns.map((column) => {
+    const userWidth = userColumnWidths[column.key];
+    if (userWidth !== undefined) {
+      return { ...column, width: Math.max(column.minWidth, userWidth) };
+    }
+
+    if (autoColumns.length === 0) {
+      return { ...column, width: column.minWidth };
+    }
+
+    const weight = evenlyDistributeAutoColumns ? 1 : column.weight;
+    return {
+      ...column,
+      width: Math.max(
+        column.minWidth,
+        (autoAvailableWidth * weight) / totalWeight,
+      ),
+    };
+  });
+}
+
 function formatSqlForDisplay(query: string): string {
   const normalized = query.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -2282,11 +3465,12 @@ function formatCompactTime(value: string): string {
     return "Not available";
   }
 
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(date);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
