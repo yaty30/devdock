@@ -21,7 +21,10 @@ import {
   SquareTerminal,
 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
-import { AppSelect, type AppSelectOption } from "../../components/common/AppSelect";
+import {
+  AppSelect,
+  type AppSelectOption,
+} from "../../components/common/AppSelect";
 import type {
   ActivityRecord,
   BuildQuerySortKey,

@@ -7,7 +7,10 @@ import {
 } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
-import { AppSelect, type AppSelectOption } from "../../components/common/AppSelect";
+import {
+  AppSelect,
+  type AppSelectOption,
+} from "../../components/common/AppSelect";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {
   BuildOutcomeType,

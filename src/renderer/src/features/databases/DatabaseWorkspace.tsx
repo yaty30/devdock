@@ -52,7 +52,10 @@ import {
   X,
 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
-import { AppSelect, type AppSelectOption } from "../../components/common/AppSelect";
+import {
+  AppSelect,
+  type AppSelectOption,
+} from "../../components/common/AppSelect";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Modal } from "../../components/dialogs/Modal";
 import type {
@@ -252,9 +255,7 @@ const DATABASE_OUTPUT_MIN_HEIGHT = 160;
 const DATABASE_EDITOR_SPLITTER_SIZE = 14;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS = "10";
 
-const DATABASE_TYPE_OPTIONS: Array<
-  AppSelectOption<DatabaseConnectionType>
-> = [
+const DATABASE_TYPE_OPTIONS: Array<AppSelectOption<DatabaseConnectionType>> = [
   { value: "MySQL", label: "MySQL", dotColor: "#2563eb" },
   { value: "Oracle", label: "Oracle", dotColor: "#ef4444" },
 ];
@@ -265,9 +266,7 @@ const MYSQL_SSL_OPTIONS: Array<AppSelectOption<DatabaseSslMode>> = [
   { value: "required", label: "Required" },
 ];
 
-const ORACLE_CONNECTION_MODES: Array<
-  AppSelectOption<OracleConnectionMode>
-> = [
+const ORACLE_CONNECTION_MODES: Array<AppSelectOption<OracleConnectionMode>> = [
   { value: "serviceName", label: "Service name" },
   { value: "sid", label: "SID" },
   { value: "connectString", label: "Connection string" },
@@ -1481,13 +1480,15 @@ function ConnectionActionWorkspace({
         !/^\s*(select|desc|insert|update|delete)\b/i.test(query) ||
         /\b(error|fail|invalid)\b/i.test(query);
       const isSelect = /^\s*(select|desc)\b/i.test(query);
-      const isEmptySelect = isSelect && /\b(limit\s+0|where\s+1\s*=\s*0)\b/i.test(query);
+      const isEmptySelect =
+        isSelect && /\b(limit\s+0|where\s+1\s*=\s*0)\b/i.test(query);
       const durationMs = Math.max(
         2,
         Date.now() - startedAt + 8 + Math.random() * 18,
       );
       const duration = `${durationMs.toFixed(1)} ms`;
-      const rows = isError || !isSelect || isEmptySelect ? 0 : SAMPLE_RESULT_ROWS.length;
+      const rows =
+        isError || !isSelect || isEmptySelect ? 0 : SAMPLE_RESULT_ROWS.length;
       const status = isError ? "error" : "success";
       const now = new Date().toISOString();
       const errorMessage =
@@ -1499,7 +1500,8 @@ function ConnectionActionWorkspace({
             ...output,
             hasExecuted: true,
             activeOutputTab: isError || !isSelect ? "messages" : "results",
-            resultRows: isError || !isSelect || isEmptySelect ? [] : SAMPLE_RESULT_ROWS,
+            resultRows:
+              isError || !isSelect || isEmptySelect ? [] : SAMPLE_RESULT_ROWS,
             resultColumns: !isError && isSelect ? RESULT_COLUMNS : [],
             resultMeta: {
               hasRun: true,
@@ -1517,9 +1519,9 @@ function ConnectionActionWorkspace({
             ? errorMessage
             : !isSelect
               ? `Statement executed successfully in ${duration}.`
-            : source === "reload"
-              ? `Last SQL fragment reloaded. ${rows} rows returned in ${duration}.`
-              : `Query executed successfully. ${rows} rows returned in ${duration}.`,
+              : source === "reload"
+                ? `Last SQL fragment reloaded. ${rows} rows returned in ${duration}.`
+                : `Query executed successfully. ${rows} rows returned in ${duration}.`,
         ),
       );
 
@@ -1548,7 +1550,10 @@ function ConnectionActionWorkspace({
 
       const target = getExecutionTarget(view.state);
       if (!target) {
-        addMessage("error", "No executable SQL statement was found at the cursor.");
+        addMessage(
+          "error",
+          "No executable SQL statement was found at the cursor.",
+        );
         updateActiveSheetOutput((output) => ({
           ...output,
           hasExecuted: true,
@@ -2005,95 +2010,95 @@ function ConnectionActionWorkspace({
               onPointerCancel={stopEditorResize}
             />
             <div className="database-output-panel">
-          <div className="database-output-toolbar">
-            <div
-              className="database-output-tabs"
-              role="tablist"
-              aria-label="Query output"
-            >
-              <button
-                className={
-                  activeOutput.activeOutputTab === "results"
-                    ? "active"
-                    : undefined
-                }
-                type="button"
-                role="tab"
-                aria-selected={activeOutput.activeOutputTab === "results"}
-                onClick={() =>
-                  updateActiveSheetOutput((output) => ({
-                    ...output,
-                    activeOutputTab: "results",
-                  }))
-                }
-              >
-                Results
-              </button>
-              <button
-                className={
-                  activeOutput.activeOutputTab === "messages"
-                    ? "active"
-                    : undefined
-                }
-                type="button"
-                role="tab"
-                aria-selected={activeOutput.activeOutputTab === "messages"}
-                onClick={() =>
-                  updateActiveSheetOutput((output) => ({
-                    ...output,
-                    activeOutputTab: "messages",
-                  }))
-                }
-              >
-                Messages
-              </button>
-            </div>
-            <button
-              className="icon-button secondary database-output-reload"
-              type="button"
-              aria-label="Reload results"
-              title="Reload results"
-              onClick={reloadLastExecution}
-              disabled={
-                !activeOutput.lastExecutionTarget ||
-                isExecuting ||
-                metadataLoading
-              }
-            >
-              <RefreshCcw size={15} />
-            </button>
-          </div>
-          {activeOutput.activeOutputTab === "results" ? (
-            <ResultGrid
-              rows={activeOutput.resultRows}
-              columns={activeOutput.resultColumns}
-              meta={activeOutput.resultMeta}
-              page={activeOutput.resultPage}
-              pageSize={activeOutput.resultPageSize}
-              columnWidths={activeOutput.resultColumnWidths}
-              onColumnWidthsChange={(columnWidths) =>
-                updateActiveSheetOutput((output) => ({
-                  ...output,
-                  resultColumnWidths: columnWidths,
-                }))
-              }
-              onPageChange={(resultPage) =>
-                updateActiveSheetOutput((output) => ({
-                  ...output,
-                  resultPage,
-                }))
-              }
-              onPageSizeChange={(pageSize) => {
-                updateActiveSheetOutput((output) => ({
-                  ...output,
-                  resultPageSize: pageSize,
-                  resultPage: 1,
-                }));
-              }}
-            />
-          ) : (
-            <MessageLog messages={activeOutput.messages} />
-          )}
+              <div className="database-output-toolbar">
+                <div
+                  className="database-output-tabs"
+                  role="tablist"
+                  aria-label="Query output"
+                >
+                  <button
+                    className={
+                      activeOutput.activeOutputTab === "results"
+                        ? "active"
+                        : undefined
+                    }
+                    type="button"
+                    role="tab"
+                    aria-selected={activeOutput.activeOutputTab === "results"}
+                    onClick={() =>
+                      updateActiveSheetOutput((output) => ({
+                        ...output,
+                        activeOutputTab: "results",
+                      }))
+                    }
+                  >
+                    Results
+                  </button>
+                  <button
+                    className={
+                      activeOutput.activeOutputTab === "messages"
+                        ? "active"
+                        : undefined
+                    }
+                    type="button"
+                    role="tab"
+                    aria-selected={activeOutput.activeOutputTab === "messages"}
+                    onClick={() =>
+                      updateActiveSheetOutput((output) => ({
+                        ...output,
+                        activeOutputTab: "messages",
+                      }))
+                    }
+                  >
+                    Messages
+                  </button>
+                </div>
+                <button
+                  className="icon-button secondary database-output-reload"
+                  type="button"
+                  aria-label="Reload results"
+                  title="Reload results"
+                  onClick={reloadLastExecution}
+                  disabled={
+                    !activeOutput.lastExecutionTarget ||
+                    isExecuting ||
+                    metadataLoading
+                  }
+                >
+                  <RefreshCcw size={15} />
+                </button>
+              </div>
+              {activeOutput.activeOutputTab === "results" ? (
+                <ResultGrid
+                  rows={activeOutput.resultRows}
+                  columns={activeOutput.resultColumns}
+                  meta={activeOutput.resultMeta}
+                  page={activeOutput.resultPage}
+                  pageSize={activeOutput.resultPageSize}
+                  columnWidths={activeOutput.resultColumnWidths}
+                  onColumnWidthsChange={(columnWidths) =>
+                    updateActiveSheetOutput((output) => ({
+                      ...output,
+                      resultColumnWidths: columnWidths,
+                    }))
+                  }
+                  onPageChange={(resultPage) =>
+                    updateActiveSheetOutput((output) => ({
+                      ...output,
+                      resultPage,
+                    }))
+                  }
+                  onPageSizeChange={(pageSize) => {
+                    updateActiveSheetOutput((output) => ({
+                      ...output,
+                      resultPageSize: pageSize,
+                      resultPage: 1,
+                    }));
+                  }}
+                />
+              ) : (
+                <MessageLog messages={activeOutput.messages} />
+              )}
             </div>
           </>
         ) : null}
@@ -2494,48 +2499,48 @@ function ResultGrid({
             className="recent-builds-table database-result-table"
             style={{ width: tableWidth, minWidth: tableWidth }}
           >
-          <colgroup>
-            {calculatedColumns.map((column) => (
-              <col key={column.key} style={{ width: `${column.width}px` }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr>
-              {columns.map((column) => (
-                <th key={column.key}>
-                  <span className="database-result-th-content">
-                    {column.label}
-                    <span
-                      className="database-column-resize-handle"
-                      role="separator"
-                      aria-orientation="vertical"
-                      aria-label={`Resize ${column.label} column`}
-                      onPointerDown={(event) =>
-                        startColumnResize(column, event)
-                      }
-                      onPointerMove={resizeColumn}
-                      onPointerUp={stopColumnResize}
-                      onPointerCancel={stopColumnResize}
-                      onDoubleClick={() => resetColumnWidth(column)}
-                    >
-                      <ArrowLeftRight size={13} />
-                    </span>
-                  </span>
-                </th>
+            <colgroup>
+              {calculatedColumns.map((column) => (
+                <col key={column.key} style={{ width: `${column.width}px` }} />
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {pageRows.map((row) => (
-              <tr key={row.actor_id}>
+            </colgroup>
+            <thead>
+              <tr>
                 {columns.map((column) => (
-                  <td key={`${row.actor_id}-${column.key}`}>
-                    {row[column.key]}
-                  </td>
+                  <th key={column.key}>
+                    <span className="database-result-th-content">
+                      {column.label}
+                      <span
+                        className="database-column-resize-handle"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`Resize ${column.label} column`}
+                        onPointerDown={(event) =>
+                          startColumnResize(column, event)
+                        }
+                        onPointerMove={resizeColumn}
+                        onPointerUp={stopColumnResize}
+                        onPointerCancel={stopColumnResize}
+                        onDoubleClick={() => resetColumnWidth(column)}
+                      >
+                        <ArrowLeftRight size={13} />
+                      </span>
+                    </span>
+                  </th>
                 ))}
               </tr>
-            ))}
-          </tbody>
+            </thead>
+            <tbody>
+              {pageRows.map((row) => (
+                <tr key={row.actor_id}>
+                  {columns.map((column) => (
+                    <td key={`${row.actor_id}-${column.key}`}>
+                      {row[column.key]}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
           </table>
         ) : null}
         {rows.length === 0 ? (
