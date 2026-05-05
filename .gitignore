@@ -9,7 +9,7 @@ dummy/**/dist/
 dummy/**/logs/
 dummy/**/target/
 tools/
-/dummy
+/dummy/
 /build
 
 .env

@@ -25,11 +25,39 @@ export type {
   ShutdownEntry,
 } from "../../shared/dashboardTypes";
 
-export type AppSection = "dashboard" | "project";
+export type AppSection = "dashboard" | "project" | "database";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal";
+export type DatabaseWorkspaceTab = "connection" | "monitor";
 export type FontSizeMode = "large" | "regular" | "small";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
+
+export type DatabaseConnectionStatus = "connected" | "disconnected" | "error";
+
+export type DatabaseConnection = {
+  id: string;
+  name: string;
+  type: string;
+  status: DatabaseConnectionStatus;
+  host: string;
+  port: string;
+  user: string;
+  schema: string;
+  latency: string;
+  uptime: string;
+  activeSessions: number;
+};
+
+export type DatabaseExecutionRecord = {
+  id: string;
+  time: string;
+  connection: string;
+  user: string;
+  query: string;
+  duration: string;
+  status: "success" | "error";
+  rows: number;
+};
 
 export type BuildStage = {
   label: string;

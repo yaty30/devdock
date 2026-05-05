@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
+  Cog,
   LoaderCircle,
   Play,
   RotateCcw,
@@ -58,6 +59,33 @@ export function HeaderActions({
         gitStatus={gitStatus}
         disabled={disabled}
       />
+      <HeaderUtilityActions
+        fontSizeMode={fontSizeMode}
+        onFontSizeChange={onFontSizeChange}
+        onSettingsClick={onSettingsClick}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
+export function HeaderUtilityActions({
+  fontSizeMode,
+  onFontSizeChange,
+  onSettingsClick,
+  disabled = false,
+  settingsIcon = "settings",
+}: {
+  fontSizeMode: FontSizeMode;
+  onFontSizeChange: (mode: FontSizeMode) => void;
+  onSettingsClick: () => void;
+  disabled?: boolean;
+  settingsIcon?: "settings" | "cog";
+}): JSX.Element {
+  const SettingsButtonIcon = settingsIcon === "cog" ? Cog : Settings;
+
+  return (
+    <>
       <FontSizeDropdown
         value={fontSizeMode}
         onChange={onFontSizeChange}
@@ -71,9 +99,9 @@ export function HeaderActions({
         disabled={disabled}
         onClick={onSettingsClick}
       >
-        <Settings size={18} />
+        <SettingsButtonIcon size={18} />
       </button>
-    </div>
+    </>
   );
 }
 

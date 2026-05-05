@@ -3,6 +3,7 @@ import {
   BarChart3,
   Boxes,
   ChevronDown,
+  Database,
   FolderKanban,
   Moon,
   PanelLeftClose,
@@ -11,32 +12,46 @@ import {
   Sun,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
-import type { AppSection, Project, Theme } from "../../types";
+import type {
+  AppSection,
+  DatabaseConnection,
+  Project,
+  Theme,
+} from "../../types";
 
 export function Sidebar({
   projects,
+  databaseConnections,
   selectedProjectId,
+  selectedDatabaseConnectionId,
   activeSection,
   theme,
   collapsed,
   onProjectChange,
+  onDatabaseConnectionChange,
   onSectionChange,
   onAddProject,
+  onAddDatabaseConnection,
   onCollapseToggle,
   onThemeToggle,
 }: {
   projects: Project[];
+  databaseConnections: DatabaseConnection[];
   selectedProjectId: string;
+  selectedDatabaseConnectionId: string | null;
   activeSection: AppSection;
   theme: Theme;
   collapsed: boolean;
   onProjectChange: (project: Project) => void;
+  onDatabaseConnectionChange: (connection: DatabaseConnection) => void;
   onSectionChange: (section: AppSection) => void;
   onAddProject: () => void;
+  onAddDatabaseConnection: () => void;
   onCollapseToggle: () => void;
   onThemeToggle: () => void;
 }): JSX.Element {
   const [projectsOpen, setProjectsOpen] = useState(true);
+  const [databasesOpen, setDatabasesOpen] = useState(true);
 
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
@@ -116,6 +131,77 @@ export function Sidebar({
               onClick={onAddProject}
               aria-label="Add project"
               title="Add project"
+            >
+              <Plus size={18} style={{ color: "var(--accent)" }} />
+            </button>
+          ) : null}
+        </div>
+
+        <button
+          className={`nav-item project-toggle${databasesOpen ? " open" : ""}`}
+          type="button"
+          onClick={() => {
+            if (!collapsed) {
+              setDatabasesOpen((current) => !current);
+            }
+          }}
+          aria-expanded={collapsed ? false : databasesOpen}
+          aria-label={`Databases (${databaseConnections.length})`}
+          title={`Databases (${databaseConnections.length})`}
+        >
+          <Database size={18} />
+          <span className="nav-label project-nav-label">
+            <span>Databases</span>
+            <span className="project-count-badge">
+              {databaseConnections.length}
+            </span>
+          </span>
+          {!collapsed ? <ChevronDown className="chevron" size={16} /> : null}
+        </button>
+
+        <div
+          className={`project-list database-list${
+            databasesOpen && !collapsed ? " open" : ""
+          }`}
+          aria-hidden={!collapsed && !databasesOpen}
+        >
+          {databaseConnections.map((connection) => (
+            <button
+              className={`project-item database-item${
+                activeSection === "database" &&
+                connection.id === selectedDatabaseConnectionId
+                  ? " active"
+                  : ""
+              }`}
+              type="button"
+              key={connection.id}
+              tabIndex={databasesOpen || collapsed ? 0 : -1}
+              onClick={() => onDatabaseConnectionChange(connection)}
+            >
+              <span className={`database-status-dot ${connection.status}`} />
+              <span className="database-connection-name">
+                {connection.name}
+              </span>
+              <span className="database-type-label">{connection.type}</span>
+            </button>
+          ))}
+          <button
+            className="project-item add-project-item"
+            type="button"
+            tabIndex={databasesOpen || collapsed ? 0 : -1}
+            onClick={onAddDatabaseConnection}
+          >
+            <Plus className="add-project-icon" size={16} />
+            <span>New connection</span>
+          </button>
+
+          {collapsed ? (
+            <button
+              className="nav-item add-project-collapsed-btn"
+              type="button"
+              onClick={onAddDatabaseConnection}
+              aria-label="New database connection"
+              title="New database connection"
             >
               <Plus size={18} style={{ color: "var(--accent)" }} />
             </button>
