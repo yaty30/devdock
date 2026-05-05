@@ -24,8 +24,6 @@ import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import {
   Bold,
-  ChevronDown,
-  ChevronUp,
   Grid3X3,
   Highlighter,
   Italic,
@@ -35,10 +33,9 @@ import {
   Palette,
   Plus,
   Save,
-  Search,
   Trash2,
-  X,
 } from "lucide-react";
+import { FindControls } from "../../components/common/FindControls";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Modal } from "../../components/dialogs/Modal";
 import type { Sheet, SheetContentJson, SheetUpdate } from "../../types";
@@ -712,11 +709,6 @@ function ExpandedNoteEditor({
   const textContent = editor?.getText() ?? staticTextContent;
   const characterCount =
     editor?.storage.characterCount?.characters?.() ?? textContent.length;
-  const activeMatchLabel =
-    trimmedFindTerm && matchCount > 0
-      ? `${activeMatchIndex + 1}/${matchCount}`
-      : "0/0";
-
   useEffect(() => {
     setActiveMatchIndex(0);
   }, [trimmedFindTerm, editEnabled]);
@@ -842,46 +834,17 @@ function ExpandedNoteEditor({
 
   return (
     <article className="note-expanded-editor">
-      <div className="sheet-find-row note-editor-find-row">
-        <div className="find-input-shell">
-          <Search size={14} />
-          <input
-            type="text"
-            value={findTerm}
-            aria-label={`Find in ${sheet.title}`}
-            placeholder="Find"
-            onChange={(event) => setFindTerm(event.target.value)}
-          />
-        </div>
-        <span className="log-find-count">{activeMatchLabel}</span>
-        <button
-          type="button"
-          aria-label="Previous match"
-          title="Previous match"
-          disabled={matchCount === 0}
-          onClick={() => navigateFind(-1)}
-        >
-          <ChevronUp size={13} />
-        </button>
-        <button
-          type="button"
-          aria-label="Next match"
-          title="Next match"
-          disabled={matchCount === 0}
-          onClick={() => navigateFind(1)}
-        >
-          <ChevronDown size={13} />
-        </button>
-        <button
-          type="button"
-          aria-label="Clear find"
-          title="Clear find"
-          disabled={!findTerm}
-          onClick={clearFind}
-        >
-          <X size={13} />
-        </button>
-      </div>
+      <FindControls
+        value={findTerm}
+        activeIndex={activeMatchIndex}
+        matchCount={matchCount}
+        ariaLabel={`Find in ${sheet.title}`}
+        className="sheet-find-row note-editor-find-row"
+        onChange={setFindTerm}
+        onPrevious={() => navigateFind(-1)}
+        onNext={() => navigateFind(1)}
+        onClear={clearFind}
+      />
 
       {editEnabled ? (
         <>

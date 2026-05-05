@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Copy, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Copy } from "lucide-react";
+import { FindControls } from "../../components/common/FindControls";
 import type { GitStatusRecord } from "../../types";
 
 type GitCommandHistoryItem = {
@@ -37,11 +38,14 @@ export function GitTerminalTab({
   const [status, setStatus] = useState(gitStatus);
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState<GitCommandHistoryItem[]>([]);
+  const [findTerm, setFindTerm] = useState("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
   const [visibleHistoryCount, setVisibleHistoryCount] = useState(
     GIT_HISTORY_PAGE_SIZE,
   );
   const historyIdRef = useRef(0);
   const historySentinelRef = useRef<HTMLDivElement>(null);
+  const activeLineRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setStatus(gitStatus);
@@ -50,6 +54,8 @@ export function GitTerminalTab({
 
   useEffect(() => {
     setCommand("");
+    setFindTerm("");
+    setActiveMatchIndex(0);
     const storedHistory = loadGitHistory(projectId);
     historyIdRef.current = Math.max(0, ...storedHistory.map((item) => item.id));
     setHistory(storedHistory);
@@ -59,6 +65,42 @@ export function GitTerminalTab({
   useEffect(() => {
     saveGitHistory(projectId, history);
   }, [history, projectId]);
+
+  const trimmedFindTerm = findTerm.trim().toLowerCase();
+  const matchIndexes = useMemo(
+    () =>
+      trimmedFindTerm
+        ? output.reduce<number[]>((matches, line, index) => {
+            if (line.toLowerCase().includes(trimmedFindTerm)) {
+              matches.push(index);
+            }
+            return matches;
+          }, [])
+        : [],
+    [output, trimmedFindTerm],
+  );
+  const matchCount = matchIndexes.length;
+  const activeLineIndex =
+    matchCount > 0
+      ? matchIndexes[Math.min(activeMatchIndex, matchCount - 1)]
+      : null;
+
+  useEffect(() => {
+    setActiveMatchIndex(0);
+  }, [trimmedFindTerm]);
+
+  useEffect(() => {
+    if (activeMatchIndex >= matchCount) {
+      setActiveMatchIndex(matchCount > 0 ? matchCount - 1 : 0);
+    }
+  }, [activeMatchIndex, matchCount]);
+
+  useEffect(() => {
+    activeLineRef.current?.scrollIntoView({
+      block: "center",
+      inline: "nearest",
+    });
+  }, [activeLineIndex]);
 
   useEffect(() => {
     const sentinel = historySentinelRef.current;
@@ -151,6 +193,21 @@ export function GitTerminalTab({
     void navigator.clipboard?.writeText(commandText).catch(() => undefined);
   }
 
+  function navigateFind(direction: -1 | 1): void {
+    if (matchCount === 0) {
+      return;
+    }
+
+    setActiveMatchIndex(
+      (current) => (current + direction + matchCount) % matchCount,
+    );
+  }
+
+  function clearFind(): void {
+    setFindTerm("");
+    setActiveMatchIndex(0);
+  }
+
   const visibleHistory = history.slice(0, visibleHistoryCount);
   const historyRows = groupGitHistoryByDate(visibleHistory);
   const hasMoreHistory = visibleHistoryCount < history.length;
@@ -200,44 +257,35 @@ export function GitTerminalTab({
                 </button>
               ))}
             </div>
-            <div className="git-find-row">
-              <div className="find-input-shell">
-                <Search size={14} />
-                <input id="git-find" type="text" aria-label="Find" />
-              </div>
-              <button
-                className="find-icon-button"
-                type="button"
-                aria-label="Previous match"
-                title="Previous match"
-              >
-                <ChevronUp size={13} />
-              </button>
-              <button
-                className="find-icon-button"
-                type="button"
-                aria-label="Next match"
-                title="Next match"
-              >
-                <ChevronDown size={13} />
-              </button>
-              <button
-                className="find-icon-button"
-                type="button"
-                aria-label="Clear find"
-                title="Clear find"
-              >
-                <X size={13} />
-              </button>
-            </div>
+            <FindControls
+              id="git-find"
+              value={findTerm}
+              activeIndex={activeMatchIndex}
+              matchCount={matchCount}
+              className="git-find-row"
+              onChange={setFindTerm}
+              onPrevious={() => navigateFind(-1)}
+              onNext={() => navigateFind(1)}
+              onClear={clearFind}
+            />
           </div>
           <div className="terminal-output" aria-label="Git terminal output">
-            {output.map((line, index) => (
-              <div className="terminal-line" key={`${line}-${index}`}>
-                <span className="terminal-line-number">{index + 1}</span>
-                <span className={terminalLineClass(line)}>{line}</span>
-              </div>
-            ))}
+            {output.map((line, index) => {
+              const matched = matchIndexes.includes(index);
+              const active = index === activeLineIndex;
+              return (
+                <div
+                  className={`terminal-line${matched ? " terminal-line-matched" : ""}${
+                    active ? " terminal-line-active" : ""
+                  }`}
+                  key={`${line}-${index}`}
+                  ref={active ? activeLineRef : undefined}
+                >
+                  <span className="terminal-line-number">{index + 1}</span>
+                  <span className={terminalLineClass(line)}>{line}</span>
+                </div>
+              );
+            })}
           </div>
         </section>
 

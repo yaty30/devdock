@@ -17,10 +17,10 @@ import {
   GitBranch,
   Layers3,
   Minus,
-  Search,
   SquareTerminal,
 } from "lucide-react";
 import { ActionLink } from "../../components/common/ActionLink";
+import { FindControls } from "../../components/common/FindControls";
 import { VirtualizedLogViewer } from "../../components/common/VirtualizedLogViewer";
 import { Panel } from "../../components/common/Panel";
 import { Modal } from "../../components/dialogs/Modal";
@@ -204,48 +204,26 @@ function useLogFind(
   }
 
   const findBar = (
-    <div className="log-find-row">
-      <div className="find-input-shell">
-        <Search size={14} />
-        <input
-          id={id}
-          type="text"
-          value={term}
-          aria-label="Find"
-          onChange={(event) => setTerm(event.target.value)}
-        />
-      </div>
-      <span className="log-find-count">
-        {searching || loadingMatch
-          ? "..."
-          : total === 0
-            ? "0/0"
-            : `${safePosition + 1}/${total}`}
-      </span>
-      <button
-        type="button"
-        disabled={total === 0 || searching}
-        onClick={() => move(-1)}
-      >
-        Prev
-      </button>
-      <button
-        type="button"
-        disabled={total === 0 || searching}
-        onClick={() => move(1)}
-      >
-        Next
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          setTerm("");
-          setActivePosition(0);
-        }}
-      >
-        Clear
-      </button>
-    </div>
+    <FindControls
+      id={id}
+      value={term}
+      activeIndex={safePosition}
+      matchCount={total}
+      searching={searching || loadingMatch}
+      onChange={setTerm}
+      onPrevious={() => move(-1)}
+      onNext={() => move(1)}
+      onClear={() => {
+        searchRequestRef.current += 1;
+        loadRequestRef.current += 1;
+        setTerm("");
+        setActivePosition(0);
+        setMatchSeqs([]);
+        setTotal(0);
+        setSearching(false);
+        setLoadingMatch(false);
+      }}
+    />
   );
 
   return {
@@ -1075,11 +1053,13 @@ export function ProjectDashboardContent({
       if (!entry) return;
       const newContentWidth = entry.contentRect.width;
       const newAvailableWidth = newContentWidth - DASHBOARD_SPLITTER_SIZE * 2;
-      const prev = prevAvailableWidthRef.current;
-      prevAvailableWidthRef.current = newAvailableWidth;
-      if (prev === null || prev === newAvailableWidth) return;
       const current = layoutRef.current;
       if (current.columnWidths === null) return;
+      const prev =
+        prevAvailableWidthRef.current ??
+        current.columnWidths.reduce((total, width) => total + width, 0);
+      prevAvailableWidthRef.current = newAvailableWidth;
+      if (prev === newAvailableWidth) return;
       const ratio = newAvailableWidth / prev;
       const rescaled = current.columnWidths.map((w) =>
         Math.max(DASHBOARD_MIN_COLUMN_WIDTH, w * ratio),

@@ -86,6 +86,8 @@ function App(): JSX.Element {
   const dashboardOverviewRequestRef = useRef(0);
   const snackbarDismissTimerRef = useRef<number | null>(null);
   const snackbarCloseTimerRef = useRef<number | null>(null);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  const sidebarTransitionReadyRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +129,45 @@ function App(): JSX.Element {
   useEffect(() => {
     window.localStorage.setItem("ivs-dashboard-font-size", fontSizeMode);
   }, [fontSizeMode]);
+
+  useEffect(() => {
+    if (!sidebarTransitionReadyRef.current) {
+      sidebarTransitionReadyRef.current = true;
+      return undefined;
+    }
+
+    const shell = appShellRef.current;
+    if (!shell) {
+      return undefined;
+    }
+
+    let dispatched = false;
+    const dispatchSettledResize = (): void => {
+      if (dispatched) {
+        return;
+      }
+
+      dispatched = true;
+      window.dispatchEvent(new Event("resize"));
+    };
+
+    const fallbackTimer = window.setTimeout(dispatchSettledResize, 220);
+    const handleTransitionEnd = (event: TransitionEvent): void => {
+      if (
+        event.target === shell &&
+        event.propertyName === "grid-template-columns"
+      ) {
+        window.clearTimeout(fallbackTimer);
+        dispatchSettledResize();
+      }
+    };
+
+    shell.addEventListener("transitionend", handleTransitionEnd);
+    return () => {
+      window.clearTimeout(fallbackTimer);
+      shell.removeEventListener("transitionend", handleTransitionEnd);
+    };
+  }, [sidebarCollapsed]);
 
   useEffect(() => {
     if (!selectedProject) {
@@ -465,6 +506,7 @@ function App(): JSX.Element {
   if (!selectedProject && !initialStateLoaded) {
     return (
       <div
+        ref={appShellRef}
         className="app-shell"
         data-theme={theme}
         data-font-size={fontSizeMode}
@@ -485,6 +527,7 @@ function App(): JSX.Element {
   if (!selectedProject) {
     return (
       <div
+        ref={appShellRef}
         className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
         data-theme={theme}
         data-font-size={fontSizeMode}
@@ -539,6 +582,7 @@ function App(): JSX.Element {
 
   return (
     <div
+      ref={appShellRef}
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
       data-theme={theme}
       data-font-size={fontSizeMode}

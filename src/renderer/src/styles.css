@@ -2272,7 +2272,8 @@ body {
   border-color: var(--accent);
 }
 
-.log-find-row button:disabled {
+.log-find-row button:disabled,
+.git-find-row button:disabled {
   color: var(--muted);
   cursor: not-allowed;
   opacity: 0.55;
@@ -3696,6 +3697,11 @@ select option {
   border-bottom-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
+.recent-builds-table tbody tr.recent-build-row-active td {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+}
+
 .recent-builds-sentinel {
   height: 24px;
 }
@@ -4167,6 +4173,14 @@ select option {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr);
   min-height: 18px;
+}
+
+.terminal-line.terminal-line-matched {
+  background: color-mix(in srgb, var(--warning) 13%, transparent);
+}
+
+.terminal-line.terminal-line-active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .terminal-line-number {
@@ -4876,6 +4890,10 @@ select option {
   animation: build-profile-row-remove 180ms ease-in both;
 }
 
+.build-profiles-table tbody tr.profile-row-dragging {
+  opacity: 0.62;
+}
+
 @keyframes build-profile-row-add {
   from {
     opacity: 0;
@@ -4921,7 +4939,35 @@ select option {
   }
 }
 
-.build-profiles-table td:nth-child(1) {
+.build-profiles-table td:nth-child(1),
+.build-profiles-table th:nth-child(1) {
+  width: 14px;
+  padding-right: 2px;
+  padding-left: 2px;
+  text-align: center;
+}
+
+.profile-drag-handle {
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  color: var(--muted);
+  cursor: grab;
+}
+
+.profile-drag-handle:hover {
+  color: var(--accent);
+}
+
+.profile-drag-handle:active {
+  cursor: grabbing;
+}
+
+.profile-drag-handle:disabled {
+  cursor: not-allowed;
+}
+
+.build-profiles-table td:nth-child(2) {
   width: 160px;
 }
 
@@ -4946,30 +4992,30 @@ select option {
   pointer-events: none;
 }
 
-.build-profiles-table td:nth-child(2),
-.build-profiles-table th:nth-child(2) {
-  width: 220px;
-}
-
 .build-profiles-table td:nth-child(3),
 .build-profiles-table th:nth-child(3) {
-  width: 110px;
+  width: 220px;
 }
 
 .build-profiles-table td:nth-child(4),
 .build-profiles-table th:nth-child(4) {
-  width: 140px;
-  text-align: center;
+  width: 110px;
 }
 
 .build-profiles-table td:nth-child(5),
 .build-profiles-table th:nth-child(5) {
-  width: 88px;
+  width: 140px;
   text-align: center;
 }
 
 .build-profiles-table td:nth-child(6),
 .build-profiles-table th:nth-child(6) {
+  width: 88px;
+  text-align: center;
+}
+
+.build-profiles-table td:nth-child(7),
+.build-profiles-table th:nth-child(7) {
   width: 54px;
   text-align: center;
 }
@@ -5094,7 +5140,7 @@ select option {
 .app-shell[data-font-size] .git-history-copy strong,
 .app-shell[data-font-size] .git-history-copy span,
 .app-shell[data-font-size] .git-history-copy p,
-.app-shell[data-font-size] .log-search-count,
+.app-shell[data-font-size] .log-find-count,
 .app-shell[data-font-size] .log-jump-bar button {
   font-size: var(--font-sm);
 }

@@ -19,10 +19,9 @@ import {
   Layers3,
   Package,
   RotateCcw,
-  Search,
   SquareTerminal,
-  X,
 } from "lucide-react";
+import { FindControls } from "../../components/common/FindControls";
 import { Panel } from "../../components/common/Panel";
 import type {
   ActivityRecord,
@@ -224,9 +223,11 @@ function RecentBuildsPanel({
   const [totalBuilds, setTotalBuilds] = useState(0);
   const [hasMoreBuilds, setHasMoreBuilds] = useState(false);
   const [loadingBuilds, setLoadingBuilds] = useState(false);
+  const [activeBuildIndex, setActiveBuildIndex] = useState(0);
   const findInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const activeBuildRowRef = useRef<HTMLTableRowElement>(null);
   const requestSeqRef = useRef(0);
   const latestBuildKey = recentBuilds
     .map((build) => `${build.id}:${build.status}:${build.completedAt ?? ""}`)
@@ -268,9 +269,28 @@ function RecentBuildsPanel({
     setBuilds([]);
     setTotalBuilds(0);
     setHasMoreBuilds(false);
+    setActiveBuildIndex(0);
     scrollRef.current?.scrollTo({ top: 0 });
     void fetchBuildPage(0);
   }, [fetchBuildPage, latestBuildKey]);
+
+  useEffect(() => {
+    setActiveBuildIndex(0);
+  }, [projectId, searchTerm, sortBy, sortDirection, statusFilter]);
+
+  useEffect(() => {
+    const matchLimit = Math.min(totalBuilds, builds.length);
+    if (activeBuildIndex >= matchLimit) {
+      setActiveBuildIndex(matchLimit > 0 ? matchLimit - 1 : 0);
+    }
+  }, [activeBuildIndex, builds.length, totalBuilds]);
+
+  useEffect(() => {
+    activeBuildRowRef.current?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [activeBuildIndex, builds]);
 
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -338,9 +358,21 @@ function RecentBuildsPanel({
 
   function handleReset(): void {
     setSearchTerm("");
+    setActiveBuildIndex(0);
     setStatusFilter("All");
     setSortBy("completed");
     setSortDirection("desc");
+  }
+
+  function navigateBuildFind(delta: -1 | 1): void {
+    const matchLimit = Math.min(totalBuilds, builds.length);
+    if (matchLimit === 0) {
+      return;
+    }
+
+    setActiveBuildIndex(
+      (current) => (current + delta + matchLimit) % matchLimit,
+    );
   }
 
   const isFiltered =
@@ -348,6 +380,11 @@ function RecentBuildsPanel({
     statusFilter !== "All" ||
     sortBy !== "completed" ||
     sortDirection !== "desc";
+  const findMatchCount = searchTerm.trim() ? totalBuilds : 0;
+  const activeBuildId =
+    findMatchCount > 0
+      ? builds[Math.min(activeBuildIndex, builds.length - 1)]?.id
+      : undefined;
 
   return (
     <Panel
@@ -355,29 +392,20 @@ function RecentBuildsPanel({
       className="recent-builds-panel"
       findBar={
         <div className="log-find-row">
-          <div className="find-input-shell">
-            <Search size={14} />
-            <input
-              ref={findInputRef}
-              id="recent-builds-search"
-              type="search"
-              value={searchTerm}
-              aria-label="Find"
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Branch, commit, profile..."
-            />
-          </div>
-          {searchTerm ? (
-            <button
-              className="find-icon-button"
-              type="button"
-              aria-label="Clear find"
-              title="Clear find"
-              onClick={() => setSearchTerm("")}
-            >
-              <X size={13} />
-            </button>
-          ) : null}
+          <FindControls
+            id="recent-builds-search"
+            value={searchTerm}
+            activeIndex={activeBuildIndex}
+            matchCount={findMatchCount}
+            inputRef={findInputRef}
+            onChange={setSearchTerm}
+            onPrevious={() => navigateBuildFind(-1)}
+            onNext={() => navigateBuildFind(1)}
+            onClear={() => {
+              setSearchTerm("");
+              setActiveBuildIndex(0);
+            }}
+          />
           <StatusSelect value={statusFilter} onChange={setStatusFilter} />
           <button
             className="table-reset-button"
@@ -407,7 +435,15 @@ function RecentBuildsPanel({
           </thead>
           <tbody>
             {builds.map((build) => (
-              <tr key={build.id}>
+              <tr
+                key={build.id}
+                className={
+                  build.id === activeBuildId
+                    ? "recent-build-row-active"
+                    : undefined
+                }
+                ref={build.id === activeBuildId ? activeBuildRowRef : undefined}
+              >
                 <td>{build.id}</td>
                 <td>{build.branch}</td>
                 <td>{`@${build.commit}/${build.commitCleanliness}`}</td>
@@ -612,11 +648,13 @@ export function MonitorTab({
       if (!entry) return;
       const newContentWidth = entry.contentRect.width;
       const newAvailableWidth = newContentWidth - MONITOR_SPLITTER_SIZE * 3;
-      const prev = prevAvailableWidthRef.current;
-      prevAvailableWidthRef.current = newAvailableWidth;
-      if (prev === null || prev === newAvailableWidth) return;
       const current = layoutRef.current;
       if (current.columnWidths === null) return;
+      const prev =
+        prevAvailableWidthRef.current ??
+        current.columnWidths.reduce((total, width) => total + width, 0);
+      prevAvailableWidthRef.current = newAvailableWidth;
+      if (prev === newAvailableWidth) return;
       const ratio = newAvailableWidth / prev;
       const rescaled = current.columnWidths.map((w) =>
         Math.max(MONITOR_MIN_COLUMN_WIDTH, w * ratio),

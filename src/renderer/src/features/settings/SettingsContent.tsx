@@ -8,7 +8,7 @@ import {
   type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, GripVertical, Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {
@@ -269,6 +269,9 @@ export function SettingsContent({
   const [deletingProfileIds, setDeletingProfileIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [draggingProfileId, setDraggingProfileId] = useState<string | null>(
+    null,
+  );
   const dismissTimerRef = useRef<number | null>(null);
   const closingTimerRef = useRef<number | null>(null);
   const profileScrollerRef = useRef<HTMLDivElement>(null);
@@ -357,6 +360,7 @@ export function SettingsContent({
     setProjectCodeDraft(selectedProject.code);
     setProfileFieldErrors({});
     setDeletingProfileIds(new Set());
+    setDraggingProfileId(null);
     previousProfileCountRef.current = settings.buildProfiles.length;
   }, [settings, selectedProject]);
 
@@ -500,6 +504,47 @@ export function SettingsContent({
     profileDeleteTimersRef.current.set(profileId, timer);
   }
 
+  function moveProfile(
+    draggedProfileId: string,
+    targetProfileId: string,
+    placement: "before" | "after",
+  ): void {
+    if (draggedProfileId === targetProfileId) {
+      return;
+    }
+
+    setDraft((current) => {
+      const fromIndex = current.buildProfiles.findIndex(
+        (profile) => profile.id === draggedProfileId,
+      );
+      const toIndex = current.buildProfiles.findIndex(
+        (profile) => profile.id === targetProfileId,
+      );
+
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+        return current;
+      }
+
+      const insertIndex =
+        placement === "before"
+          ? fromIndex < toIndex
+            ? toIndex - 1
+            : toIndex
+          : fromIndex < toIndex
+            ? toIndex
+            : toIndex + 1;
+
+      if (insertIndex === fromIndex) {
+        return current;
+      }
+
+      const buildProfiles = [...current.buildProfiles];
+      const [movedProfile] = buildProfiles.splice(fromIndex, 1);
+      buildProfiles.splice(insertIndex, 0, movedProfile);
+      return { ...current, buildProfiles };
+    });
+  }
+
   function profileInputClass(
     profileId: string,
     field: BuildProfileField,
@@ -521,6 +566,9 @@ export function SettingsContent({
     }
     if (deletingProfileIds.has(profile.id)) {
       classes.push("profile-row-removing");
+    }
+    if (draggingProfileId === profile.id) {
+      classes.push("profile-row-dragging");
     }
     return classes.length > 0 ? classes.join(" ") : undefined;
   }
@@ -1111,6 +1159,7 @@ export function SettingsContent({
                 <table className="build-profiles-table">
                   <thead>
                     <tr>
+                      <th aria-label="Reorder"></th>
                       <th>Name</th>
                       <th>Profile</th>
                       <th>Goal</th>
@@ -1121,7 +1170,52 @@ export function SettingsContent({
                   </thead>
                   <tbody>
                     {draft.buildProfiles.map((profile) => (
-                      <tr key={profile.id} className={profileRowClass(profile)}>
+                      <tr
+                        key={profile.id}
+                        className={profileRowClass(profile)}
+                        onDragOver={(event) => {
+                          if (
+                            draggingProfileId === null ||
+                            deletingProfileIds.has(profile.id)
+                          ) {
+                            return;
+                          }
+
+                          event.preventDefault();
+                          const rect =
+                            event.currentTarget.getBoundingClientRect();
+                          moveProfile(
+                            draggingProfileId,
+                            profile.id,
+                            event.clientY < rect.top + rect.height / 2
+                              ? "before"
+                              : "after",
+                          );
+                        }}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          setDraggingProfileId(null);
+                        }}
+                      >
+                        <td>
+                          <div
+                            className="profile-drag-handle"
+                            draggable={!deletingProfileIds.has(profile.id)}
+                            aria-label={`Reorder ${profile.buttonName || "profile"}`}
+                            title="Drag to reorder"
+                            onDragStart={(event) => {
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData(
+                                "text/plain",
+                                profile.id,
+                              );
+                              setDraggingProfileId(profile.id);
+                            }}
+                            onDragEnd={() => setDraggingProfileId(null)}
+                          >
+                            <GripVertical size={15} />
+                          </div>
+                        </td>
                         <td>
                           <div className="build-profile-name-cell">
                             {!savedProfileIds.has(profile.id) ? (
