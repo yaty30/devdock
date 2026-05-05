@@ -21,6 +21,7 @@ import {
   RotateCcw,
   Search,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import type {
@@ -367,8 +368,14 @@ function RecentBuildsPanel({
             />
           </div>
           {searchTerm ? (
-            <button type="button" onClick={() => setSearchTerm("")}>
-              Clear
+            <button
+              className="find-icon-button"
+              type="button"
+              aria-label="Clear find"
+              title="Clear find"
+              onClick={() => setSearchTerm("")}
+            >
+              <X size={13} />
             </button>
           ) : null}
           <StatusSelect value={statusFilter} onChange={setStatusFilter} />

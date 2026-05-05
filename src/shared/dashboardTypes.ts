@@ -30,6 +30,22 @@ export type LogSearchResult = {
   total: number;
 };
 
+export type SheetContentJson = Record<string, unknown>;
+
+export type Sheet = {
+  id: string;
+  projectId: string;
+  title: string;
+  contentJson: SheetContentJson;
+  createdAt: string;
+  updatedAt: string;
+  autoSaveEnabled: boolean;
+};
+
+export type SheetUpdate = Partial<
+  Pick<Sheet, "contentJson" | "autoSaveEnabled">
+>;
+
 export type ProjectRecord = {
   id: string;
   name: string;
@@ -241,6 +257,14 @@ export type DashboardApi = {
   refreshStatus: (projectId: string) => Promise<ServiceStatusRecord[]>;
   getGitStatus: (projectId: string) => Promise<GitStatusRecord>;
   runGitCommand: (projectId: string, args: string) => Promise<GitStatusRecord>;
+  getSheets: (projectId: string) => Promise<Sheet[]>;
+  createSheet: (projectId: string, title: string) => Promise<Sheet>;
+  updateSheet: (
+    projectId: string,
+    sheetId: string,
+    updates: SheetUpdate,
+  ) => Promise<Sheet>;
+  deleteSheet: (projectId: string, sheetId: string) => Promise<void>;
   browsePath: (options: BrowsePathOptions) => Promise<string | null>;
   openPath: (path: string) => Promise<string>;
   openLog: (projectId: string, channel: LogChannel) => Promise<string>;

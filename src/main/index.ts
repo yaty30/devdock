@@ -10,6 +10,7 @@ import type {
   ServiceName,
   BrowsePathOptions,
   LogChannel,
+  SheetUpdate,
 } from "../shared/dashboardTypes";
 
 if (started) {
@@ -92,6 +93,32 @@ function registerIpc(): void {
     (_event, projectId: string, args: string) =>
       withLoggedErrors("dashboard:runGitCommand", () =>
         getBackend().runGitCommand(projectId, args),
+      ),
+  );
+  ipcMain.handle("dashboard:getSheets", (_event, projectId: string) =>
+    withLoggedErrors("dashboard:getSheets", () =>
+      getBackend().getSheets(projectId),
+    ),
+  );
+  ipcMain.handle(
+    "dashboard:createSheet",
+    (_event, projectId: string, title: string) =>
+      withLoggedErrors("dashboard:createSheet", () =>
+        getBackend().createSheet(projectId, title),
+      ),
+  );
+  ipcMain.handle(
+    "dashboard:updateSheet",
+    (_event, projectId: string, sheetId: string, updates: SheetUpdate) =>
+      withLoggedErrors("dashboard:updateSheet", () =>
+        getBackend().updateSheet(projectId, sheetId, updates),
+      ),
+  );
+  ipcMain.handle(
+    "dashboard:deleteSheet",
+    (_event, projectId: string, sheetId: string) =>
+      withLoggedErrors("dashboard:deleteSheet", () =>
+        getBackend().deleteSheet(projectId, sheetId),
       ),
   );
   ipcMain.handle("dashboard:browsePath", (event, options: BrowsePathOptions) =>

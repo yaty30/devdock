@@ -13,6 +13,7 @@ export function Modal({
   children,
   className,
   contentClassName,
+  headerAction,
   closeLabel = "Close dialog",
   onClose,
 }: {
@@ -23,6 +24,7 @@ export function Modal({
   children: ReactNode;
   className?: string;
   contentClassName?: string;
+  headerAction?: ReactNode;
   closeLabel?: string;
   onClose: () => void;
 }): JSX.Element | null {
@@ -107,15 +109,18 @@ export function Modal({
             <h2 id={titleId}>{title}</h2>
             {subtitle ? <p>{subtitle}</p> : null}
           </div>
-          <button
-            className="icon-button secondary"
-            type="button"
-            aria-label={closeLabel}
-            title={closeLabel}
-            onClick={onClose}
-          >
-            <X size={18} />
-          </button>
+          <div className="modal-header-actions">
+            {headerAction}
+            <button
+              className="icon-button secondary"
+              type="button"
+              aria-label={closeLabel}
+              title={closeLabel}
+              onClick={onClose}
+            >
+              <X size={18} />
+            </button>
+          </div>
         </header>
         <div
           className={`modal-content${

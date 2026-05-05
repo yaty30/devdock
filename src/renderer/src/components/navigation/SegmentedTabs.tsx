@@ -36,6 +36,15 @@ export function SegmentedTabs({
       >
         Git terminal
       </button>
+      <button
+        className={`tab${activeTab === "notes" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "notes"}
+        onClick={() => onTabChange("notes")}
+      >
+        Notes
+      </button>
     </div>
   );
 }

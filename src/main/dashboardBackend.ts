@@ -18,6 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { userInfo } from "node:os";
@@ -45,6 +46,9 @@ import type {
   ServiceName,
   ServiceState,
   ServiceStatusRecord,
+  Sheet,
+  SheetContentJson,
+  SheetUpdate,
   ShutdownEntry,
 } from "../shared/dashboardTypes";
 import {
@@ -111,6 +115,16 @@ type SettingsRow = {
   updated_at: string;
 };
 
+type SheetRow = {
+  id: string;
+  project_id: string;
+  title: string;
+  content_json: string;
+  created_at: string;
+  updated_at: string;
+  auto_save_enabled: number;
+};
+
 type SettingsActivityEntry = {
   title: string;
   meta: string;
@@ -123,6 +137,10 @@ const STATUS_INTERVAL_MS = 5000;
 const TAIL_INTERVAL_MS = 1000;
 const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
 const WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
+const EMPTY_SHEET_CONTENT: SheetContentJson = {
+  type: "doc",
+  content: [{ type: "paragraph" }],
+};
 
 const CHANNEL_NAME = "dashboard:event";
 
@@ -338,6 +356,102 @@ export class DashboardBackend {
     return { id, name: trimmedName, code: trimmedCode };
   }
 
+  getSheets(projectId: string): Sheet[] {
+    this.ensureProjectExists(projectId);
+    const rows = this.db
+      .prepare(
+        `SELECT id, project_id, title, content_json, created_at, updated_at,
+                auto_save_enabled
+         FROM sheets
+         WHERE project_id = ?
+         ORDER BY updated_at DESC, created_at DESC`,
+      )
+      .all(projectId) as SheetRow[];
+
+    return rows.map((row) => this.mapSheet(row));
+  }
+
+  createSheet(projectId: string, title: string): Sheet {
+    this.ensureProjectExists(projectId);
+    const trimmedTitle = title.trim();
+    this.validateSheetTitle(projectId, trimmedTitle);
+
+    const now = new Date().toISOString();
+    const sheet: Sheet = {
+      id: randomUUID(),
+      projectId,
+      title: trimmedTitle,
+      contentJson: EMPTY_SHEET_CONTENT,
+      createdAt: now,
+      updatedAt: now,
+      autoSaveEnabled: true,
+    };
+
+    this.db
+      .prepare(
+        `INSERT INTO sheets (
+          id, project_id, title, content_json, created_at, updated_at,
+          auto_save_enabled
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sheet.id,
+        projectId,
+        sheet.title,
+        JSON.stringify(sheet.contentJson),
+        sheet.createdAt,
+        sheet.updatedAt,
+        sheet.autoSaveEnabled ? 1 : 0,
+      );
+
+    return sheet;
+  }
+
+  updateSheet(projectId: string, sheetId: string, updates: SheetUpdate): Sheet {
+    this.ensureProjectExists(projectId);
+    const existing = this.getSheetRow(projectId, sheetId);
+    if (!existing) {
+      throw new Error("Sheet not found.");
+    }
+
+    const nextContentJson =
+      updates.contentJson === undefined
+        ? existing.content_json
+        : JSON.stringify(updates.contentJson);
+    const nextAutoSaveEnabled =
+      updates.autoSaveEnabled === undefined
+        ? existing.auto_save_enabled
+        : updates.autoSaveEnabled
+          ? 1
+          : 0;
+    const updatedAt = new Date().toISOString();
+
+    this.db
+      .prepare(
+        `UPDATE sheets
+         SET content_json = ?, auto_save_enabled = ?, updated_at = ?
+         WHERE project_id = ? AND id = ?`,
+      )
+      .run(nextContentJson, nextAutoSaveEnabled, updatedAt, projectId, sheetId);
+
+    const updated = this.getSheetRow(projectId, sheetId);
+    if (!updated) {
+      throw new Error("Sheet could not be read after saving.");
+    }
+    return this.mapSheet(updated);
+  }
+
+  deleteSheet(projectId: string, sheetId: string): void {
+    this.ensureProjectExists(projectId);
+    const result = this.db
+      .prepare("DELETE FROM sheets WHERE project_id = ? AND id = ?")
+      .run(projectId, sheetId);
+
+    if (result.changes === 0) {
+      throw new Error("Sheet not found.");
+    }
+  }
+
   validateProjectSettings(
     _projectId: string,
     name: string,
@@ -435,6 +549,7 @@ export class DashboardBackend {
     this.db
       .prepare("DELETE FROM service_status WHERE project_id = ?")
       .run(projectId);
+    this.db.prepare("DELETE FROM sheets WHERE project_id = ?").run(projectId);
     this.db.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
     // remove config file
     const configDir = join(this.dataRoot, "projects", projectId);
@@ -838,6 +953,22 @@ export class DashboardBackend {
         kind TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS sheets (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        content_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        auto_save_enabled INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY(project_id) REFERENCES projects(id)
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS sheets_project_title_unique
+        ON sheets(project_id, title COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS sheets_project_updated_idx
+        ON sheets(project_id, updated_at DESC);
     `);
 
     this.patchExistingActivityDatesToYesterday();
@@ -896,6 +1027,58 @@ export class DashboardBackend {
     return this.db
       .prepare("SELECT id, name, code FROM projects ORDER BY created_at ASC")
       .all() as ProjectRecord[];
+  }
+
+  private ensureProjectExists(projectId: string): void {
+    const exists =
+      this.db.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId) !==
+      undefined;
+    if (!exists) {
+      throw new Error(`Unknown project: ${projectId}`);
+    }
+  }
+
+  private validateSheetTitle(projectId: string, title: string): void {
+    if (!title) {
+      throw new Error("Sheet title is required.");
+    }
+
+    const duplicate = this.db
+      .prepare(
+        `SELECT 1 FROM sheets
+         WHERE project_id = ? AND title = ? COLLATE NOCASE`,
+      )
+      .get(projectId, title);
+
+    if (duplicate !== undefined) {
+      throw new Error("A Sheet with this title already exists.");
+    }
+  }
+
+  private getSheetRow(
+    projectId: string,
+    sheetId: string,
+  ): SheetRow | undefined {
+    return this.db
+      .prepare(
+        `SELECT id, project_id, title, content_json, created_at, updated_at,
+                auto_save_enabled
+         FROM sheets
+         WHERE project_id = ? AND id = ?`,
+      )
+      .get(projectId, sheetId) as SheetRow | undefined;
+  }
+
+  private mapSheet(row: SheetRow): Sheet {
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      title: row.title,
+      contentJson: parseSheetContent(row.content_json),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      autoSaveEnabled: row.auto_save_enabled === 1,
+    };
   }
 
   private nextProjectId(name: string, code: string): string {
@@ -2128,6 +2311,19 @@ function clampInteger(
   }
 
   return Math.min(max, Math.max(min, Math.trunc(value)));
+}
+
+function parseSheetContent(value: string): SheetContentJson {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as SheetContentJson;
+    }
+  } catch {
+    // Fall back to an empty document if persisted content is unreadable.
+  }
+
+  return EMPTY_SHEET_CONTENT;
 }
 
 function normalizeBuildSortKey(

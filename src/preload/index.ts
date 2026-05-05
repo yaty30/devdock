@@ -37,6 +37,14 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:getGitStatus", projectId),
   runGitCommand: (projectId, args) =>
     ipcRenderer.invoke("dashboard:runGitCommand", projectId, args),
+  getSheets: (projectId) =>
+    ipcRenderer.invoke("dashboard:getSheets", projectId),
+  createSheet: (projectId, title) =>
+    ipcRenderer.invoke("dashboard:createSheet", projectId, title),
+  updateSheet: (projectId, sheetId, updates) =>
+    ipcRenderer.invoke("dashboard:updateSheet", projectId, sheetId, updates),
+  deleteSheet: (projectId, sheetId) =>
+    ipcRenderer.invoke("dashboard:deleteSheet", projectId, sheetId),
   browsePath: (options: BrowsePathOptions) =>
     ipcRenderer.invoke("dashboard:browsePath", options),
   openPath: (path) => ipcRenderer.invoke("dashboard:openPath", path),

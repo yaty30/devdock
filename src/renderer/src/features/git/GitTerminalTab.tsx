@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Copy, Search } from "lucide-react";
+import { ChevronDown, ChevronUp, Copy, Search, X } from "lucide-react";
 import type { GitStatusRecord } from "../../types";
 
 type GitCommandHistoryItem = {
@@ -205,9 +205,30 @@ export function GitTerminalTab({
                 <Search size={14} />
                 <input id="git-find" type="text" aria-label="Find" />
               </div>
-              <button type="button">Prev</button>
-              <button type="button">Next</button>
-              <button type="button">Clear</button>
+              <button
+                className="find-icon-button"
+                type="button"
+                aria-label="Previous match"
+                title="Previous match"
+              >
+                <ChevronUp size={13} />
+              </button>
+              <button
+                className="find-icon-button"
+                type="button"
+                aria-label="Next match"
+                title="Next match"
+              >
+                <ChevronDown size={13} />
+              </button>
+              <button
+                className="find-icon-button"
+                type="button"
+                aria-label="Clear find"
+                title="Clear find"
+              >
+                <X size={13} />
+              </button>
             </div>
           </div>
           <div className="terminal-output" aria-label="Git terminal output">

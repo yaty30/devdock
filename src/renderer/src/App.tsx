@@ -12,6 +12,7 @@ import {
 } from "./features/dashboard/DashboardContent";
 import { GitTerminalTab } from "./features/git/GitTerminalTab";
 import { MonitorTab } from "./features/monitor/MonitorTab";
+import { NotesTab } from "./features/notes/NotesTab";
 import { SettingsContent } from "./features/settings/SettingsContent";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import closeMouthLogo from "./assets/close-mouth-logo.png";
@@ -620,6 +621,9 @@ function App(): JSX.Element {
                   </div>
                 </section>
               )
+            ) : null}
+            {activeTab === "notes" ? (
+              <NotesTab projectId={selectedProject.id} />
             ) : null}
           </>
         ) : null}

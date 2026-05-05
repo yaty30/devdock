@@ -22,11 +22,14 @@ export type {
   ServiceName,
   ServiceState,
   ServiceStatusRecord,
+  Sheet,
+  SheetContentJson,
+  SheetUpdate,
   ShutdownEntry,
 } from "../../shared/dashboardTypes";
 
 export type AppSection = "dashboard" | "project";
-export type DashboardTab = "dashboard" | "monitor" | "git-terminal";
+export type DashboardTab = "dashboard" | "monitor" | "git-terminal" | "notes";
 export type FontSizeMode = "large" | "regular" | "small";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
