@@ -10,7 +10,6 @@ import {
   PanelLeftOpen,
   Plus,
   Sun,
-  Trash2,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
 import type {
@@ -30,7 +29,6 @@ export function Sidebar({
   collapsed,
   onProjectChange,
   onDatabaseConnectionChange,
-  onDatabaseConnectionDelete,
   onSectionChange,
   onAddProject,
   onAddDatabaseConnection,
@@ -46,7 +44,6 @@ export function Sidebar({
   collapsed: boolean;
   onProjectChange: (project: Project) => void;
   onDatabaseConnectionChange: (connection: DatabaseConnection) => void;
-  onDatabaseConnectionDelete: (connection: DatabaseConnection) => void;
   onSectionChange: (section: AppSection) => void;
   onAddProject: () => void;
   onAddDatabaseConnection: () => void;
@@ -197,18 +194,6 @@ export function Sidebar({
                   </span>
                   <span className="database-type-label">{connection.type}</span>
                 </button>
-                {!collapsed ? (
-                  <button
-                    className="database-item-delete"
-                    type="button"
-                    tabIndex={databasesOpen ? 0 : -1}
-                    aria-label={`Delete ${connection.name}`}
-                    title={`Delete ${connection.name}`}
-                    onClick={() => onDatabaseConnectionDelete(connection)}
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                ) : null}
               </div>
             );
           })}

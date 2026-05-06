@@ -236,10 +236,32 @@ export type DatabaseColumn = {
   metadata: DatabaseColumnMetadata;
 };
 
+export type DatabaseIndex = {
+  name: string;
+  columns: string[];
+  type: string;
+};
+
+export type DatabaseTrigger = {
+  name: string;
+  timing?: string;
+  event?: string;
+};
+
+export type DatabasePartition = {
+  name: string;
+  method?: string;
+  expression?: string;
+  description?: string;
+};
+
 export type DatabaseTable = {
   schema: string;
   name: string;
   columns: DatabaseColumn[];
+  indexes: DatabaseIndex[];
+  triggers: DatabaseTrigger[];
+  partitions: DatabasePartition[];
 };
 
 export type DatabaseMetadata = {
@@ -259,6 +281,8 @@ export type DatabaseQueryColumn = {
 };
 
 export type DatabaseStatementExecutionResult = {
+  executionRecordId?: string;
+  executedAt?: string;
   statement: string;
   columns: DatabaseQueryColumn[];
   rows: Array<Record<string, DatabaseQueryValue>>;
@@ -271,6 +295,35 @@ export type DatabaseStatementExecutionResult = {
 
 export type DatabaseExecutionBatchResult = {
   results: DatabaseStatementExecutionResult[];
+};
+
+export type DatabaseWorksheet = {
+  connectionId: string;
+  sheetId: string;
+  sheetName: string;
+  sql: string;
+  savedAt: string;
+  isOpen: boolean;
+};
+
+export type DatabaseWorksheetState = {
+  connectionId: string;
+  sheets: DatabaseWorksheet[];
+  activeSheetId: string | null;
+};
+
+export type DatabaseExecutionRecord = {
+  id: string;
+  time: string;
+  connectionId: string;
+  connection: string;
+  user: string;
+  query: string;
+  duration: string;
+  status: "success" | "error";
+  rows: number;
+  rowsAffected?: number;
+  errorMessage?: string;
 };
 
 export type DashboardEvent =
@@ -325,6 +378,19 @@ export type DashboardApi = {
   getDatabaseMetadata: (
     connection: DatabaseConnection,
   ) => Promise<DatabaseMetadata>;
+  getDatabaseWorksheetState: (
+    connectionId: string,
+  ) => Promise<DatabaseWorksheetState>;
+  saveDatabaseWorksheetState: (
+    state: DatabaseWorksheetState,
+  ) => Promise<DatabaseWorksheetState>;
+  deleteDatabaseWorksheet: (
+    connectionId: string,
+    sheetId: string,
+  ) => Promise<void>;
+  getDatabaseExecutionHistory: (
+    connectionId?: string,
+  ) => Promise<DatabaseExecutionRecord[]>;
   executeDatabaseStatements: (
     connection: DatabaseConnection,
     statements: string[],

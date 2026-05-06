@@ -40,10 +40,13 @@ import type {
   DashboardEvent,
   DatabaseConnection,
   DatabaseConnectionTestResult,
+  DatabaseExecutionRecord,
   DatabaseExecutionBatchResult,
   DatabaseMetadata,
   DatabaseQueryValue,
   DatabaseStatementExecutionResult,
+  DatabaseWorksheet,
+  DatabaseWorksheetState,
   DashboardSnapshot,
   GitStatusRecord,
   LogChannel,
@@ -145,6 +148,34 @@ type DatabaseConnectionRow = {
   updated_at: string;
 };
 
+type DatabaseWorksheetRow = {
+  connection_id: string;
+  sheet_id: string;
+  sheet_name: string;
+  sql_content: string;
+  saved_at: string;
+  is_open: number;
+};
+
+type DatabaseWorksheetStateRow = {
+  connection_id: string;
+  active_sheet_id: string | null;
+};
+
+type DatabaseExecutionHistoryRow = {
+  id: string;
+  executed_at: string;
+  connection_id: string;
+  connection_name: string;
+  database_user: string;
+  sql_statement: string;
+  duration_ms: number;
+  status: "success" | "error";
+  row_count: number;
+  rows_affected: number | null;
+  error_message: string | null;
+};
+
 type SettingsActivityEntry = {
   title: string;
   meta: string;
@@ -157,6 +188,7 @@ const STATUS_INTERVAL_MS = 5000;
 const TAIL_INTERVAL_MS = 1000;
 const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
 const WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
+const RETENTION_DAYS = 3;
 const EMPTY_SHEET_CONTENT: SheetContentJson = {
   type: "doc",
   content: [{ type: "paragraph" }],
@@ -262,12 +294,150 @@ export class DashboardBackend {
   }
 
   deleteDatabaseConnection(connectionId: string): void {
+    this.db
+      .prepare("DELETE FROM database_worksheets WHERE connection_id = ?")
+      .run(connectionId);
+    this.db
+      .prepare("DELETE FROM database_worksheet_state WHERE connection_id = ?")
+      .run(connectionId);
+    this.db
+      .prepare("DELETE FROM database_execution_history WHERE connection_id = ?")
+      .run(connectionId);
     const result = this.db
       .prepare("DELETE FROM database_connections WHERE id = ?")
       .run(connectionId);
     if (result.changes === 0) {
       throw new Error("Database connection not found.");
     }
+  }
+
+  getDatabaseWorksheetState(connectionId: string): DatabaseWorksheetState {
+    this.ensureDatabaseConnectionExists(connectionId);
+    const rows = this.db
+      .prepare(
+        `SELECT connection_id, sheet_id, sheet_name, sql_content, saved_at,
+                is_open
+         FROM database_worksheets
+         WHERE connection_id = ?
+         ORDER BY datetime(saved_at) DESC, sheet_name COLLATE NOCASE ASC`,
+      )
+      .all(connectionId) as DatabaseWorksheetRow[];
+    const state = this.db
+      .prepare(
+        `SELECT connection_id, active_sheet_id
+         FROM database_worksheet_state
+         WHERE connection_id = ?`,
+      )
+      .get(connectionId) as DatabaseWorksheetStateRow | undefined;
+    const sheets = rows.map(mapDatabaseWorksheetRow);
+    const activeSheetId = sheets.some(
+      (sheet) => sheet.sheetId === state?.active_sheet_id,
+    )
+      ? state?.active_sheet_id ?? null
+      : (sheets.find((sheet) => sheet.isOpen)?.sheetId ?? sheets[0]?.sheetId ?? null);
+
+    return { connectionId, sheets, activeSheetId };
+  }
+
+  saveDatabaseWorksheetState(
+    state: DatabaseWorksheetState,
+  ): DatabaseWorksheetState {
+    this.ensureDatabaseConnectionExists(state.connectionId);
+    const now = new Date().toISOString();
+    const activeSheetId = state.sheets.some(
+      (sheet) => sheet.sheetId === state.activeSheetId,
+    )
+      ? state.activeSheetId
+      : null;
+
+    this.db
+      .prepare("DELETE FROM database_worksheets WHERE connection_id = ?")
+      .run(state.connectionId);
+    const insertSheet = this.db.prepare(
+      `INSERT INTO database_worksheets (
+         connection_id, sheet_id, sheet_name, sql_content, saved_at, is_open
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (const sheet of state.sheets) {
+      const sheetName = sheet.sheetName.trim() || "Untitled";
+      insertSheet.run(
+        state.connectionId,
+        sheet.sheetId,
+        sheetName,
+        sheet.sql,
+        sheet.savedAt || now,
+        sheet.isOpen ? 1 : 0,
+      );
+    }
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO database_worksheet_state (
+           connection_id, active_sheet_id, updated_at
+         ) VALUES (?, ?, ?)`,
+      )
+      .run(state.connectionId, activeSheetId, now);
+
+    return this.getDatabaseWorksheetState(state.connectionId);
+  }
+
+  deleteDatabaseWorksheet(connectionId: string, sheetId: string): void {
+    this.ensureDatabaseConnectionExists(connectionId);
+    this.db
+      .prepare(
+        `DELETE FROM database_worksheets
+         WHERE connection_id = ? AND sheet_id = ?`,
+      )
+      .run(connectionId, sheetId);
+    const state = this.db
+      .prepare(
+        `SELECT active_sheet_id
+         FROM database_worksheet_state
+         WHERE connection_id = ?`,
+      )
+      .get(connectionId) as { active_sheet_id: string | null } | undefined;
+    if (state?.active_sheet_id === sheetId) {
+      const nextActive = this.db
+        .prepare(
+          `SELECT sheet_id
+           FROM database_worksheets
+           WHERE connection_id = ? AND is_open = 1
+           ORDER BY datetime(saved_at) DESC
+           LIMIT 1`,
+        )
+        .get(connectionId) as { sheet_id: string } | undefined;
+      this.db
+        .prepare(
+          `UPDATE database_worksheet_state
+           SET active_sheet_id = ?, updated_at = ?
+           WHERE connection_id = ?`,
+        )
+        .run(nextActive?.sheet_id ?? null, new Date().toISOString(), connectionId);
+    }
+  }
+
+  getDatabaseExecutionHistory(
+    connectionId?: string,
+  ): DatabaseExecutionRecord[] {
+    this.pruneDatabaseExecutionHistory(connectionId);
+    const whereParts = [
+      `datetime(executed_at) >= datetime('now', '-${RETENTION_DAYS} days')`,
+    ];
+    const params: unknown[] = [];
+    if (connectionId) {
+      this.ensureDatabaseConnectionExists(connectionId);
+      whereParts.push("connection_id = ?");
+      params.push(connectionId);
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM database_execution_history
+         WHERE ${whereParts.join(" AND ")}
+         ORDER BY datetime(executed_at) DESC, rowid DESC
+         LIMIT 1000`,
+      )
+      .all(...params) as DatabaseExecutionHistoryRow[];
+    return rows.map(mapDatabaseExecutionHistoryRow);
   }
 
   async testDatabaseConnection(
@@ -373,9 +543,57 @@ export class DashboardBackend {
          ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`,
         relevantSchemas,
       );
+      const [indexRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT TABLE_SCHEMA AS tableSchema,
+                TABLE_NAME AS tableName,
+                INDEX_NAME AS indexName,
+                COLUMN_NAME AS columnName,
+                INDEX_TYPE AS indexType,
+                SEQ_IN_INDEX AS sequenceInIndex
+         FROM INFORMATION_SCHEMA.STATISTICS
+         WHERE TABLE_SCHEMA IN (${schemaPlaceholders})
+         ORDER BY TABLE_SCHEMA, TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`,
+        relevantSchemas,
+      );
+      const [triggerRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT TRIGGER_SCHEMA AS triggerSchema,
+                EVENT_OBJECT_TABLE AS tableName,
+                TRIGGER_NAME AS triggerName,
+                ACTION_TIMING AS actionTiming,
+                EVENT_MANIPULATION AS eventManipulation
+         FROM INFORMATION_SCHEMA.TRIGGERS
+         WHERE TRIGGER_SCHEMA IN (${schemaPlaceholders})
+         ORDER BY TRIGGER_SCHEMA, EVENT_OBJECT_TABLE, TRIGGER_NAME`,
+        relevantSchemas,
+      );
+      const [partitionRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT TABLE_SCHEMA AS tableSchema,
+                TABLE_NAME AS tableName,
+                PARTITION_NAME AS partitionName,
+                PARTITION_METHOD AS partitionMethod,
+                PARTITION_EXPRESSION AS partitionExpression,
+                PARTITION_DESCRIPTION AS partitionDescription
+         FROM INFORMATION_SCHEMA.PARTITIONS
+         WHERE TABLE_SCHEMA IN (${schemaPlaceholders})
+           AND PARTITION_NAME IS NOT NULL
+         ORDER BY TABLE_SCHEMA, TABLE_NAME, PARTITION_ORDINAL_POSITION`,
+        relevantSchemas,
+      );
       const columnsByTable = new Map<
         string,
         DatabaseMetadata["tables"][number]["columns"]
+      >();
+      const indexAccumulator = new Map<
+        string,
+        Map<string, { name: string; columns: string[]; type: string }>
+      >();
+      const triggersByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["triggers"]
+      >();
+      const partitionsByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["partitions"]
       >();
 
       for (const row of columnRows) {
@@ -388,6 +606,49 @@ export class DashboardBackend {
         columnsByTable.set(tableKey, columns);
       }
 
+      for (const row of indexRows) {
+        const tableKey = `${row.tableSchema}.${row.tableName}`;
+        const indexes = indexAccumulator.get(tableKey) ?? new Map();
+        const indexName = String(row.indexName);
+        const index = indexes.get(indexName) ?? {
+          name: indexName,
+          columns: [],
+          type: String(row.indexType || "INDEX").toUpperCase(),
+        };
+        if (row.columnName !== null && row.columnName !== undefined) {
+          index.columns.push(String(row.columnName));
+        }
+        indexes.set(indexName, index);
+        indexAccumulator.set(tableKey, indexes);
+      }
+
+      for (const row of triggerRows) {
+        const tableKey = `${row.triggerSchema}.${row.tableName}`;
+        const triggers = triggersByTable.get(tableKey) ?? [];
+        triggers.push({
+          name: String(row.triggerName),
+          timing: String(row.actionTiming || ""),
+          event: String(row.eventManipulation || ""),
+        });
+        triggersByTable.set(tableKey, triggers);
+      }
+
+      for (const row of partitionRows) {
+        const tableKey = `${row.tableSchema}.${row.tableName}`;
+        const partitions = partitionsByTable.get(tableKey) ?? [];
+        partitions.push({
+          name: String(row.partitionName),
+          method: row.partitionMethod ? String(row.partitionMethod) : undefined,
+          expression: row.partitionExpression
+            ? String(row.partitionExpression)
+            : undefined,
+          description: row.partitionDescription
+            ? String(row.partitionDescription)
+            : undefined,
+        });
+        partitionsByTable.set(tableKey, partitions);
+      }
+
       return {
         schemas,
         tables: tableRows.map((row) => ({
@@ -395,6 +656,15 @@ export class DashboardBackend {
           name: String(row.tableName),
           columns:
             columnsByTable.get(`${row.tableSchema}.${row.tableName}`) ?? [],
+          indexes: Array.from(
+            indexAccumulator
+              .get(`${row.tableSchema}.${row.tableName}`)
+              ?.values() ?? [],
+          ),
+          triggers:
+            triggersByTable.get(`${row.tableSchema}.${row.tableName}`) ?? [],
+          partitions:
+            partitionsByTable.get(`${row.tableSchema}.${row.tableName}`) ?? [],
         })),
         views: viewRows.map((row) =>
           qualifyDatabaseObject(row.tableSchema, row.tableName),
@@ -445,7 +715,7 @@ export class DashboardBackend {
           const rowArray = Array.isArray(rows) ? rows : [];
           const normalizedRows = rowArray.map((row) => normalizeMysqlRow(row));
           const resultHeader = isResultSetHeader(rows) ? rows : undefined;
-          results.push({
+          const result: DatabaseStatementExecutionResult = {
             statement: trimmedStatement,
             columns: Array.isArray(fields)
               ? fields.map((field) => ({
@@ -459,9 +729,11 @@ export class DashboardBackend {
             durationMs,
             rowsFetched: normalizedRows.length,
             rowsAffected: resultHeader?.affectedRows,
-          });
+          };
+          this.recordDatabaseExecution(connection, result);
+          results.push(result);
         } catch (error) {
-          results.push({
+          const result: DatabaseStatementExecutionResult = {
             statement: trimmedStatement,
             columns: [],
             rows: [],
@@ -470,7 +742,9 @@ export class DashboardBackend {
               error instanceof Error ? error.message : "Statement failed.",
             durationMs: Math.max(1, performance.now() - startedAt),
             rowsFetched: 0,
-          });
+          };
+          this.recordDatabaseExecution(connection, result);
+          results.push(result);
           break;
         }
       }
@@ -1274,16 +1548,54 @@ export class DashboardBackend {
         updated_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS database_worksheets (
+        connection_id TEXT NOT NULL,
+        sheet_id TEXT NOT NULL,
+        sheet_name TEXT NOT NULL,
+        sql_content TEXT NOT NULL,
+        saved_at TEXT NOT NULL,
+        is_open INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY(connection_id, sheet_id),
+        FOREIGN KEY(connection_id) REFERENCES database_connections(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS database_worksheet_state (
+        connection_id TEXT PRIMARY KEY,
+        active_sheet_id TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(connection_id) REFERENCES database_connections(id)
+      );
+
+      CREATE TABLE IF NOT EXISTS database_execution_history (
+        id TEXT PRIMARY KEY,
+        executed_at TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
+        connection_name TEXT NOT NULL,
+        database_user TEXT NOT NULL,
+        sql_statement TEXT NOT NULL,
+        duration_ms REAL NOT NULL,
+        status TEXT NOT NULL,
+        row_count INTEGER NOT NULL,
+        rows_affected INTEGER,
+        error_message TEXT,
+        FOREIGN KEY(connection_id) REFERENCES database_connections(id)
+      );
+
       CREATE UNIQUE INDEX IF NOT EXISTS sheets_project_title_unique
         ON sheets(project_id, title COLLATE NOCASE);
       CREATE INDEX IF NOT EXISTS sheets_project_updated_idx
         ON sheets(project_id, updated_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS database_connections_name_unique
         ON database_connections(name COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS database_worksheets_connection_saved_idx
+        ON database_worksheets(connection_id, saved_at DESC);
+      CREATE INDEX IF NOT EXISTS database_execution_connection_time_idx
+        ON database_execution_history(connection_id, executed_at DESC);
     `);
 
     this.patchExistingActivityDatesToYesterday();
     this.ensureBuildRunCleanlinessColumn();
+    this.pruneDatabaseExecutionHistory();
   }
 
   private ensureBuildRunCleanlinessColumn(): void {
@@ -1415,6 +1727,70 @@ export class DashboardBackend {
         activeSessions: 0,
       });
     }
+  }
+
+  private ensureDatabaseConnectionExists(connectionId: string): void {
+    const exists =
+      this.db
+        .prepare("SELECT 1 FROM database_connections WHERE id = ?")
+        .get(connectionId) !== undefined;
+    if (!exists) {
+      throw new Error(`Unknown database connection: ${connectionId}`);
+    }
+  }
+
+  private recordDatabaseExecution(
+    connection: DatabaseConnection,
+    result: DatabaseStatementExecutionResult,
+  ): void {
+    const id = randomUUID();
+    const executedAt = new Date().toISOString();
+    const rowsAffected = result.rowsAffected ?? null;
+    const rowCount =
+      result.rowsFetched > 0 ? result.rowsFetched : (result.rowsAffected ?? 0);
+
+    this.db
+      .prepare(
+        `INSERT INTO database_execution_history (
+           id, executed_at, connection_id, connection_name, database_user,
+           sql_statement, duration_ms, status, row_count, rows_affected,
+           error_message
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        executedAt,
+        connection.id,
+        connection.name,
+        connection.user,
+        result.statement,
+        result.durationMs,
+        result.status,
+        rowCount,
+        rowsAffected,
+        result.errorMessage ?? null,
+      );
+    result.executionRecordId = id;
+    result.executedAt = executedAt;
+    this.pruneDatabaseExecutionHistory(connection.id);
+  }
+
+  private pruneDatabaseExecutionHistory(connectionId?: string): void {
+    const whereParts = [
+      `datetime(executed_at) < datetime('now', '-${RETENTION_DAYS} days')`,
+    ];
+    const params: unknown[] = [];
+    if (connectionId) {
+      whereParts.push("connection_id = ?");
+      params.push(connectionId);
+    }
+
+    this.db
+      .prepare(
+        `DELETE FROM database_execution_history
+         WHERE ${whereParts.join(" AND ")}`,
+      )
+      .run(...params);
   }
 
   private nextProjectId(name: string, code: string): string {
@@ -1904,7 +2280,10 @@ export class DashboardBackend {
     const offset = clampInteger(options.offset, 0, 100_000, 0);
     const sortBy = normalizeBuildSortKey(options.sortBy);
     const sortDirection = options.sortDirection === "asc" ? "ASC" : "DESC";
-    const whereParts = ["project_id = ?"];
+    const whereParts = [
+      "project_id = ?",
+      `(status = 'running' OR datetime(COALESCE(completed_at, started_at)) >= datetime('now', '-${RETENTION_DAYS} days'))`,
+    ];
     const params: unknown[] = [projectId];
     const search = options.search?.trim().toLowerCase() ?? "";
     const status = normalizeBuildStatus(options.status);
@@ -1969,17 +2348,24 @@ export class DashboardBackend {
         `DELETE FROM build_runs
          WHERE project_id = ?
            AND status != 'running'
-           AND datetime(COALESCE(completed_at, started_at)) < datetime('now', '-7 days')`,
+           AND datetime(COALESCE(completed_at, started_at)) < datetime('now', '-${RETENTION_DAYS} days')`,
       )
       .run(projectId);
   }
 
   private getActivity(projectId: string): ActivityRecord[] {
+    this.db
+      .prepare(
+        `DELETE FROM activity_events
+         WHERE project_id = ?
+           AND created_at < datetime('now', '-${RETENTION_DAYS} days')`,
+      )
+      .run(projectId);
     const rows = this.db
       .prepare(
         `SELECT * FROM activity_events
          WHERE project_id = ?
-           AND created_at >= datetime('now', '-7 days')
+           AND created_at >= datetime('now', '-${RETENTION_DAYS} days')
          ORDER BY created_at DESC, id DESC`,
       )
       .all(projectId) as ActivityRow[];
@@ -2009,12 +2395,11 @@ export class DashboardBackend {
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(projectId, title, meta, tone, kind, createdAt);
-    // prune records older than 7 days to prevent unbounded growth
     this.db
       .prepare(
         `DELETE FROM activity_events
          WHERE project_id = ?
-           AND created_at < datetime('now', '-7 days')`,
+           AND created_at < datetime('now', '-${RETENTION_DAYS} days')`,
       )
       .run(projectId);
     this.send({
@@ -2662,6 +3047,35 @@ function parseSheetContent(value: string): SheetContentJson {
   return EMPTY_SHEET_CONTENT;
 }
 
+function mapDatabaseWorksheetRow(row: DatabaseWorksheetRow): DatabaseWorksheet {
+  return {
+    connectionId: row.connection_id,
+    sheetId: row.sheet_id,
+    sheetName: row.sheet_name,
+    sql: row.sql_content,
+    savedAt: row.saved_at,
+    isOpen: row.is_open === 1,
+  };
+}
+
+function mapDatabaseExecutionHistoryRow(
+  row: DatabaseExecutionHistoryRow,
+): DatabaseExecutionRecord {
+  return {
+    id: row.id,
+    time: row.executed_at,
+    connectionId: row.connection_id,
+    connection: row.connection_name,
+    user: row.database_user,
+    query: row.sql_statement,
+    duration: formatDurationMs(row.duration_ms),
+    status: row.status,
+    rows: row.row_count,
+    rowsAffected: row.rows_affected ?? undefined,
+    errorMessage: row.error_message ?? undefined,
+  };
+}
+
 function normalizeDatabaseConnection(
   connection: DatabaseConnection,
 ): DatabaseConnection {
@@ -3302,6 +3716,10 @@ function formatDuration(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function formatDurationMs(durationMs: number): string {
+  return `${Math.max(1, durationMs).toFixed(1)} ms`;
 }
 
 function formatDate(value: string): string {

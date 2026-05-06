@@ -5563,7 +5563,8 @@ select option {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
-  border-radius: 6px;
+  background-color: transparent;
+  border: none;
 }
 
 .database-tree-item.schema-item.active {
@@ -6220,10 +6221,21 @@ select option {
   padding-top: 2px;
 }
 
+.database-connection-actions-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .database-connection-actions-right {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.database-delete-connection-button {
+  height: var(--control-md);
 }
 
 .database-tree-button,
@@ -6244,10 +6256,30 @@ select option {
   transform: rotate(180deg);
 }
 
-.database-column-list {
+.database-column-list,
+.database-table-object-groups {
   display: grid;
   gap: 2px;
   margin: 1px 0 5px 18px;
+}
+
+.database-table-object-groups {
+  margin-left: 18px;
+}
+
+.database-table-object-group-children {
+  display: grid;
+  gap: 2px;
+  margin: 1px 0 6px 18px;
+}
+
+.database-table-object-group-button .database-column-count,
+.database-tree-button .database-column-count {
+  margin-left: auto;
+}
+
+.database-table-object-group-button .open {
+  transform: rotate(180deg);
 }
 
 .database-column-list .database-column-tree-item {
@@ -6265,11 +6297,18 @@ select option {
 }
 
 .database-column-metadata {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 5px;
+  display: grid;
+  gap: 2px;
   margin: 1px 0 7px 24px;
+}
+
+.database-column-metadata-item {
+  min-height: 24px;
+  padding-left: 6px;
+}
+
+.database-column-metadata-item span:nth-child(2) {
+  color: var(--accent);
 }
 
 .database-tree-column-metadata.nullable {
@@ -6549,6 +6588,26 @@ select option {
 }
 
 .database-output-reload {
+  width: 28px;
+  height: 28px;
+}
+
+.database-output-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.database-export-dropdown {
+  --build-dropdown-width: 116px;
+}
+
+.database-output-share {
+  width: 28px;
+  height: 28px;
+}
+
+.database-history-rerun {
   width: 28px;
   height: 28px;
 }

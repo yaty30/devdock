@@ -15,13 +15,19 @@ export type {
   DatabaseConnectionStatus,
   DatabaseConnectionTestResult,
   DatabaseConnectionType,
+  DatabaseExecutionRecord,
   DatabaseExecutionBatchResult,
+  DatabaseIndex,
   DatabaseMetadata,
+  DatabasePartition,
   DatabaseQueryColumn,
   DatabaseQueryValue,
   DatabaseSslMode,
   DatabaseStatementExecutionResult,
   DatabaseTable,
+  DatabaseTrigger,
+  DatabaseWorksheet,
+  DatabaseWorksheetState,
   GitStatusRecord,
   LogChannel,
   LogSearchResult,
@@ -48,17 +54,6 @@ export type DatabaseWorkspaceTab = "connection" | "monitor";
 export type FontSizeMode = "large" | "regular" | "small";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
-
-export type DatabaseExecutionRecord = {
-  id: string;
-  time: string;
-  connection: string;
-  user: string;
-  query: string;
-  duration: string;
-  status: "success" | "error";
-  rows: number;
-};
 
 export type BuildStage = {
   label: string;

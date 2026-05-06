@@ -37,18 +37,30 @@ import { tags } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
 import {
   ArrowLeftRight,
+  Box,
+  Braces,
+  Carrot,
   ChevronDown,
+  Columns3,
+  Component,
   Cpu,
   Database,
   Eye,
   EyeOff,
   File,
+  FileText,
   LoaderCircle,
   Play,
+  Puzzle,
   RefreshCcw,
   Save,
+  Share,
+  Sigma,
   Table2,
+  Trash2,
+  Wrench,
   X,
+  Zap,
 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import {
@@ -67,6 +79,8 @@ import type {
   DatabaseSslMode,
   DatabaseStatementExecutionResult,
   DatabaseTable,
+  DatabaseWorksheet,
+  DatabaseWorksheetState,
   DatabaseWorkspaceTab,
   OracleConnectionMode,
 } from "../../types";
@@ -78,6 +92,7 @@ type QuerySheet = {
   sql: string;
   savedName: string;
   savedSql: string;
+  savedAt: string | null;
   output: SheetOutputState;
 };
 
@@ -100,7 +115,15 @@ type SheetConnectionState = {
 
 type SheetContextMenu =
   | { kind: "sheets"; x: number; y: number }
-  | { kind: "sheet"; sheetId: string; x: number; y: number };
+  | { kind: "sheet"; sheetId: string; x: number; y: number }
+  | { kind: "table"; table: DatabaseTable; x: number; y: number };
+
+type HistoryRerunRequest = {
+  id: string;
+  record: DatabaseExecutionRecord;
+};
+
+type ExportFormat = "json" | "csv" | "pdf";
 
 type ResultRow = Record<string, DatabaseQueryValue>;
 
@@ -378,6 +401,7 @@ export function DatabaseConnectionModal({
   onClose,
   onSave,
   onTestStatus,
+  onDeleteRequest,
 }: {
   open: boolean;
   mode: DatabaseConnectionModalMode;
@@ -389,6 +413,7 @@ export function DatabaseConnectionModal({
     message: string,
     tone: "valid" | "invalid" | "warning",
   ) => void;
+  onDeleteRequest?: (connection: DatabaseConnection) => void;
 }): JSX.Element {
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(() =>
     createConnectionDraft(connection),
@@ -764,14 +789,27 @@ export function DatabaseConnectionModal({
         ) : null}
 
         <div className="dialog-actions database-connection-actions">
-          <button
-            className="button secondary compact"
-            type="button"
-            onClick={() => void testConnection()}
-            disabled={testState.status === "testing" || saving}
-          >
-            {testState.status === "testing" ? "Testing" : "Test connection"}
-          </button>
+          <div className="database-connection-actions-left">
+            {mode === "edit" && connection ? (
+              <button
+                className="danger-button database-delete-connection-button"
+                type="button"
+                onClick={() => onDeleteRequest?.(connection)}
+                disabled={saving}
+              >
+                <Trash2 size={15} />
+                Delete Connection
+              </button>
+            ) : null}
+            <button
+              className="button secondary compact"
+              type="button"
+              onClick={() => void testConnection()}
+              disabled={testState.status === "testing" || saving}
+            >
+              {testState.status === "testing" ? "Testing" : "Test connection"}
+            </button>
+          </div>
           <div className="database-connection-actions-right">
             <button
               className="button secondary compact"
@@ -829,6 +867,7 @@ function ConnectionField({
 export function DatabaseWorkspace({
   connection,
   activeTab,
+  onTabChange,
   executionHistory,
   queryCount,
   lastRefreshTime,
@@ -839,6 +878,7 @@ export function DatabaseWorkspace({
 }: {
   connection: DatabaseConnection;
   activeTab: DatabaseWorkspaceTab;
+  onTabChange: (tab: DatabaseWorkspaceTab) => void;
   executionHistory: DatabaseExecutionRecord[];
   queryCount: number;
   lastRefreshTime: string;
@@ -847,6 +887,10 @@ export function DatabaseWorkspace({
   onSheetSaved: () => void;
   deletedConnectionId?: string | null;
 }): JSX.Element {
+  const [rerunRequest, setRerunRequest] = useState<HistoryRerunRequest | null>(
+    null,
+  );
+
   return (
     <section className="database-screen resizable-panel-screen">
       <div
@@ -858,6 +902,7 @@ export function DatabaseWorkspace({
           onRefresh={onRefresh}
           onSheetSaved={onSheetSaved}
           deletedConnectionId={deletedConnectionId}
+          rerunRequest={rerunRequest}
         />
       </div>
       <div
@@ -868,6 +913,10 @@ export function DatabaseWorkspace({
           executionHistory={executionHistory}
           queryCount={queryCount}
           lastRefreshTime={lastRefreshTime}
+          onRerun={(record) => {
+            setRerunRequest({ id: `${record.id}-${Date.now()}`, record });
+            onTabChange("connection");
+          }}
         />
       </div>
     </section>
@@ -880,12 +929,14 @@ function ConnectionActionWorkspace({
   onRefresh,
   onSheetSaved,
   deletedConnectionId,
+  rerunRequest,
 }: {
   connection: DatabaseConnection;
   onExecution: (record: DatabaseExecutionRecord) => void;
   onRefresh: () => void;
   onSheetSaved: () => void;
   deletedConnectionId?: string | null;
+  rerunRequest: HistoryRerunRequest | null;
 }): JSX.Element {
   const initialSheet = useMemo(() => createQuerySheet("Untitled-1"), []);
   const gridRef = useRef<HTMLDivElement>(null);
@@ -919,6 +970,10 @@ function ConnectionActionWorkspace({
   const [metadataStateByConnection, setMetadataStateByConnection] = useState<
     Record<string, DatabaseMetadataState>
   >({});
+  const [loadedWorksheetConnectionIds, setLoadedWorksheetConnectionIds] =
+    useState<Set<string>>(() => new Set());
+  const persistedWorksheetTimerRef = useRef<number | null>(null);
+  const handledRerunRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     setSheetStateByConnection((current) => {
@@ -939,6 +994,45 @@ function ConnectionActionWorkspace({
   }, [connection.id]);
 
   useEffect(() => {
+    if (loadedWorksheetConnectionIds.has(connection.id)) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    void window.ivsDashboard
+      .getDatabaseWorksheetState(connection.id)
+      .then((persistedState) => {
+        if (cancelled) {
+          return;
+        }
+
+        setLoadedWorksheetConnectionIds((current) =>
+          new Set(current).add(connection.id),
+        );
+        if (persistedState.sheets.length === 0) {
+          return;
+        }
+
+        setSheetStateByConnection((current) => ({
+          ...current,
+          [connection.id]: sheetStateFromPersisted(persistedState),
+        }));
+      })
+      .catch((error) => {
+        console.error(error);
+        if (!cancelled) {
+          setLoadedWorksheetConnectionIds((current) =>
+            new Set(current).add(connection.id),
+          );
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connection.id, loadedWorksheetConnectionIds]);
+
+  useEffect(() => {
     if (!deletedConnectionId) {
       return;
     }
@@ -953,7 +1047,20 @@ function ConnectionActionWorkspace({
       delete next[deletedConnectionId];
       return next;
     });
+    setLoadedWorksheetConnectionIds((current) => {
+      const next = new Set(current);
+      next.delete(deletedConnectionId);
+      return next;
+    });
   }, [deletedConnectionId]);
+
+  useEffect(() => {
+    return () => {
+      if (persistedWorksheetTimerRef.current !== null) {
+        window.clearTimeout(persistedWorksheetTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (metadataStateByConnection[connection.id]) {
@@ -1037,6 +1144,12 @@ function ConnectionActionWorkspace({
     openSheets[0] ??
     null;
   const activeOutput = activeSheet?.output ?? createEmptySheetOutput();
+  const activeResultTab =
+    activeOutput.resultTabs.find(
+      (tab) => tab.id === activeOutput.activeResultTabId,
+    ) ??
+    activeOutput.resultTabs[0] ??
+    null;
   const metadataState =
     metadataStateByConnection[connection.id] ?? createIdleMetadataState();
   const metadata = metadataState.metadata;
@@ -1065,6 +1178,30 @@ function ConnectionActionWorkspace({
     "--database-explorer-width": `${explorerWidth}px`,
     "--database-editor-height": `${editorHeight}px`,
   } as CSSProperties;
+
+  useEffect(() => {
+    if (!loadedWorksheetConnectionIds.has(connection.id)) {
+      return undefined;
+    }
+
+    if (persistedWorksheetTimerRef.current !== null) {
+      window.clearTimeout(persistedWorksheetTimerRef.current);
+    }
+
+    persistedWorksheetTimerRef.current = window.setTimeout(() => {
+      persistedWorksheetTimerRef.current = null;
+      void persistSavedWorksheetState(connection.id, sheetState).catch(
+        (error) => console.error(error),
+      );
+    }, 250);
+
+    return () => {
+      if (persistedWorksheetTimerRef.current !== null) {
+        window.clearTimeout(persistedWorksheetTimerRef.current);
+        persistedWorksheetTimerRef.current = null;
+      }
+    };
+  }, [connection.id, loadedWorksheetConnectionIds, sheetState]);
 
   function updateCurrentConnectionState(
     updater: (state: SheetConnectionState) => SheetConnectionState,
@@ -1216,6 +1353,7 @@ function ConnectionActionWorkspace({
   }
 
   function deleteSheet(sheetId: string): void {
+    const deleted = sheets.find((sheet) => sheet.id === sheetId);
     updateCurrentConnectionState((state) => {
       const removedIndex = state.sheets.findIndex(
         (sheet) => sheet.id === sheetId,
@@ -1244,6 +1382,11 @@ function ConnectionActionWorkspace({
       return { sheets: remaining, activeSheetId, openSheetIds };
     });
     setDeleteRequest(null);
+    if (deleted?.savedAt) {
+      void window.ivsDashboard
+        .deleteDatabaseWorksheet(connection.id, sheetId)
+        .catch((error) => console.error(error));
+    }
   }
 
   function closeSheetTab(sheetId: string): void {
@@ -1304,25 +1447,40 @@ function ConnectionActionWorkspace({
       return;
     }
 
-    // TODO: persist query sheets through backend storage once database connections are real.
-    updateCurrentConnectionState((state) => ({
-      ...state,
-      sheets: state.sheets.map((sheet) =>
+    const savedAt = new Date().toISOString();
+    const nextState: SheetConnectionState = {
+      ...sheetState,
+      sheets: sheetState.sheets.map((sheet) =>
         sheet.id === activeSheet.id
           ? {
               ...sheet,
               savedName: sheet.name,
               savedSql: sheet.sql,
+              savedAt,
               output: prependSheetMessage(
                 sheet.output,
                 "success",
-                `${sheet.name} saved locally for this session.`,
+                `${sheet.name} saved.`,
               ),
             }
           : sheet,
       ),
+    };
+
+    setSheetStateByConnection((current) => ({
+      ...current,
+      [connection.id]: nextState,
     }));
-    onSheetSaved();
+    void persistSavedWorksheetState(connection.id, nextState)
+      .then(() => onSheetSaved())
+      .catch((error) => {
+        console.error(error);
+        addMessage(
+          "error",
+          error instanceof Error ? error.message : "Sheet could not be saved.",
+          activeSheet.id,
+        );
+      });
   }
 
   function addMessage(
@@ -1400,16 +1558,21 @@ function ConnectionActionWorkspace({
 
       batch.results.forEach((result, index) => {
         onExecution({
-          id: `execution-${Date.now()}-${index}-${Math.round(
-            Math.random() * 10000,
-          )}`,
-          time: now,
+          id:
+            result.executionRecordId ??
+            `execution-${Date.now()}-${index}-${Math.round(
+              Math.random() * 10000,
+            )}`,
+          time: result.executedAt ?? now,
+          connectionId: connection.id,
           connection: connection.name,
           user: connection.user,
           query: result.statement || "(empty query)",
           duration: formatDurationMs(result.durationMs),
           status: result.status,
-          rows: result.rowsFetched,
+          rows: result.rowsFetched > 0 ? result.rowsFetched : (result.rowsAffected ?? 0),
+          rowsAffected: result.rowsAffected,
+          errorMessage: result.errorMessage,
         });
       });
 
@@ -1492,6 +1655,39 @@ function ConnectionActionWorkspace({
     );
   }
 
+  function rerunHistoryRecord(record: DatabaseExecutionRecord): void {
+    if (executingRef.current || metadataLoading) {
+      return;
+    }
+
+    const formattedSql = ensureSqlTerminator(formatSqlForDisplay(record.query));
+    const createdSheet = createQuerySheet(
+      nextHistorySheetName(record.time, sheetState.sheets),
+      formattedSql,
+    );
+
+    updateCurrentConnectionState((state) => ({
+      sheets: [...state.sheets, createdSheet],
+      activeSheetId: createdSheet.id,
+      openSheetIds: [...state.openSheetIds, createdSheet.id],
+    }));
+
+    void runDatabaseQuery(
+      { sql: formattedSql, from: 0, to: formattedSql.length },
+      createdSheet.id,
+      "execute",
+    );
+  }
+
+  useEffect(() => {
+    if (!rerunRequest || handledRerunRequestIdRef.current === rerunRequest.id) {
+      return;
+    }
+
+    handledRerunRequestIdRef.current = rerunRequest.id;
+    rerunHistoryRecord(rerunRequest.record);
+  }, [rerunRequest]);
+
   function clearExecutedSqlHighlight(): void {
     editorViewRef.current?.dispatch({ effects: setExecutedSqlRange.of(null) });
   }
@@ -1512,6 +1708,60 @@ function ConnectionActionWorkspace({
       x: event.clientX,
       y: event.clientY,
     });
+  }
+
+  function openTableContextMenu(
+    event: React.MouseEvent,
+    table: DatabaseTable,
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      kind: "table",
+      table,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  function insertTableTemplate(table: DatabaseTable): void {
+    const template = createInsertTemplate(table);
+    const view = editorViewRef.current;
+
+    if (!activeSheet) {
+      const sheet = createQuerySheet(
+        nextUntitledName(sheetState.sheets),
+        template,
+      );
+      updateCurrentConnectionState((state) => ({
+        sheets: [...state.sheets, sheet],
+        activeSheetId: sheet.id,
+        openSheetIds: [...state.openSheetIds, sheet.id],
+      }));
+      setContextMenu(null);
+      return;
+    }
+
+    if (view) {
+      const selection = view.state.selection.main;
+      const prefix =
+        selection.from > 0 &&
+        !/\n\s*$/.test(view.state.doc.sliceString(0, selection.from))
+          ? "\n\n"
+          : "";
+      view.dispatch({
+        changes: {
+          from: selection.from,
+          to: selection.to,
+          insert: `${prefix}${template}`,
+        },
+      });
+    } else {
+      updateActiveSheetSql(
+        `${activeSheet.sql}${activeSheet.sql ? "\n\n" : ""}${template}`,
+      );
+    }
+    setContextMenu(null);
   }
 
   const startResize = (event: PointerEvent<HTMLDivElement>): void => {
@@ -1760,6 +2010,7 @@ function ConnectionActionWorkspace({
                 <TableTreeItem
                   table={table}
                   key={`${table.schema}.${table.name}`}
+                  onContextMenu={(event) => openTableContextMenu(event, table)}
                 />
               ))
             ) : (
@@ -1997,20 +2248,27 @@ function ConnectionActionWorkspace({
                     Messages
                   </button>
                 </div>
-                <button
-                  className="icon-button secondary database-output-reload"
-                  type="button"
-                  aria-label="Reload results"
-                  title="Reload results"
-                  onClick={reloadLastExecution}
-                  disabled={
-                    !activeOutput.lastExecutionTarget ||
-                    isExecuting ||
-                    metadataLoading
-                  }
-                >
-                  <RefreshCcw size={15} />
-                </button>
+                <div className="database-output-actions">
+                  <button
+                    className="icon-button secondary database-output-reload"
+                    type="button"
+                    aria-label="Reload results"
+                    title="Reload results"
+                    onClick={reloadLastExecution}
+                    disabled={
+                      !activeOutput.lastExecutionTarget ||
+                      isExecuting ||
+                      metadataLoading
+                    }
+                  >
+                    <RefreshCcw size={15} />
+                  </button>
+                  <ResultExportMenu
+                    resultTab={activeResultTab}
+                    connection={connection}
+                    sheet={activeSheet}
+                  />
+                </div>
               </div>
               {activeOutput.activeOutputTab === "results" ? (
                 <ResultTabsPanel
@@ -2043,6 +2301,7 @@ function ConnectionActionWorkspace({
           onNewSheet={createNewSheet}
           onRename={startRename}
           onDelete={requestDeleteSheet}
+          onInsertTableTemplate={insertTableTemplate}
         />
       ) : null}
       {deleteRequest ? (
@@ -2099,7 +2358,13 @@ function ObjectTreeGroup({
   );
 }
 
-function TableTreeItem({ table }: { table: DatabaseTable }): JSX.Element {
+function TableTreeItem({
+  table,
+  onContextMenu,
+}: {
+  table: DatabaseTable;
+  onContextMenu: (event: React.MouseEvent) => void;
+}): JSX.Element {
   const [open, setOpen] = useState(false);
 
   return (
@@ -2108,6 +2373,7 @@ function TableTreeItem({ table }: { table: DatabaseTable }): JSX.Element {
         className="database-tree-item database-tree-button"
         type="button"
         onClick={() => setOpen((current) => !current)}
+        onContextMenu={onContextMenu}
       >
         <ChevronDown size={14} className={open ? "open" : undefined} />
         <Table2 size={15} />
@@ -2115,28 +2381,115 @@ function TableTreeItem({ table }: { table: DatabaseTable }): JSX.Element {
         <span className="database-column-count">{table.columns.length}</span>
       </button>
       {open ? (
-        <div className="database-column-list">
-          {table.columns.map((column, index) => (
-            <ColumnTreeItem
-              column={column}
-              defaultOpen={index === 0}
-              key={`${table.schema}.${table.name}.${column.name}`}
-            />
-          ))}
+        <div className="database-table-object-groups">
+          <TableObjectGroup
+            title="Columns"
+            count={table.columns.length}
+            icon={<Columns3 size={13} />}
+            defaultOpen
+          >
+            {table.columns.map((column) => (
+              <ColumnTreeItem
+                column={column}
+                key={`${table.schema}.${table.name}.${column.name}`}
+              />
+            ))}
+          </TableObjectGroup>
+          <TableObjectGroup
+            title="Index"
+            count={table.indexes.length}
+            icon={<Carrot size={13} />}
+            defaultOpen
+          >
+            {table.indexes.length > 0 ? (
+              table.indexes.map((index) => (
+                <div className="database-tree-item database-index-item" key={index.name}>
+                  <Wrench size={13} />
+                  <span>{formatIndexLabel(index)}</span>
+                </div>
+              ))
+            ) : (
+              <div className="database-tree-empty">No indexes found</div>
+            )}
+          </TableObjectGroup>
+          <TableObjectGroup
+            title="Triggers"
+            count={table.triggers.length}
+            icon={<Sigma size={13} />}
+            defaultOpen
+          >
+            {table.triggers.length > 0 ? (
+              table.triggers.map((trigger) => (
+                <div className="database-tree-item" key={trigger.name}>
+                  <Zap size={13} />
+                  <span>{formatTriggerLabel(trigger)}</span>
+                </div>
+              ))
+            ) : (
+              <div className="database-tree-empty">No triggers found</div>
+            )}
+          </TableObjectGroup>
+          <TableObjectGroup
+            title="Partitions"
+            count={table.partitions.length}
+            icon={<Component size={13} />}
+            defaultOpen
+          >
+            {table.partitions.length > 0 ? (
+              table.partitions.map((partition) => (
+                <div className="database-tree-item" key={partition.name}>
+                  <Box size={13} />
+                  <span>{formatPartitionLabel(partition)}</span>
+                </div>
+              ))
+            ) : (
+              <div className="database-tree-empty">No partitions found</div>
+            )}
+          </TableObjectGroup>
         </div>
       ) : null}
     </div>
   );
 }
 
-function ColumnTreeItem({
-  column,
+function TableObjectGroup({
+  title,
+  count,
+  icon,
   defaultOpen = false,
+  children,
 }: {
-  column: DatabaseColumn;
+  title: string;
+  count: number;
+  icon: ReactNode;
   defaultOpen?: boolean;
+  children: ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div className="database-table-object-group">
+      <button
+        className="database-tree-item database-table-object-group-button"
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <ChevronDown size={13} className={open ? "open" : undefined} />
+        {icon}
+        <span>{title}</span>
+        <span className="database-column-count">{count}</span>
+      </button>
+      {open ? <div className="database-table-object-group-children">{children}</div> : null}
+    </div>
+  );
+}
+
+function ColumnTreeItem({
+  column,
+}: {
+  column: DatabaseColumn;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
   const hasMetadata = column.metadata.length > 0;
 
   return (
@@ -2172,13 +2525,14 @@ function ColumnTreeItem({
       {open && hasMetadata ? (
         <div className="database-column-metadata">
           {column.metadata.map((metadata) => (
-            <span
-              className="metadata-pill"
+            <div
+              className="database-tree-item database-column-metadata-item"
               key={`${column.name}-${metadata.label}`}
             >
-              <span className="metadata-pill-label">{metadata.label}</span>
+              <Puzzle size={12} />
+              <span>{metadata.label}</span>
               <span className="metadata-pill-value">{metadata.value}</span>
-            </span>
+            </div>
           ))}
         </div>
       ) : null}
@@ -2191,11 +2545,13 @@ function SheetContextMenuView({
   onNewSheet,
   onRename,
   onDelete,
+  onInsertTableTemplate,
 }: {
   menu: SheetContextMenu;
   onNewSheet: () => void;
   onRename: (sheetId: string) => void;
   onDelete: (sheetId: string) => void;
+  onInsertTableTemplate: (table: DatabaseTable) => void;
 }): JSX.Element {
   return (
     <div
@@ -2207,6 +2563,14 @@ function SheetContextMenuView({
       {menu.kind === "sheets" ? (
         <button type="button" role="menuitem" onClick={onNewSheet}>
           New sheet
+        </button>
+      ) : menu.kind === "table" ? (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => onInsertTableTemplate(menu.table)}
+        >
+          INSERT INTO {formatQualifiedObjectName(menu.table)}
         </button>
       ) : (
         <>
@@ -2372,6 +2736,97 @@ function ResultTabsPanel({
         columnWidths={activeTab.columnWidths}
         onColumnWidthsChange={onColumnWidthsChange}
       />
+    </div>
+  );
+}
+
+function ResultExportMenu({
+  resultTab,
+  connection,
+  sheet,
+}: {
+  resultTab: ResultTab | null;
+  connection: DatabaseConnection;
+  sheet: QuerySheet | null;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const disabled =
+    !resultTab ||
+    resultTab.rows.length === 0 ||
+    resultTab.meta.status === "error";
+
+  function exportResult(format: ExportFormat): void {
+    if (!resultTab || disabled) {
+      return;
+    }
+
+    const exportedAt = new Date().toISOString();
+    const baseName = safeFileName(
+      `${connection.name}-${sheet?.name ?? "worksheet"}-${resultTab.name}`,
+    );
+
+    if (format === "json") {
+      downloadBlob(
+        `${baseName}.json`,
+        "application/json",
+        JSON.stringify(resultTab.rows, null, 2),
+      );
+      return;
+    }
+
+    if (format === "csv") {
+      downloadBlob(
+        `${baseName}.csv`,
+        "text/csv;charset=utf-8",
+        createCsv(resultTab),
+      );
+      return;
+    }
+
+    downloadBlob(
+      `${baseName}.pdf`,
+      "application/pdf",
+      createResultPdf(resultTab, connection, sheet?.name ?? "Worksheet", exportedAt),
+    );
+  }
+
+  return (
+    <div
+      className="build-dropdown database-export-dropdown"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        className={`icon-button secondary database-output-share${open ? " open" : ""}`}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Export results"
+        title="Export results"
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Share size={15} />
+      </button>
+      <div
+        className={`build-dropdown-popover${open && !disabled ? " open" : ""}`}
+        aria-hidden={!open || disabled}
+      >
+        <div className="build-dropdown-menu" role="menu">
+          <button type="button" role="menuitem" disabled={disabled} onClick={() => exportResult("json")}>
+            <Braces size={14} />
+            <span>JSON</span>
+          </button>
+          <button type="button" role="menuitem" disabled={disabled} onClick={() => exportResult("csv")}>
+            <FileText size={14} />
+            <span>CSV</span>
+          </button>
+          <button type="button" role="menuitem" disabled={disabled} onClick={() => exportResult("pdf")}>
+            <File size={14} />
+            <span>PDF</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -2616,11 +3071,13 @@ function DatabaseMonitor({
   executionHistory,
   queryCount,
   lastRefreshTime,
+  onRerun,
 }: {
   connection: DatabaseConnection;
   executionHistory: DatabaseExecutionRecord[];
   queryCount: number;
   lastRefreshTime: string;
+  onRerun: (record: DatabaseExecutionRecord) => void;
 }): JSX.Element {
   const [expandedQueryIds, setExpandedQueryIds] = useState<Set<string>>(
     () => new Set(),
@@ -2684,6 +3141,7 @@ function DatabaseMonitor({
                 <th>Duration</th>
                 <th>Status</th>
                 <th>Rows</th>
+                <th>Re-run</th>
               </tr>
             </thead>
             <tbody>
@@ -2710,6 +3168,17 @@ function DatabaseMonitor({
                     </span>
                   </td>
                   <td>{entry.rows}</td>
+                  <td>
+                    <button
+                      className="icon-button secondary database-history-rerun"
+                      type="button"
+                      aria-label={`Re-run query from ${formatCompactTime(entry.time)}`}
+                      title="Re-run query"
+                      onClick={() => onRerun(entry)}
+                    >
+                      <Play size={14} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -2723,7 +3192,7 @@ function DatabaseMonitor({
             Showing {visibleHistory.length} of {executionHistory.length}{" "}
             executions
           </span>
-          <span>Newest first, up to 1000 retained</span>
+          <span>Newest first, retained for 3 days</span>
         </div>
       </Panel>
     </div>
@@ -2942,8 +3411,73 @@ function createQuerySheet(name: string, sql = DEFAULT_SQL): QuerySheet {
     sql,
     savedName: name,
     savedSql: sql,
+    savedAt: null,
     output: createEmptySheetOutput(),
   };
+}
+
+function createQuerySheetFromPersisted(sheet: DatabaseWorksheet): QuerySheet {
+  return {
+    id: sheet.sheetId,
+    name: sheet.sheetName,
+    sql: sheet.sql,
+    savedName: sheet.sheetName,
+    savedSql: sheet.sql,
+    savedAt: sheet.savedAt,
+    output: createEmptySheetOutput(),
+  };
+}
+
+function sheetStateFromPersisted(
+  persistedState: DatabaseWorksheetState,
+): SheetConnectionState {
+  const sheets = persistedState.sheets.map(createQuerySheetFromPersisted);
+  const openSheetIds = persistedState.sheets
+    .filter((sheet) => sheet.isOpen)
+    .map((sheet) => sheet.sheetId);
+  const activeSheetId =
+    persistedState.activeSheetId &&
+    sheets.some((sheet) => sheet.id === persistedState.activeSheetId)
+      ? persistedState.activeSheetId
+      : (openSheetIds[0] ?? sheets[0]?.id ?? "");
+
+  return {
+    sheets,
+    activeSheetId,
+    openSheetIds: openSheetIds.length ? openSheetIds : activeSheetId ? [activeSheetId] : [],
+  };
+}
+
+function serializePersistedWorksheetState(
+  connectionId: string,
+  state: SheetConnectionState,
+): DatabaseWorksheetState {
+  const persistedSheets = state.sheets
+    .filter((sheet) => sheet.savedAt !== null)
+    .map((sheet) => ({
+      connectionId,
+      sheetId: sheet.id,
+      sheetName: sheet.savedName,
+      sql: sheet.savedSql,
+      savedAt: sheet.savedAt ?? new Date().toISOString(),
+      isOpen: state.openSheetIds.includes(sheet.id),
+    }));
+  const activeSheetId = persistedSheets.some(
+    (sheet) => sheet.sheetId === state.activeSheetId,
+  )
+    ? state.activeSheetId
+    : null;
+
+  return { connectionId, sheets: persistedSheets, activeSheetId };
+}
+
+async function persistSavedWorksheetState(
+  connectionId: string,
+  state: SheetConnectionState,
+): Promise<DatabaseWorksheetState> {
+  return window.ivsDashboard.saveDatabaseWorksheetState(
+    serializePersistedWorksheetState(connectionId, state),
+  );
 }
 
 function createEmptySheetOutput(): SheetOutputState {
@@ -3014,7 +3548,15 @@ function normalizeDatabaseMetadata(
     schemas: Array.isArray(metadata.schemas)
       ? metadata.schemas
       : fallback.schemas,
-    tables: Array.isArray(metadata.tables) ? metadata.tables : fallback.tables,
+    tables: Array.isArray(metadata.tables)
+      ? metadata.tables.map((table) => ({
+          ...table,
+          columns: Array.isArray(table.columns) ? table.columns : [],
+          indexes: Array.isArray(table.indexes) ? table.indexes : [],
+          triggers: Array.isArray(table.triggers) ? table.triggers : [],
+          partitions: Array.isArray(table.partitions) ? table.partitions : [],
+        }))
+      : fallback.tables,
     views: Array.isArray(metadata.views) ? metadata.views : [],
     procedures: Array.isArray(metadata.procedures) ? metadata.procedures : [],
     functions: Array.isArray(metadata.functions) ? metadata.functions : [],
@@ -3340,6 +3882,248 @@ function formatResultFooter(meta: ResultMeta): string {
 
 function formatObjectName(table: DatabaseTable): string {
   return table.schema ? `${table.name}` : table.name;
+}
+
+function formatQualifiedObjectName(table: DatabaseTable): string {
+  return table.schema ? `${table.schema}.${table.name}` : table.name;
+}
+
+function quoteSqlIdentifier(identifier: string): string {
+  return `\`${identifier.replace(/`/g, "``")}\``;
+}
+
+function quoteQualifiedTableName(table: DatabaseTable): string {
+  return table.schema
+    ? `${quoteSqlIdentifier(table.schema)}.${quoteSqlIdentifier(table.name)}`
+    : quoteSqlIdentifier(table.name);
+}
+
+function createInsertTemplate(table: DatabaseTable): string {
+  const columns = table.columns.map((column) => column.name);
+  if (columns.length === 0) {
+    return `INSERT INTO ${quoteQualifiedTableName(table)} (\n  column_1\n) VALUES (\n  value_1\n);`;
+  }
+
+  const columnLines = columns
+    .map((column, index) => `  ${quoteSqlIdentifier(column)}${index < columns.length - 1 ? "," : ""}`)
+    .join("\n");
+  const valueLines = columns
+    .map((_, index) => `  value_${index + 1}${index < columns.length - 1 ? "," : ""}`)
+    .join("\n");
+
+  return `INSERT INTO ${quoteQualifiedTableName(table)} (\n${columnLines}\n) VALUES (\n${valueLines}\n);`;
+}
+
+function formatIndexLabel(index: DatabaseTable["indexes"][number]): string {
+  const columns = index.columns.length > 0 ? index.columns.join(", ") : "(expression)";
+  return `${index.name} ${columns} ${index.type || "INDEX"}`;
+}
+
+function formatTriggerLabel(
+  trigger: DatabaseTable["triggers"][number],
+): string {
+  return [trigger.name, trigger.timing, trigger.event].filter(Boolean).join(" ");
+}
+
+function formatPartitionLabel(
+  partition: DatabaseTable["partitions"][number],
+): string {
+  return [
+    partition.name,
+    partition.method,
+    partition.expression ? `(${partition.expression})` : "",
+    partition.description,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function ensureSqlTerminator(sqlText: string): string {
+  const trimmed = sqlText.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.endsWith(";") ? trimmed : `${trimmed};`;
+}
+
+function nextHistorySheetName(time: string, sheets: QuerySheet[]): string {
+  const minute = formatHistorySheetMinute(time);
+  const prefix = `History ${minute} #`;
+  const sequence =
+    sheets.reduce((max, sheet) => {
+      const match = new RegExp(`^${escapeRegExp(prefix)}(\\d+)`).exec(sheet.name);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0) + 1;
+  return disambiguateSheetName(`History ${minute} #${sequence}`, sheets);
+}
+
+function formatHistorySheetMinute(value: string): string {
+  return formatCompactTime(value).slice(0, 16);
+}
+
+function disambiguateSheetName(name: string, sheets: QuerySheet[]): string {
+  const names = new Set(sheets.map((sheet) => sheet.name.toLowerCase()));
+  if (!names.has(name.toLowerCase())) {
+    return name;
+  }
+
+  let suffix = 2;
+  while (names.has(`${name} (${suffix})`.toLowerCase())) {
+    suffix += 1;
+  }
+  return `${name} (${suffix})`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function createCsv(tab: ResultTab): string {
+  const headers = tab.columns.map((column) => column.label);
+  const rows = tab.rows.map((row) =>
+    tab.columns.map((column) => csvCell(row[column.key])).join(","),
+  );
+  return [headers.map(csvCell).join(","), ...rows].join("\r\n");
+}
+
+function csvCell(value: DatabaseQueryValue): string {
+  if (value === null) {
+    return "";
+  }
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadBlob(
+  fileName: string,
+  type: string,
+  content: string | Uint8Array,
+): void {
+  let blobPart: string | ArrayBuffer;
+  if (typeof content === "string") {
+    blobPart = content;
+  } else {
+    blobPart = new ArrayBuffer(content.byteLength);
+    new Uint8Array(blobPart).set(content);
+  }
+  const blob = new Blob([blobPart], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function safeFileName(value: string): string {
+  return (
+    value
+      .trim()
+      .replace(/[^a-z0-9._-]+/gi, "-")
+      .replace(/^-+|-+$/g, "") || "query-results"
+  );
+}
+
+function createResultPdf(
+  tab: ResultTab,
+  connection: DatabaseConnection,
+  worksheetName: string,
+  exportedAt: string,
+): Uint8Array {
+  const lines = [
+    `Connection: ${connection.name}`,
+    `Worksheet: ${worksheetName}`,
+    `Exported: ${formatCompactTime(exportedAt)}`,
+    "SQL:",
+    ...wrapPdfLine(tab.statementSql, 112),
+    "",
+    tab.columns.map((column) => column.label).join(" | "),
+    "-".repeat(112),
+    ...tab.rows.map((row) =>
+      tab.columns
+        .map((column) => stringifyPdfValue(row[column.key]))
+        .join(" | "),
+    ),
+  ];
+  const pageLines: string[][] = [];
+  const maxLinesPerPage = 42;
+  for (let index = 0; index < lines.length; index += maxLinesPerPage) {
+    pageLines.push(lines.slice(index, index + maxLinesPerPage));
+  }
+
+  return buildSimplePdf(pageLines.map((page) => page.flatMap((line) => wrapPdfLine(line, 132))));
+}
+
+function stringifyPdfValue(value: DatabaseQueryValue): string {
+  return value === null ? "NULL" : String(value).replace(/\s+/g, " ");
+}
+
+function wrapPdfLine(line: string, width: number): string[] {
+  if (line.length <= width) {
+    return [line];
+  }
+  const wrapped: string[] = [];
+  for (let index = 0; index < line.length; index += width) {
+    wrapped.push(line.slice(index, index + width));
+  }
+  return wrapped;
+}
+
+function buildSimplePdf(pages: string[][]): Uint8Array {
+  const objects: string[] = [];
+  const addObject = (content: string): number => {
+    objects.push(content);
+    return objects.length;
+  };
+  const fontObjectId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>");
+  const pageObjectIds: number[] = [];
+  const contentObjectIds: number[] = [];
+
+  pages.forEach((lines) => {
+    const stream = ["BT", "/F1 8 Tf", "34 560 Td", "11 TL"]
+      .concat(lines.map((line) => `(${escapePdfText(line)}) Tj T*`), "ET")
+      .join("\n");
+    const streamLength = new TextEncoder().encode(stream).length;
+    const contentObjectId = addObject(
+      `<< /Length ${streamLength} >>\nstream\n${stream}\nendstream`,
+    );
+    contentObjectIds.push(contentObjectId);
+    pageObjectIds.push(0);
+  });
+
+  const pagesObjectId = objects.length + pages.length + 1;
+  pages.forEach((_lines, index) => {
+    const pageObjectId = addObject(
+      `<< /Type /Page /Parent ${pagesObjectId} 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 ${fontObjectId} 0 R >> >> /Contents ${contentObjectIds[index]} 0 R >>`,
+    );
+    pageObjectIds[index] = pageObjectId;
+  });
+  const kids = pageObjectIds.map((id) => `${id} 0 R`).join(" ");
+  addObject(`<< /Type /Pages /Kids [${kids}] /Count ${pageObjectIds.length} >>`);
+  const catalogObjectId = addObject(`<< /Type /Catalog /Pages ${pagesObjectId} 0 R >>`);
+
+  const chunks = ["%PDF-1.4\n"];
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(chunks.join("").length);
+    chunks.push(`${index + 1} 0 obj\n${object}\nendobj\n`);
+  });
+  const xrefOffset = chunks.join("").length;
+  chunks.push(`xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`);
+  offsets.slice(1).forEach((offset) => {
+    chunks.push(`${String(offset).padStart(10, "0")} 00000 n \n`);
+  });
+  chunks.push(
+    `trailer\n<< /Size ${objects.length + 1} /Root ${catalogObjectId} 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`,
+  );
+
+  return new TextEncoder().encode(chunks.join(""));
+}
+
+function escapePdfText(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
 }
 
 function nextUntitledName(sheets: QuerySheet[]): string {

@@ -22,6 +22,14 @@ const api: DashboardApi = {
     ipcRenderer.invoke("database:testConnection", connection),
   getDatabaseMetadata: (connection) =>
     ipcRenderer.invoke("database:getMetadata", connection),
+  getDatabaseWorksheetState: (connectionId) =>
+    ipcRenderer.invoke("database:getWorksheetState", connectionId),
+  saveDatabaseWorksheetState: (state) =>
+    ipcRenderer.invoke("database:saveWorksheetState", state),
+  deleteDatabaseWorksheet: (connectionId, sheetId) =>
+    ipcRenderer.invoke("database:deleteWorksheet", connectionId, sheetId),
+  getDatabaseExecutionHistory: (connectionId) =>
+    ipcRenderer.invoke("database:getExecutionHistory", connectionId),
   executeDatabaseStatements: (connection, statements) =>
     ipcRenderer.invoke("database:executeStatements", connection, statements),
   getDashboardOverview: () =>

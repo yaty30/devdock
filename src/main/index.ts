@@ -10,6 +10,7 @@ import type {
   ServiceAction,
   ServiceName,
   BrowsePathOptions,
+  DatabaseWorksheetState,
   LogChannel,
   SheetUpdate,
 } from "../shared/dashboardTypes";
@@ -65,6 +66,34 @@ function registerIpc(): void {
     (_event, connection: DatabaseConnection) =>
       withLoggedErrors("database:getMetadata", () =>
         getBackend().getDatabaseMetadata(connection),
+      ),
+  );
+  ipcMain.handle(
+    "database:getWorksheetState",
+    (_event, connectionId: string) =>
+      withLoggedErrors("database:getWorksheetState", () =>
+        getBackend().getDatabaseWorksheetState(connectionId),
+      ),
+  );
+  ipcMain.handle(
+    "database:saveWorksheetState",
+    (_event, state: DatabaseWorksheetState) =>
+      withLoggedErrors("database:saveWorksheetState", () =>
+        getBackend().saveDatabaseWorksheetState(state),
+      ),
+  );
+  ipcMain.handle(
+    "database:deleteWorksheet",
+    (_event, connectionId: string, sheetId: string) =>
+      withLoggedErrors("database:deleteWorksheet", () =>
+        getBackend().deleteDatabaseWorksheet(connectionId, sheetId),
+      ),
+  );
+  ipcMain.handle(
+    "database:getExecutionHistory",
+    (_event, connectionId?: string) =>
+      withLoggedErrors("database:getExecutionHistory", () =>
+        getBackend().getDatabaseExecutionHistory(connectionId),
       ),
   );
   ipcMain.handle(

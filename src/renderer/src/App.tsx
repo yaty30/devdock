@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Trash2 } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
@@ -74,7 +74,6 @@ function App(): JSX.Element {
   const [databaseExecutionHistory, setDatabaseExecutionHistory] = useState<
     DatabaseExecutionRecord[]
   >([]);
-  const [databaseQueryCount, setDatabaseQueryCount] = useState(0);
   const [databaseLastRefreshTime, setDatabaseLastRefreshTime] = useState(() =>
     new Date().toISOString(),
   );
@@ -126,11 +125,14 @@ function App(): JSX.Element {
     async function loadInitialState(): Promise<void> {
       const snapshot = await window.ivsDashboard.getSnapshot();
       const connections = await window.ivsDashboard.getDatabaseConnections();
+      const executionHistory =
+        await window.ivsDashboard.getDatabaseExecutionHistory();
       if (cancelled) {
         return;
       }
       setProjects(snapshot.projects);
       setDatabaseConnections(connections);
+      setDatabaseExecutionHistory(executionHistory);
       setSelectedDatabaseConnectionId(connections[0]?.id ?? null);
       void refreshDashboardOverview();
       const active =
@@ -319,6 +321,11 @@ function App(): JSX.Element {
     ) ??
     databaseConnections[0] ??
     null;
+  const selectedDatabaseExecutionHistory = selectedDatabaseConnection
+    ? databaseExecutionHistory.filter(
+        (entry) => entry.connectionId === selectedDatabaseConnection.id,
+      )
+    : [];
 
   useEffect(() => {
     if (splashSequenceStartedRef.current) {
@@ -533,7 +540,7 @@ function App(): JSX.Element {
       setDeletedDatabaseConnectionId(deleted.id);
       setDeleteDatabaseConnectionRequest(null);
       setDatabaseExecutionHistory((current) =>
-        current.filter((entry) => entry.connection !== deleted.name),
+        current.filter((entry) => entry.connectionId !== deleted.id),
       );
       if (selectedDatabaseConnectionId === deleted.id) {
         setSelectedDatabaseConnectionId(remaining[0]?.id ?? null);
@@ -558,7 +565,6 @@ function App(): JSX.Element {
     setDatabaseExecutionHistory((current) =>
       [record, ...current].slice(0, 1000),
     );
-    setDatabaseQueryCount((current) => current + 1);
   }
 
   function refreshDatabaseMetadata(): void {
@@ -682,13 +688,17 @@ function App(): JSX.Element {
       onClose={() => setDatabaseConnectionModal(null)}
       onSave={handleSaveDatabaseConnection}
       onTestStatus={showSnackbar}
+      onDeleteRequest={(connection) => {
+        setDatabaseConnectionModal(null);
+        setDeleteDatabaseConnectionRequest(connection);
+      }}
     />
   );
 
   const databaseDeleteDialog = deleteDatabaseConnectionRequest ? (
     <ConfirmDialog
       title="Delete Database Connection?"
-      message={`Deleting "${deleteDatabaseConnectionRequest.name}" will remove its sheets, query results, and cached schema metadata from this workspace. Other projects and database connections will not be changed.`}
+      message={`Deleting "${deleteDatabaseConnectionRequest.name}" will remove its saved sheets, query results, metadata cache, and query history from this workspace. Other projects and database connections will not be changed.`}
       confirmLabel="Delete"
       cancelLabel="Cancel"
       variant="danger"
@@ -738,7 +748,6 @@ function App(): JSX.Element {
           collapsed={sidebarCollapsed}
           onProjectChange={switchProject}
           onDatabaseConnectionChange={switchDatabaseConnection}
-          onDatabaseConnectionDelete={setDeleteDatabaseConnectionRequest}
           onSectionChange={handleSectionChange}
           onAddProject={openAddProjectDialog}
           onAddDatabaseConnection={handleAddDatabaseConnection}
@@ -774,9 +783,6 @@ function App(): JSX.Element {
                 fontSizeMode={fontSizeMode}
                 onFontSizeChange={setFontSizeMode}
                 onSettingsClick={openDatabaseConnectionSettings}
-                onDeleteClick={() =>
-                  setDeleteDatabaseConnectionRequest(selectedDatabaseConnection)
-                }
               />
             ) : null}
           </header>
@@ -786,8 +792,9 @@ function App(): JSX.Element {
               <DatabaseWorkspace
                 connection={selectedDatabaseConnection}
                 activeTab={activeDatabaseTab}
-                executionHistory={databaseExecutionHistory}
-                queryCount={databaseQueryCount}
+                onTabChange={setActiveDatabaseTab}
+                executionHistory={selectedDatabaseExecutionHistory}
+                queryCount={selectedDatabaseExecutionHistory.length}
                 lastRefreshTime={databaseLastRefreshTime}
                 onExecution={handleDatabaseExecution}
                 onRefresh={refreshDatabaseMetadata}
@@ -844,7 +851,6 @@ function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onProjectChange={switchProject}
         onDatabaseConnectionChange={switchDatabaseConnection}
-        onDatabaseConnectionDelete={setDeleteDatabaseConnectionRequest}
         onSectionChange={handleSectionChange}
         onAddProject={openAddProjectDialog}
         onAddDatabaseConnection={handleAddDatabaseConnection}
@@ -903,9 +909,6 @@ function App(): JSX.Element {
               fontSizeMode={fontSizeMode}
               onFontSizeChange={setFontSizeMode}
               onSettingsClick={openDatabaseConnectionSettings}
-              onDeleteClick={() =>
-                setDeleteDatabaseConnectionRequest(selectedDatabaseConnection)
-              }
             />
           ) : null}
         </header>
@@ -920,8 +923,9 @@ function App(): JSX.Element {
             <DatabaseWorkspace
               connection={selectedDatabaseConnection}
               activeTab={activeDatabaseTab}
-              executionHistory={databaseExecutionHistory}
-              queryCount={databaseQueryCount}
+              onTabChange={setActiveDatabaseTab}
+              executionHistory={selectedDatabaseExecutionHistory}
+              queryCount={selectedDatabaseExecutionHistory.length}
               lastRefreshTime={databaseLastRefreshTime}
               onExecution={handleDatabaseExecution}
               onRefresh={refreshDatabaseMetadata}
@@ -1094,14 +1098,12 @@ function DatabaseHeaderActions({
   fontSizeMode,
   onFontSizeChange,
   onSettingsClick,
-  onDeleteClick,
   disabled = false,
 }: {
   connection: DatabaseConnection;
   fontSizeMode: FontSizeMode;
   onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
-  onDeleteClick: () => void;
   disabled?: boolean;
 }): JSX.Element {
   return (
@@ -1119,16 +1121,6 @@ function DatabaseHeaderActions({
         disabled={disabled}
         settingsIcon="cog"
       />
-      <button
-        className="icon-button danger"
-        type="button"
-        aria-label={`Delete ${connection.name}`}
-        title="Delete connection"
-        disabled={disabled}
-        onClick={onDeleteClick}
-      >
-        <Trash2 size={16} />
-      </button>
     </div>
   );
 }
