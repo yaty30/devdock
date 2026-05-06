@@ -49,15 +49,19 @@ import {
   EyeOff,
   File,
   FileText,
+  Ghost,
   LoaderCircle,
+  Microchip,
   Play,
   Puzzle,
   RefreshCcw,
   Save,
   Share,
   Sigma,
+  SquareFunction,
   Table2,
   Trash2,
+  View,
   Wrench,
   X,
   Zap,
@@ -647,7 +651,9 @@ export function DatabaseConnectionModal({
                 <button
                   className="database-password-toggle"
                   type="button"
-                  aria-label={passwordVisible ? "Hide password" : "Show password"}
+                  aria-label={
+                    passwordVisible ? "Hide password" : "Show password"
+                  }
                   title={passwordVisible ? "Hide password" : "Show password"}
                   onClick={() => setPasswordVisible((visible) => !visible)}
                 >
@@ -1570,7 +1576,10 @@ function ConnectionActionWorkspace({
           query: result.statement || "(empty query)",
           duration: formatDurationMs(result.durationMs),
           status: result.status,
-          rows: result.rowsFetched > 0 ? result.rowsFetched : (result.rowsAffected ?? 0),
+          rows:
+            result.rowsFetched > 0
+              ? result.rowsFetched
+              : (result.rowsAffected ?? 0),
           rowsAffected: result.rowsAffected,
           errorMessage: result.errorMessage,
         });
@@ -2029,8 +2038,8 @@ function ConnectionActionWorkspace({
           >
             {metadata.views.length > 0 ? (
               metadata.views.map((viewName) => (
-                <div className="database-tree-item" key={viewName}>
-                  <Table2 size={15} />
+                <div className="database-tree-item view-item" key={viewName}>
+                  <View size={15} />
                   <span>{viewName}</span>
                 </div>
               ))
@@ -2050,8 +2059,11 @@ function ConnectionActionWorkspace({
           >
             {metadata.procedures.length > 0 ? (
               metadata.procedures.map((procedure) => (
-                <div className="database-tree-item" key={procedure}>
-                  <Cpu size={15} />
+                <div
+                  className="database-tree-item procedure-item"
+                  key={procedure}
+                >
+                  <Microchip size={15} />
                   <span>{procedure}</span>
                 </div>
               ))
@@ -2071,8 +2083,11 @@ function ConnectionActionWorkspace({
           >
             {metadata.functions.length > 0 ? (
               metadata.functions.map((routineFunction) => (
-                <div className="database-tree-item" key={routineFunction}>
-                  <Cpu size={15} />
+                <div
+                  className="database-tree-item function-item"
+                  key={routineFunction}
+                >
+                  <SquareFunction size={15} />
                   <span>{routineFunction}</span>
                 </div>
               ))
@@ -2370,15 +2385,15 @@ function TableTreeItem({
   return (
     <div className="database-table-tree-item">
       <button
-        className="database-tree-item database-tree-button"
+        className="database-tree-item database-tree-button database-object-row"
         type="button"
         onClick={() => setOpen((current) => !current)}
         onContextMenu={onContextMenu}
       >
         <ChevronDown size={14} className={open ? "open" : undefined} />
         <Table2 size={15} />
-        <span>{`${formatObjectName(table)}`}</span>
-        <span className="database-column-count">{table.columns.length}</span>
+        <span className="database-object-label">{`${formatObjectName(table)}`}</span>
+        <span className="database-object-count">{table.columns.length}</span>
       </button>
       {open ? (
         <div className="database-table-object-groups">
@@ -2403,9 +2418,14 @@ function TableTreeItem({
           >
             {table.indexes.length > 0 ? (
               table.indexes.map((index) => (
-                <div className="database-tree-item database-index-item" key={index.name}>
+                <div
+                  className="database-tree-item database-object-row database-leaf-row"
+                  key={index.name}
+                >
                   <Wrench size={13} />
-                  <span>{formatIndexLabel(index)}</span>
+                  <span className="database-object-label">
+                    {formatIndexLabel(index)}
+                  </span>
                 </div>
               ))
             ) : (
@@ -2420,13 +2440,20 @@ function TableTreeItem({
           >
             {table.triggers.length > 0 ? (
               table.triggers.map((trigger) => (
-                <div className="database-tree-item" key={trigger.name}>
+                <div
+                  className="database-tree-item database-object-row database-leaf-row"
+                  key={trigger.name}
+                >
                   <Zap size={13} />
-                  <span>{formatTriggerLabel(trigger)}</span>
+                  <span className="database-object-label">
+                    {formatTriggerLabel(trigger)}
+                  </span>
                 </div>
               ))
             ) : (
-              <div className="database-tree-empty">No triggers found</div>
+              <div className="database-tree-empty">
+                No triggers found
+              </div>
             )}
           </TableObjectGroup>
           <TableObjectGroup
@@ -2437,13 +2464,20 @@ function TableTreeItem({
           >
             {table.partitions.length > 0 ? (
               table.partitions.map((partition) => (
-                <div className="database-tree-item" key={partition.name}>
+                <div
+                  className="database-tree-item database-object-row database-leaf-row"
+                  key={partition.name}
+                >
                   <Box size={13} />
-                  <span>{formatPartitionLabel(partition)}</span>
+                  <span className="database-object-label">
+                    {formatPartitionLabel(partition)}
+                  </span>
                 </div>
               ))
             ) : (
-              <div className="database-tree-empty">No partitions found</div>
+              <div className="database-tree-empty">
+                No partitions found
+              </div>
             )}
           </TableObjectGroup>
         </div>
@@ -2470,25 +2504,21 @@ function TableObjectGroup({
   return (
     <div className="database-table-object-group">
       <button
-        className="database-tree-item database-table-object-group-button"
+        className="database-tree-item database-table-object-group-button database-object-row"
         type="button"
         onClick={() => setOpen((current) => !current)}
       >
         <ChevronDown size={13} className={open ? "open" : undefined} />
         {icon}
-        <span>{title}</span>
-        <span className="database-column-count">{count}</span>
+        <span className="database-object-label">{title}</span>
+        <span className="database-object-count">{count}</span>
       </button>
-      {open ? <div className="database-table-object-group-children">{children}</div> : null}
+      {open ? <div className="database-nested-children">{children}</div> : null}
     </div>
   );
 }
 
-function ColumnTreeItem({
-  column,
-}: {
-  column: DatabaseColumn;
-}): JSX.Element {
+function ColumnTreeItem({ column }: { column: DatabaseColumn }): JSX.Element {
   const [open, setOpen] = useState(false);
   const hasMetadata = column.metadata.length > 0;
 
@@ -2786,7 +2816,12 @@ function ResultExportMenu({
     downloadBlob(
       `${baseName}.pdf`,
       "application/pdf",
-      createResultPdf(resultTab, connection, sheet?.name ?? "Worksheet", exportedAt),
+      createResultPdf(
+        resultTab,
+        connection,
+        sheet?.name ?? "Worksheet",
+        exportedAt,
+      ),
     );
   }
 
@@ -2813,15 +2848,30 @@ function ResultExportMenu({
         aria-hidden={!open || disabled}
       >
         <div className="build-dropdown-menu" role="menu">
-          <button type="button" role="menuitem" disabled={disabled} onClick={() => exportResult("json")}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={disabled}
+            onClick={() => exportResult("json")}
+          >
             <Braces size={14} />
             <span>JSON</span>
           </button>
-          <button type="button" role="menuitem" disabled={disabled} onClick={() => exportResult("csv")}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={disabled}
+            onClick={() => exportResult("csv")}
+          >
             <FileText size={14} />
             <span>CSV</span>
           </button>
-          <button type="button" role="menuitem" disabled={disabled} onClick={() => exportResult("pdf")}>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={disabled}
+            onClick={() => exportResult("pdf")}
+          >
             <File size={14} />
             <span>PDF</span>
           </button>
@@ -3444,7 +3494,11 @@ function sheetStateFromPersisted(
   return {
     sheets,
     activeSheetId,
-    openSheetIds: openSheetIds.length ? openSheetIds : activeSheetId ? [activeSheetId] : [],
+    openSheetIds: openSheetIds.length
+      ? openSheetIds
+      : activeSheetId
+        ? [activeSheetId]
+        : [],
   };
 }
 
@@ -3760,7 +3814,8 @@ function hasSuccessfulSchemaChange(
 ): boolean {
   return results.some(
     (result) =>
-      result.status === "success" && isSchemaChangingStatement(result.statement),
+      result.status === "success" &&
+      isSchemaChangingStatement(result.statement),
   );
 }
 
@@ -3905,24 +3960,33 @@ function createInsertTemplate(table: DatabaseTable): string {
   }
 
   const columnLines = columns
-    .map((column, index) => `  ${quoteSqlIdentifier(column)}${index < columns.length - 1 ? "," : ""}`)
+    .map(
+      (column, index) =>
+        `  ${quoteSqlIdentifier(column)}${index < columns.length - 1 ? "," : ""}`,
+    )
     .join("\n");
   const valueLines = columns
-    .map((_, index) => `  value_${index + 1}${index < columns.length - 1 ? "," : ""}`)
+    .map(
+      (_, index) =>
+        `  value_${index + 1}${index < columns.length - 1 ? "," : ""}`,
+    )
     .join("\n");
 
   return `INSERT INTO ${quoteQualifiedTableName(table)} (\n${columnLines}\n) VALUES (\n${valueLines}\n);`;
 }
 
 function formatIndexLabel(index: DatabaseTable["indexes"][number]): string {
-  const columns = index.columns.length > 0 ? index.columns.join(", ") : "(expression)";
+  const columns =
+    index.columns.length > 0 ? index.columns.join(", ") : "(expression)";
   return `${index.name} ${columns} ${index.type || "INDEX"}`;
 }
 
 function formatTriggerLabel(
   trigger: DatabaseTable["triggers"][number],
 ): string {
-  return [trigger.name, trigger.timing, trigger.event].filter(Boolean).join(" ");
+  return [trigger.name, trigger.timing, trigger.event]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function formatPartitionLabel(
@@ -3951,7 +4015,9 @@ function nextHistorySheetName(time: string, sheets: QuerySheet[]): string {
   const prefix = `History ${minute} #`;
   const sequence =
     sheets.reduce((max, sheet) => {
-      const match = new RegExp(`^${escapeRegExp(prefix)}(\\d+)`).exec(sheet.name);
+      const match = new RegExp(`^${escapeRegExp(prefix)}(\\d+)`).exec(
+        sheet.name,
+      );
       return match ? Math.max(max, Number(match[1])) : max;
     }, 0) + 1;
   return disambiguateSheetName(`History ${minute} #${sequence}`, sheets);
@@ -4053,7 +4119,9 @@ function createResultPdf(
     pageLines.push(lines.slice(index, index + maxLinesPerPage));
   }
 
-  return buildSimplePdf(pageLines.map((page) => page.flatMap((line) => wrapPdfLine(line, 132))));
+  return buildSimplePdf(
+    pageLines.map((page) => page.flatMap((line) => wrapPdfLine(line, 132))),
+  );
 }
 
 function stringifyPdfValue(value: DatabaseQueryValue): string {
@@ -4077,13 +4145,18 @@ function buildSimplePdf(pages: string[][]): Uint8Array {
     objects.push(content);
     return objects.length;
   };
-  const fontObjectId = addObject("<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>");
+  const fontObjectId = addObject(
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
+  );
   const pageObjectIds: number[] = [];
   const contentObjectIds: number[] = [];
 
   pages.forEach((lines) => {
     const stream = ["BT", "/F1 8 Tf", "34 560 Td", "11 TL"]
-      .concat(lines.map((line) => `(${escapePdfText(line)}) Tj T*`), "ET")
+      .concat(
+        lines.map((line) => `(${escapePdfText(line)}) Tj T*`),
+        "ET",
+      )
       .join("\n");
     const streamLength = new TextEncoder().encode(stream).length;
     const contentObjectId = addObject(
@@ -4101,8 +4174,12 @@ function buildSimplePdf(pages: string[][]): Uint8Array {
     pageObjectIds[index] = pageObjectId;
   });
   const kids = pageObjectIds.map((id) => `${id} 0 R`).join(" ");
-  addObject(`<< /Type /Pages /Kids [${kids}] /Count ${pageObjectIds.length} >>`);
-  const catalogObjectId = addObject(`<< /Type /Catalog /Pages ${pagesObjectId} 0 R >>`);
+  addObject(
+    `<< /Type /Pages /Kids [${kids}] /Count ${pageObjectIds.length} >>`,
+  );
+  const catalogObjectId = addObject(
+    `<< /Type /Catalog /Pages ${pagesObjectId} 0 R >>`,
+  );
 
   const chunks = ["%PDF-1.4\n"];
   const offsets = [0];
@@ -4123,7 +4200,10 @@ function buildSimplePdf(pages: string[][]): Uint8Array {
 }
 
 function escapePdfText(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
 }
 
 function nextUntitledName(sheets: QuerySheet[]): string {
