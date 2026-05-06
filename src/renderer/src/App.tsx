@@ -3,9 +3,17 @@ import { CheckCircle2 } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
-import { HeaderActions } from "./components/layout/HeaderActions";
+import {
+  HeaderActions,
+  HeaderUtilityActions,
+} from "./components/layout/HeaderActions";
 import { Sidebar } from "./components/layout/Sidebar";
 import { SegmentedTabs } from "./components/navigation/SegmentedTabs";
+import {
+  DatabaseConnectionModal,
+  DatabaseWorkspace,
+  DatabaseWorkspaceTabs,
+} from "./features/databases";
 import {
   DashboardContent,
   ProjectDashboardContent,
@@ -22,6 +30,9 @@ import type {
   AppSection,
   DashboardTab,
   DashboardEvent,
+  DatabaseConnection,
+  DatabaseExecutionRecord,
+  DatabaseWorkspaceTab,
   FontSizeMode,
   Project,
   ProjectDashboardSummary,
@@ -34,18 +45,56 @@ const SPLASH_READY_FRAME_MS = 800;
 const SPLASH_FADE_OUT_MS = 1100;
 const SPLASH_LOGO_SIZE = "min(90px, 11vw)";
 
+const DUMMY_DATABASE_CONNECTIONS: DatabaseConnection[] = [
+  {
+    id: "local_mysql",
+    name: "local_mysql",
+    type: "MySQL",
+    status: "connected",
+    host: "localhost",
+    port: "3306",
+    user: "ivsd_mysql",
+    schema: "sakila",
+    password: "ivsd_mysql",
+    savePassword: true,
+    connectionTimeoutMs: 10000,
+    database: "sakila",
+    sslMode: "disabled",
+    latency: "2.3 ms",
+    uptime: "3h 42m",
+    activeSessions: 4,
+  },
+];
+
 type SplashFrame = "open" | "close";
 type SplashPhase = "visible" | "exiting" | "hidden";
 type SnackbarState = {
   message: string;
-  tone: "valid" | "invalid";
+  tone: "valid" | "invalid" | "warning";
 };
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [databaseConnections, setDatabaseConnections] = useState<
+    DatabaseConnection[]
+  >(() => DUMMY_DATABASE_CONNECTIONS);
+  const [databaseConnectionModal, setDatabaseConnectionModal] = useState<
+    "add" | "edit" | null
+  >(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [selectedDatabaseConnectionId, setSelectedDatabaseConnectionId] =
+    useState<string | null>(DUMMY_DATABASE_CONNECTIONS[0]?.id ?? null);
+  const [activeDatabaseTab, setActiveDatabaseTab] =
+    useState<DatabaseWorkspaceTab>("connection");
+  const [databaseExecutionHistory, setDatabaseExecutionHistory] = useState<
+    DatabaseExecutionRecord[]
+  >([]);
+  const [databaseQueryCount, setDatabaseQueryCount] = useState(0);
+  const [databaseLastRefreshTime, setDatabaseLastRefreshTime] = useState(() =>
+    new Date().toISOString(),
+  );
   const [projectState, setProjectState] = useState<ProjectRuntimeState | null>(
     null,
   );
@@ -175,7 +224,7 @@ function App(): JSX.Element {
     }
 
     selectedProjectIdRef.current = selectedProject.id;
-    if (activeSection === "dashboard") {
+    if (activeSection !== "project") {
       setProjectLoading(false);
       return undefined;
     }
@@ -277,6 +326,12 @@ function App(): JSX.Element {
 
   const activeProjectState =
     projectStateProjectId === selectedProject?.id ? projectState : null;
+  const selectedDatabaseConnection =
+    databaseConnections.find(
+      (connection) => connection.id === selectedDatabaseConnectionId,
+    ) ??
+    databaseConnections[0] ??
+    null;
 
   useEffect(() => {
     if (splashSequenceStartedRef.current) {
@@ -346,6 +401,23 @@ function App(): JSX.Element {
     doSwitch();
   }
 
+  function switchDatabaseConnection(connection: DatabaseConnection): void {
+    const doSwitch = (): void => {
+      setSelectedDatabaseConnectionId(connection.id);
+      setActiveDatabaseTab("connection");
+      setSettingsOpen(false);
+      setSettingsDirty(false);
+      setActiveSection("database");
+    };
+
+    if (settingsDirty && settingsOpen) {
+      setPendingNav(() => doSwitch);
+      return;
+    }
+
+    doSwitch();
+  }
+
   function handleSectionChange(section: AppSection): void {
     if (settingsDirty && settingsOpen) {
       setPendingNav(() => () => {
@@ -400,6 +472,60 @@ function App(): JSX.Element {
     }
 
     setAddProjectOpen(true);
+  }
+
+  function handleAddDatabaseConnection(): void {
+    setDatabaseConnectionModal("add");
+  }
+
+  function openDatabaseConnectionSettings(): void {
+    if (!selectedDatabaseConnection) {
+      showSnackbar("Select a database connection first.", "invalid");
+      return;
+    }
+
+    setDatabaseConnectionModal("edit");
+  }
+
+  function handleSaveDatabaseConnection(
+    savedConnection: DatabaseConnection,
+  ): void {
+    if (databaseConnectionModal === "add") {
+      setDatabaseConnections((current) => [...current, savedConnection]);
+      setSelectedDatabaseConnectionId(savedConnection.id);
+      setActiveDatabaseTab("connection");
+      setActiveSection("database");
+      setDatabaseConnectionModal(null);
+      showSnackbar("Connection saved", "valid");
+      return;
+    }
+
+    setDatabaseConnections((current) =>
+      current.map((connection) =>
+        connection.id === savedConnection.id
+          ? {
+              ...connection,
+              ...savedConnection,
+              name: savedConnection.name || connection.name,
+            }
+          : connection,
+      ),
+    );
+    setSelectedDatabaseConnectionId(savedConnection.id);
+    setDatabaseConnectionModal(null);
+    showSnackbar("Connection settings saved", "valid");
+  }
+
+  function handleDatabaseExecution(record: DatabaseExecutionRecord): void {
+    setDatabaseExecutionHistory((current) =>
+      [record, ...current].slice(0, 1000),
+    );
+    setDatabaseQueryCount((current) => current + 1);
+  }
+
+  function refreshDatabaseMetadata(): void {
+    setDatabaseLastRefreshTime(new Date().toISOString());
+    showSnackbar("Database metadata refreshed.", "valid");
   }
 
   async function handleCreateProject(
@@ -503,6 +629,24 @@ function App(): JSX.Element {
       </div>
     ) : null;
 
+  const databaseConnectionDialog = (
+    <DatabaseConnectionModal
+      open={
+        databaseConnectionModal !== null &&
+        (databaseConnectionModal !== "edit" ||
+          selectedDatabaseConnection !== null)
+      }
+      mode={databaseConnectionModal ?? "add"}
+      connection={
+        databaseConnectionModal === "edit" ? selectedDatabaseConnection : null
+      }
+      connections={databaseConnections}
+      onClose={() => setDatabaseConnectionModal(null)}
+      onSave={handleSaveDatabaseConnection}
+      onTestStatus={showSnackbar}
+    />
+  );
+
   if (!selectedProject && !initialStateLoaded) {
     return (
       <div
@@ -534,13 +678,19 @@ function App(): JSX.Element {
       >
         <Sidebar
           projects={projects}
+          databaseConnections={databaseConnections}
           selectedProjectId=""
-          activeSection="dashboard"
+          selectedDatabaseConnectionId={selectedDatabaseConnectionId}
+          activeSection={
+            activeSection === "project" ? "dashboard" : activeSection
+          }
           theme={theme}
           collapsed={sidebarCollapsed}
           onProjectChange={switchProject}
-          onSectionChange={() => setActiveSection("dashboard")}
+          onDatabaseConnectionChange={switchDatabaseConnection}
+          onSectionChange={handleSectionChange}
           onAddProject={openAddProjectDialog}
+          onAddDatabaseConnection={handleAddDatabaseConnection}
           onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
           onThemeToggle={() =>
             setTheme((current) => (current === "light" ? "dark" : "light"))
@@ -548,16 +698,47 @@ function App(): JSX.Element {
         />
         <main className="main-content">
           <header className="main-header">
-            <div>
-              <h1>Overview</h1>
-              <p>All project server status and last build results.</p>
-            </div>
+            {activeSection === "database" && selectedDatabaseConnection ? (
+              <div className="database-header-title">
+                <DatabaseWorkspaceTabs
+                  connectionName={selectedDatabaseConnection.name}
+                  activeTab={activeDatabaseTab}
+                  onTabChange={setActiveDatabaseTab}
+                />
+              </div>
+            ) : (
+              <div>
+                <h1>Overview</h1>
+                <p>All project server status and last build results.</p>
+              </div>
+            )}
+            {activeSection === "database" && selectedDatabaseConnection ? (
+              <DatabaseHeaderActions
+                connection={selectedDatabaseConnection}
+                fontSizeMode={fontSizeMode}
+                onFontSizeChange={setFontSizeMode}
+                onSettingsClick={openDatabaseConnectionSettings}
+              />
+            ) : null}
           </header>
 
-          <DashboardContent
-            projects={dashboardOverview}
-            loading={dashboardOverviewLoading}
-          />
+          {activeSection === "database" && selectedDatabaseConnection ? (
+            <DatabaseWorkspace
+              connection={selectedDatabaseConnection}
+              activeTab={activeDatabaseTab}
+              executionHistory={databaseExecutionHistory}
+              queryCount={databaseQueryCount}
+              lastRefreshTime={databaseLastRefreshTime}
+              onExecution={handleDatabaseExecution}
+              onRefresh={refreshDatabaseMetadata}
+              onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
+            />
+          ) : (
+            <DashboardContent
+              projects={dashboardOverview}
+              loading={dashboardOverviewLoading}
+            />
+          )}
         </main>
         {snackbar ? (
           <div
@@ -575,6 +756,7 @@ function App(): JSX.Element {
             onClose={() => setAddProjectOpen(false)}
           />
         ) : null}
+        {databaseConnectionDialog}
         {splashOverlay}
       </div>
     );
@@ -589,26 +771,42 @@ function App(): JSX.Element {
     >
       <Sidebar
         projects={projects}
+        databaseConnections={databaseConnections}
         selectedProjectId={selectedProject.id}
+        selectedDatabaseConnectionId={selectedDatabaseConnectionId}
         activeSection={activeSection}
         theme={theme}
         collapsed={sidebarCollapsed}
         onProjectChange={switchProject}
+        onDatabaseConnectionChange={switchDatabaseConnection}
         onSectionChange={handleSectionChange}
         onAddProject={openAddProjectDialog}
+        onAddDatabaseConnection={handleAddDatabaseConnection}
         onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
         onThemeToggle={() =>
           setTheme((current) => (current === "light" ? "dark" : "light"))
         }
       />
       <main
-        className={`main-content${projectLoading ? " project-loading" : ""}`}
+        className={`main-content${
+          activeSection === "project" && projectLoading
+            ? " project-loading"
+            : ""
+        }`}
       >
         <header className="main-header">
           {activeSection === "dashboard" ? (
             <div>
               <h1>Overview</h1>
               <p>All project server status and last build results.</p>
+            </div>
+          ) : activeSection === "database" && selectedDatabaseConnection ? (
+            <div className="database-header-title">
+              <DatabaseWorkspaceTabs
+                connectionName={selectedDatabaseConnection.name}
+                activeTab={activeDatabaseTab}
+                onTabChange={setActiveDatabaseTab}
+              />
             </div>
           ) : (
             <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
@@ -628,6 +826,13 @@ function App(): JSX.Element {
                 onServiceWarning={(message) => showSnackbar(message, "invalid")}
               />
             ) : null
+          ) : activeSection === "database" && selectedDatabaseConnection ? (
+            <DatabaseHeaderActions
+              connection={selectedDatabaseConnection}
+              fontSizeMode={fontSizeMode}
+              onFontSizeChange={setFontSizeMode}
+              onSettingsClick={openDatabaseConnectionSettings}
+            />
           ) : null}
         </header>
 
@@ -635,6 +840,17 @@ function App(): JSX.Element {
           <DashboardContent
             projects={dashboardOverview}
             loading={dashboardOverviewLoading}
+          />
+        ) : activeSection === "database" && selectedDatabaseConnection ? (
+          <DatabaseWorkspace
+            connection={selectedDatabaseConnection}
+            activeTab={activeDatabaseTab}
+            executionHistory={databaseExecutionHistory}
+            queryCount={databaseQueryCount}
+            lastRefreshTime={databaseLastRefreshTime}
+            onExecution={handleDatabaseExecution}
+            onRefresh={refreshDatabaseMetadata}
+            onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
           />
         ) : activeSection === "project" ? (
           <>
@@ -729,6 +945,8 @@ function App(): JSX.Element {
         />
       ) : null}
 
+      {databaseConnectionDialog}
+
       {snackbar ? (
         <div
           className={`app-snackbar ${snackbar.tone}${snackbarClosing ? " closing" : ""}`}
@@ -786,6 +1004,38 @@ function App(): JSX.Element {
         </div>
       ) : null}
       {splashOverlay}
+    </div>
+  );
+}
+
+function DatabaseHeaderActions({
+  connection,
+  fontSizeMode,
+  onFontSizeChange,
+  onSettingsClick,
+  disabled = false,
+}: {
+  connection: DatabaseConnection;
+  fontSizeMode: FontSizeMode;
+  onFontSizeChange: (mode: FontSizeMode) => void;
+  onSettingsClick: () => void;
+  disabled?: boolean;
+}): JSX.Element {
+  return (
+    <div className="header-actions database-header-actions">
+      <div className="database-header-context" aria-label="Database context">
+        <span className={`database-status-dot ${connection.status}`} />
+        <span>{connection.user}</span>
+        <span>-</span>
+        <strong>{connection.name}</strong>
+      </div>
+      <HeaderUtilityActions
+        fontSizeMode={fontSizeMode}
+        onFontSizeChange={onFontSizeChange}
+        onSettingsClick={onSettingsClick}
+        disabled={disabled}
+        settingsIcon="cog"
+      />
     </div>
   );
 }

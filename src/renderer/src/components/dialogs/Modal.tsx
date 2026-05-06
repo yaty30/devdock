@@ -18,7 +18,7 @@ export function Modal({
   onClose,
 }: {
   open: boolean;
-  title: ReactNode;
+  title?: ReactNode;
   subtitle?: ReactNode;
   size?: ModalSize;
   children: ReactNode;
@@ -32,6 +32,19 @@ export function Modal({
   const closeTimerRef = useRef<number | null>(null);
   const [shouldRender, setShouldRender] = useState(open);
   const [isClosing, setIsClosing] = useState(false);
+  const [renderedTitle, setRenderedTitle] = useState(title);
+  const [renderedSubtitle, setRenderedSubtitle] = useState(subtitle);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    if (title !== undefined) {
+      setRenderedTitle(title);
+    }
+    setRenderedSubtitle(subtitle);
+  }, [open, subtitle, title]);
 
   useEffect(() => {
     if (open) {
@@ -104,10 +117,12 @@ export function Modal({
         aria-labelledby={titleId}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <header className="modal-header">
+        <header
+          className={`modal-header${renderedSubtitle ? "" : " no-subtitle"}`}
+        >
           <div>
-            <h2 id={titleId}>{title}</h2>
-            {subtitle ? <p>{subtitle}</p> : null}
+            <h2 id={titleId}>{renderedTitle}</h2>
+            {renderedSubtitle ? <p>{renderedSubtitle}</p> : null}
           </div>
           <div className="modal-header-actions">
             {headerAction}

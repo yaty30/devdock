@@ -9,9 +9,7 @@
 import {
   ArrowDownAZ,
   ArrowUpDown,
-  Check,
   CheckCircle2,
-  ChevronDown,
   Circle,
   ExternalLink,
   GitBranch,
@@ -23,6 +21,10 @@ import {
 } from "lucide-react";
 import { FindControls } from "../../components/common/FindControls";
 import { Panel } from "../../components/common/Panel";
+import {
+  AppSelect,
+  type AppSelectOption,
+} from "../../components/common/AppSelect";
 import type {
   ActivityRecord,
   BuildQuerySortKey,
@@ -109,11 +111,7 @@ function MonitorCardView({
 
 type BuildStatusFilter = "All" | RecentBuildRecord["status"];
 
-const STATUS_OPTIONS: Array<{
-  value: BuildStatusFilter;
-  label: string;
-  dotColor: string | null;
-}> = [
+const STATUS_OPTIONS: Array<AppSelectOption<BuildStatusFilter>> = [
   { value: "All", label: "All statuses", dotColor: null },
   { value: "Running", label: "Running", dotColor: "var(--accent)" },
   { value: "Success", label: "Success", dotColor: "#22c55e" },
@@ -128,81 +126,13 @@ function StatusSelect({
   value: BuildStatusFilter;
   onChange: (value: BuildStatusFilter) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const current =
-    STATUS_OPTIONS.find((o) => o.value === value) ?? STATUS_OPTIONS[0];
-
-  useEffect(() => {
-    if (!open) return;
-    function handleOutside(e: MouseEvent): void {
-      if (
-        containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleOutside);
-    return () => document.removeEventListener("mousedown", handleOutside);
-  }, [open]);
-
   return (
-    <div className="custom-select" ref={containerRef}>
-      <button
-        className="custom-select-trigger"
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        {current.dotColor && (
-          <span
-            className="custom-select-dot"
-            style={{ background: current.dotColor }}
-          />
-        )}
-        <span className="custom-select-value">{current.label}</span>
-        <ChevronDown
-          size={13}
-          className={`custom-select-chevron${open ? " open" : ""}`}
-        />
-      </button>
-      {open && (
-        <ul className="custom-select-dropdown" role="listbox">
-          {STATUS_OPTIONS.map((option) => (
-            <li
-              key={option.value}
-              className={`custom-select-option${
-                value === option.value ? " selected" : ""
-              }`}
-              role="option"
-              aria-selected={value === option.value}
-              onClick={() => {
-                onChange(option.value);
-                setOpen(false);
-              }}
-            >
-              <span
-                className="custom-select-dot"
-                style={
-                  option.dotColor
-                    ? { background: option.dotColor }
-                    : {
-                        background: "transparent",
-                        border: "1.5px solid var(--muted)",
-                      }
-                }
-              />
-              <span className="custom-select-option-label">{option.label}</span>
-              {value === option.value && (
-                <Check size={13} className="custom-select-check" />
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <AppSelect
+      value={value}
+      options={STATUS_OPTIONS}
+      onChange={onChange}
+      ariaLabel="Build status filter"
+    />
   );
 }
 

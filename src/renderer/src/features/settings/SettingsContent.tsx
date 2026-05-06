@@ -1,15 +1,17 @@
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ComponentProps,
-  type CSSProperties,
 } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, GripVertical, Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
+import {
+  AppSelect,
+  type AppSelectOption,
+} from "../../components/common/AppSelect";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {
   BuildOutcomeType,
@@ -55,11 +57,7 @@ function FieldRow({
   );
 }
 
-const OUTCOME_OPTIONS: Array<{
-  value: BuildOutcomeType;
-  label: string;
-  dotColor: string;
-}> = [
+const OUTCOME_OPTIONS: Array<AppSelectOption<BuildOutcomeType>> = [
   { value: "build-only", label: "Build only", dotColor: "var(--accent)" },
   {
     value: "build-and-deploy",
@@ -82,149 +80,15 @@ function OutcomeSelect({
   value: BuildOutcomeType;
   onChange: (value: BuildOutcomeType) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(false);
-  const [dropdownStyle, setDropdownStyle] = useState<CSSProperties>();
-  const containerRef = useRef<HTMLDivElement>(null);
-  const dropdownRef = useRef<HTMLUListElement>(null);
-  const current =
-    OUTCOME_OPTIONS.find((option) => option.value === value) ??
-    OUTCOME_OPTIONS[0];
-
-  useEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-
-    function isOutsideSelect(target: EventTarget | null): boolean {
-      if (!(target instanceof Node)) {
-        return true;
-      }
-
-      return (
-        !containerRef.current?.contains(target) &&
-        !dropdownRef.current?.contains(target)
-      );
-    }
-
-    function handleOutside(event: PointerEvent): void {
-      if (isOutsideSelect(event.target)) {
-        setOpen(false);
-      }
-    }
-
-    function handleFocusOutside(event: FocusEvent): void {
-      if (isOutsideSelect(event.target)) {
-        setOpen(false);
-      }
-    }
-
-    function handleWindowBlur(): void {
-      setOpen(false);
-    }
-
-    document.addEventListener("pointerdown", handleOutside, true);
-    document.addEventListener("focusin", handleFocusOutside);
-    window.addEventListener("blur", handleWindowBlur);
-    return () => {
-      document.removeEventListener("pointerdown", handleOutside, true);
-      document.removeEventListener("focusin", handleFocusOutside);
-      window.removeEventListener("blur", handleWindowBlur);
-    };
-  }, [open]);
-
-  useLayoutEffect(() => {
-    if (!open) {
-      return undefined;
-    }
-
-    function positionDropdown(): void {
-      const trigger = containerRef.current?.querySelector("button");
-      if (!(trigger instanceof HTMLElement)) {
-        return;
-      }
-
-      const rect = trigger.getBoundingClientRect();
-      const gap = 6;
-      const dropdownHeight = OUTCOME_OPTIONS.length * 36 + 12;
-      const spaceBelow = window.innerHeight - rect.bottom - gap;
-      const spaceAbove = rect.top - gap;
-      const openUp = spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
-
-      setDropdownStyle({
-        position: "fixed",
-        top: openUp ? rect.top - dropdownHeight - gap : rect.bottom + gap,
-        left: rect.left,
-        right: "auto",
-        width: Math.max(rect.width, 168),
-        minWidth: Math.max(rect.width, 168),
-        zIndex: 1000,
-      });
-    }
-
-    positionDropdown();
-    window.addEventListener("resize", positionDropdown);
-    window.addEventListener("scroll", positionDropdown, true);
-
-    return () => {
-      window.removeEventListener("resize", positionDropdown);
-      window.removeEventListener("scroll", positionDropdown, true);
-    };
-  }, [open]);
-
-  const dropdown = open ? (
-    <ul
-      className="custom-select-dropdown custom-select-dropdown-portal"
-      role="listbox"
-      ref={dropdownRef}
-      style={dropdownStyle}
-    >
-      {OUTCOME_OPTIONS.map((option) => (
-        <li
-          key={option.value}
-          className={`custom-select-option${
-            value === option.value ? " selected" : ""
-          }`}
-          role="option"
-          aria-selected={value === option.value}
-          onClick={() => {
-            onChange(option.value);
-            setOpen(false);
-          }}
-        >
-          <span
-            className="custom-select-dot"
-            style={{ background: option.dotColor }}
-          />
-          <span className="custom-select-option-label">{option.label}</span>
-          {value === option.value ? (
-            <Check size={13} className="custom-select-check" />
-          ) : null}
-        </li>
-      ))}
-    </ul>
-  ) : null;
-
   return (
-    <div className="custom-select build-outcome-select" ref={containerRef}>
-      <button
-        className="custom-select-trigger"
-        type="button"
-        onClick={() => setOpen((currentOpen) => !currentOpen)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-      >
-        <span
-          className="custom-select-dot"
-          style={{ background: current.dotColor }}
-        />
-        <span className="custom-select-value">{current.label}</span>
-        <ChevronDown
-          size={13}
-          className={`custom-select-chevron${open ? " open" : ""}`}
-        />
-      </button>
-      {dropdown ? createPortal(dropdown, document.body) : null}
-    </div>
+    <AppSelect
+      className="build-outcome-select"
+      value={value}
+      options={OUTCOME_OPTIONS}
+      onChange={onChange}
+      ariaLabel="Build outcome"
+      minDropdownWidth={168}
+    />
   );
 }
 
