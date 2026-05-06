@@ -22,6 +22,7 @@
   --accent-soft: #eef2ff;
   --success: #16a34a;
   --warning: #f59e0b;
+  --warning-soft: #ebcb93;
   --error: #dc2626;
   --info: #2563eb;
   --info-soft: #dbeafe;
@@ -69,6 +70,7 @@
   --info: #60a5fa;
   --info-soft: #112d50;
   --warning: #fbbf24;
+  --warning-soft: #725409;
   --error: #f87171;
   --command: #e879f9;
   --muted: #e5e7eb;
@@ -5626,6 +5628,24 @@ select option {
   color: var(--accent);
 }
 
+/* .database-object-row .database-indexes {
+  color: var(--warning) !important;
+}
+
+.database-object-row .database-index {
+  color: var(--warning) !important;
+  opacity: 0.4;
+}
+
+.database-object-row .database-index-triggers {
+  color: var(--info) !important;
+}
+
+.database-object-row .database-index-trigger {
+  color: var(--info) !important;
+  opacity: 0.4;
+} */
+
 .database-object-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -6342,6 +6362,13 @@ select option {
   border: 0;
 }
 
+.database-column-button strong {
+  color: var(--muted);
+  opacity: 0.4;
+  font-weight: lighter;
+  font-size: 11px;
+}
+
 .database-tree-button .database-column-count {
   color: var(--muted);
   opacity: 0.5;
@@ -6401,6 +6428,10 @@ select option {
 
 .database-column-metadata-item span:nth-child(2) {
   color: var(--accent);
+}
+
+.database-tree-column-metadata.primary-key {
+  color: var(--warning);
 }
 
 .database-tree-column-metadata.nullable {
@@ -6847,7 +6878,7 @@ select option {
 .app-shell[data-font-size] .database-result-footer,
 .app-shell[data-font-size] .database-message,
 .app-shell[data-font-size] .database-summary-card strong,
-.app-shell[data-font-size] .database-query-toggle {
+.app-shell[data-font-size] .database-tree-button .database-column-count {
   font-size: var(--font-md);
 }
 
@@ -6878,7 +6909,9 @@ select option {
 .app-shell[data-font-size] .database-summary-card span,
 .app-shell[data-font-size] .database-history-count,
 .app-shell[data-font-size] .database-pagination-controls select,
-.app-shell[data-font-size] .database-context-menu button {
+.app-shell[data-font-size] .database-context-menu button
+.app-shell[data-font-size] .database-history-count,
+.app-shell[data-font-size] .database-tree-button .database-column-count {
   font-size: var(--font-sm);
 }
 

@@ -50,6 +50,9 @@ import {
   File,
   FileText,
   Ghost,
+  GitBranch,
+  Key,
+  Leaf,
   LoaderCircle,
   Microchip,
   Play,
@@ -2413,7 +2416,7 @@ function TableTreeItem({
           <TableObjectGroup
             title="Index"
             count={table.indexes.length}
-            icon={<Carrot size={13} />}
+            icon={<Carrot size={13} className="database-indexes" />}
             defaultOpen
           >
             {table.indexes.length > 0 ? (
@@ -2422,7 +2425,7 @@ function TableTreeItem({
                   className="database-tree-item database-object-row database-leaf-row"
                   key={index.name}
                 >
-                  <Wrench size={13} />
+                  <Leaf size={13} className="database-index" />
                   <span className="database-object-label">
                     {formatIndexLabel(index)}
                   </span>
@@ -2435,7 +2438,7 @@ function TableTreeItem({
           <TableObjectGroup
             title="Triggers"
             count={table.triggers.length}
-            icon={<Sigma size={13} />}
+            icon={<Sigma size={13} className="database-index-triggers" />}
             defaultOpen
           >
             {table.triggers.length > 0 ? (
@@ -2444,16 +2447,14 @@ function TableTreeItem({
                   className="database-tree-item database-object-row database-leaf-row"
                   key={trigger.name}
                 >
-                  <Zap size={13} />
+                  <Zap size={13} className="database-index-trigger" />
                   <span className="database-object-label">
                     {formatTriggerLabel(trigger)}
                   </span>
                 </div>
               ))
             ) : (
-              <div className="database-tree-empty">
-                No triggers found
-              </div>
+              <div className="database-tree-empty">No triggers found</div>
             )}
           </TableObjectGroup>
           <TableObjectGroup
@@ -2475,9 +2476,7 @@ function TableTreeItem({
                 </div>
               ))
             ) : (
-              <div className="database-tree-empty">
-                No partitions found
-              </div>
+              <div className="database-tree-empty">No partitions found</div>
             )}
           </TableObjectGroup>
         </div>
@@ -2539,18 +2538,38 @@ function ColumnTreeItem({ column }: { column: DatabaseColumn }): JSX.Element {
           <span className="database-tree-indent" />
         )}
 
-        <Cpu
-          size={13}
-          className={
-            hasMetadata &&
-            column.metadata.find(
-              (m) => m.label === "Null" && m.value === "Nullable",
-            )
-              ? "database-tree-column-metadata nullable"
-              : "database-tree-column-metadata not-nullable"
-          }
-        />
+        {hasMetadata &&
+        column.metadata.find((m) => m.label === "Key" && m.value === "PRI") ? (
+          <Key
+            size={13}
+            className="database-tree-column-metadata primary-key"
+          />
+        ) : hasMetadata &&
+          column.metadata.find(
+            (m) => m.label === "Key" && m.value === "FOR",
+          ) ? (
+          <GitBranch
+            size={13}
+            className="database-tree-column-metadata foreign-key"
+          />
+        ) : (
+          <Cpu
+            size={13}
+            className={
+              hasMetadata &&
+              column.metadata.find(
+                (m) => m.label === "Null" && m.value === "Nullable",
+              )
+                ? "database-tree-column-metadata nullable"
+                : "database-tree-column-metadata not-nullable"
+            }
+          />
+        )}
+
         <span>{column.name}</span>
+        {hasMetadata && (
+          <strong>{column.metadata.find((m) => m.label === "Type")?.value}</strong>
+        )}
       </button>
       {open && hasMetadata ? (
         <div className="database-column-metadata">
