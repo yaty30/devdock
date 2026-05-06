@@ -9,6 +9,19 @@ export type {
   BuildOutcomeType,
   BuildProfileRecord,
   DashboardEvent,
+  DatabaseColumn,
+  DatabaseColumnMetadata,
+  DatabaseConnection,
+  DatabaseConnectionStatus,
+  DatabaseConnectionTestResult,
+  DatabaseConnectionType,
+  DatabaseExecutionBatchResult,
+  DatabaseMetadata,
+  DatabaseQueryColumn,
+  DatabaseQueryValue,
+  DatabaseSslMode,
+  DatabaseStatementExecutionResult,
+  DatabaseTable,
   GitStatusRecord,
   LogChannel,
   LogSearchResult,
@@ -26,6 +39,7 @@ export type {
   SheetContentJson,
   SheetUpdate,
   ShutdownEntry,
+  OracleConnectionMode,
 } from "../../shared/dashboardTypes";
 
 export type AppSection = "dashboard" | "project" | "database";
@@ -34,36 +48,6 @@ export type DatabaseWorkspaceTab = "connection" | "monitor";
 export type FontSizeMode = "large" | "regular" | "small";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
-
-export type DatabaseConnectionStatus = "connected" | "disconnected" | "error";
-export type DatabaseConnectionType = "MySQL" | "Oracle";
-export type DatabaseSslMode = "disabled" | "preferred" | "required";
-export type OracleConnectionMode = "serviceName" | "sid" | "connectString";
-
-export type DatabaseConnection = {
-  id: string;
-  name: string;
-  type: DatabaseConnectionType;
-  status: DatabaseConnectionStatus;
-  host: string;
-  port: string;
-  user: string;
-  schema: string;
-  password?: string;
-  savePassword?: boolean;
-  connectionTimeoutMs?: number;
-  database?: string;
-  sslMode?: DatabaseSslMode;
-  connectionMode?: OracleConnectionMode;
-  serviceName?: string;
-  sid?: string;
-  connectString?: string;
-  role?: string;
-  walletPath?: string;
-  latency: string;
-  uptime: string;
-  activeSessions: number;
-};
 
 export type DatabaseExecutionRecord = {
   id: string;

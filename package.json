@@ -1,6 +1,6 @@
 {
   "name": "ivs-dashboard-electron",
-  "version": "0.7.3",
+  "version": "0.8.1",
   "description": "Static Electron React TypeScript prototype for an IVS Dashboard.",
   "main": "build/main/index.js",
   "productName": "IVS Dashboard",
@@ -39,6 +39,7 @@
     "codemirror": "^6.0.2",
     "electron-squirrel-startup": "^1.0.1",
     "lucide-react": "^0.468.0",
+    "mysql2": "^3.22.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

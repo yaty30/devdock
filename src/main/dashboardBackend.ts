@@ -22,6 +22,12 @@ import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { userInfo } from "node:os";
+import {
+  createConnection as createMysqlConnection,
+  type FieldPacket,
+  type ResultSetHeader,
+  type RowDataPacket,
+} from "mysql2/promise";
 import type {
   ActivityKind,
   ActivityRecord,
@@ -32,6 +38,12 @@ import type {
   BuildQueryResult,
   BuildQuerySortKey,
   DashboardEvent,
+  DatabaseConnection,
+  DatabaseConnectionTestResult,
+  DatabaseExecutionBatchResult,
+  DatabaseMetadata,
+  DatabaseQueryValue,
+  DatabaseStatementExecutionResult,
   DashboardSnapshot,
   GitStatusRecord,
   LogChannel,
@@ -125,6 +137,14 @@ type SheetRow = {
   auto_save_enabled: number;
 };
 
+type DatabaseConnectionRow = {
+  id: string;
+  name: string;
+  connection_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
 type SettingsActivityEntry = {
   title: string;
   meta: string;
@@ -178,6 +198,287 @@ export class DashboardBackend {
       projects,
       activeProjectId: projects[0]?.id ?? "",
     };
+  }
+
+  getDatabaseConnections(): DatabaseConnection[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, name, connection_json, created_at, updated_at
+         FROM database_connections
+         ORDER BY created_at ASC`,
+      )
+      .all() as DatabaseConnectionRow[];
+
+    return rows.map((row) => this.mapDatabaseConnection(row));
+  }
+
+  async saveDatabaseConnection(
+    connection: DatabaseConnection,
+  ): Promise<DatabaseConnection> {
+    const normalized = normalizeDatabaseConnection(connection);
+    const duplicate = this.db
+      .prepare(
+        `SELECT 1 FROM database_connections
+         WHERE id <> ? AND name = ? COLLATE NOCASE`,
+      )
+      .get(normalized.id, normalized.name);
+    if (duplicate !== undefined) {
+      throw new Error("A database connection with this name already exists.");
+    }
+
+    const testResult = await this.testDatabaseConnection(normalized);
+    if (!testResult.success) {
+      throw new Error(testResult.message);
+    }
+
+    const saved: DatabaseConnection = {
+      ...normalized,
+      status: "connected",
+      latency: testResult.latency ?? normalized.latency,
+      uptime: "Session",
+      activeSessions: 1,
+      password: normalized.savePassword ? normalized.password : undefined,
+    };
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare("SELECT created_at FROM database_connections WHERE id = ?")
+      .get(saved.id) as { created_at: string } | undefined;
+
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO database_connections (
+           id, name, connection_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        saved.id,
+        saved.name,
+        JSON.stringify(saved),
+        existing?.created_at ?? now,
+        now,
+      );
+
+    return saved;
+  }
+
+  deleteDatabaseConnection(connectionId: string): void {
+    const result = this.db
+      .prepare("DELETE FROM database_connections WHERE id = ?")
+      .run(connectionId);
+    if (result.changes === 0) {
+      throw new Error("Database connection not found.");
+    }
+  }
+
+  async testDatabaseConnection(
+    connection: DatabaseConnection,
+  ): Promise<DatabaseConnectionTestResult> {
+    if (connection.type !== "MySQL") {
+      return {
+        success: false,
+        message: `${connection.type} connections are not supported yet.`,
+      };
+    }
+
+    const startedAt = performance.now();
+    let mysqlConnection: Awaited<
+      ReturnType<typeof createMysqlConnection>
+    > | null = null;
+    try {
+      mysqlConnection = await createMysqlConnection(
+        toMysqlConnectionOptions(connection),
+      );
+      await mysqlConnection.ping();
+      const latency = `${Math.max(1, performance.now() - startedAt).toFixed(1)} ms`;
+      return {
+        success: true,
+        message: `Connected to ${connection.host}:${connection.port}.`,
+        latency,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Database connection test failed.",
+      };
+    } finally {
+      if (mysqlConnection) {
+        await mysqlConnection.end().catch(() => undefined);
+      }
+    }
+  }
+
+  async getDatabaseMetadata(
+    connection: DatabaseConnection,
+  ): Promise<DatabaseMetadata> {
+    if (connection.type !== "MySQL") {
+      throw new Error(`${connection.type} metadata is not supported yet.`);
+    }
+
+    const mysqlConnection = await createMysqlConnection(
+      toMysqlConnectionOptions(connection),
+    );
+    try {
+      const [schemaRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT SCHEMA_NAME AS schemaName
+         FROM INFORMATION_SCHEMA.SCHEMATA
+         ORDER BY SCHEMA_NAME`,
+      );
+      const schemas = schemaRows.map((row) => String(row.schemaName));
+      const relevantSchemas = selectRelevantSchemas(schemas, connection);
+
+      if (relevantSchemas.length === 0) {
+        return createEmptyDatabaseMetadata(schemas);
+      }
+
+      const schemaPlaceholders = relevantSchemas.map(() => "?").join(", ");
+      const [tableRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT TABLE_SCHEMA AS tableSchema, TABLE_NAME AS tableName
+         FROM INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_SCHEMA IN (${schemaPlaceholders})
+           AND TABLE_TYPE = 'BASE TABLE'
+         ORDER BY TABLE_SCHEMA, TABLE_NAME`,
+        relevantSchemas,
+      );
+      const [viewRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT TABLE_SCHEMA AS tableSchema, TABLE_NAME AS tableName
+         FROM INFORMATION_SCHEMA.VIEWS
+         WHERE TABLE_SCHEMA IN (${schemaPlaceholders})
+         ORDER BY TABLE_SCHEMA, TABLE_NAME`,
+        relevantSchemas,
+      );
+      const [routineRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT ROUTINE_SCHEMA AS routineSchema,
+                ROUTINE_NAME AS routineName,
+                ROUTINE_TYPE AS routineType
+         FROM INFORMATION_SCHEMA.ROUTINES
+         WHERE ROUTINE_SCHEMA IN (${schemaPlaceholders})
+         ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME`,
+        relevantSchemas,
+      );
+      const [columnRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT TABLE_SCHEMA AS tableSchema,
+                TABLE_NAME AS tableName,
+                COLUMN_NAME AS columnName,
+                COLUMN_TYPE AS columnType,
+                COLUMN_KEY AS columnKey,
+                IS_NULLABLE AS isNullable,
+                COLUMN_DEFAULT AS columnDefault,
+                COLUMN_COMMENT AS columnComment,
+                EXTRA AS extra
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA IN (${schemaPlaceholders})
+         ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`,
+        relevantSchemas,
+      );
+      const columnsByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["columns"]
+      >();
+
+      for (const row of columnRows) {
+        const tableKey = `${row.tableSchema}.${row.tableName}`;
+        const columns = columnsByTable.get(tableKey) ?? [];
+        columns.push({
+          name: String(row.columnName),
+          metadata: createColumnMetadata(row),
+        });
+        columnsByTable.set(tableKey, columns);
+      }
+
+      return {
+        schemas,
+        tables: tableRows.map((row) => ({
+          schema: String(row.tableSchema),
+          name: String(row.tableName),
+          columns:
+            columnsByTable.get(`${row.tableSchema}.${row.tableName}`) ?? [],
+        })),
+        views: viewRows.map((row) =>
+          qualifyDatabaseObject(row.tableSchema, row.tableName),
+        ),
+        procedures: routineRows
+          .filter(
+            (row) => String(row.routineType).toUpperCase() === "PROCEDURE",
+          )
+          .map((row) =>
+            qualifyDatabaseObject(row.routineSchema, row.routineName),
+          ),
+        functions: routineRows
+          .filter((row) => String(row.routineType).toUpperCase() === "FUNCTION")
+          .map((row) =>
+            qualifyDatabaseObject(row.routineSchema, row.routineName),
+          ),
+      };
+    } finally {
+      await mysqlConnection.end().catch(() => undefined);
+    }
+  }
+
+  async executeDatabaseStatements(
+    connection: DatabaseConnection,
+    statements: string[],
+  ): Promise<DatabaseExecutionBatchResult> {
+    if (connection.type !== "MySQL") {
+      throw new Error(`${connection.type} execution is not supported yet.`);
+    }
+
+    const mysqlConnection = await createMysqlConnection(
+      toMysqlConnectionOptions(connection),
+    );
+    const results: DatabaseStatementExecutionResult[] = [];
+    try {
+      for (const statement of statements) {
+        const trimmedStatement = statement.trim();
+        if (!trimmedStatement) {
+          continue;
+        }
+
+        const startedAt = performance.now();
+        try {
+          const [rows, fields] = await mysqlConnection.query<
+            RowDataPacket[] | ResultSetHeader
+          >(trimmedStatement);
+          const durationMs = Math.max(1, performance.now() - startedAt);
+          const rowArray = Array.isArray(rows) ? rows : [];
+          const normalizedRows = rowArray.map((row) => normalizeMysqlRow(row));
+          const resultHeader = isResultSetHeader(rows) ? rows : undefined;
+          results.push({
+            statement: trimmedStatement,
+            columns: Array.isArray(fields)
+              ? fields.map((field) => ({
+                  key: field.name,
+                  label: field.name,
+                  type: formatMysqlColumnType(field),
+                }))
+              : [],
+            rows: normalizedRows,
+            status: "success",
+            durationMs,
+            rowsFetched: normalizedRows.length,
+            rowsAffected: resultHeader?.affectedRows,
+          });
+        } catch (error) {
+          results.push({
+            statement: trimmedStatement,
+            columns: [],
+            rows: [],
+            status: "error",
+            errorMessage:
+              error instanceof Error ? error.message : "Statement failed.",
+            durationMs: Math.max(1, performance.now() - startedAt),
+            rowsFetched: 0,
+          });
+          break;
+        }
+      }
+    } finally {
+      await mysqlConnection.end().catch(() => undefined);
+    }
+
+    return { results };
   }
 
   getDashboardOverview(): ProjectDashboardSummary[] {
@@ -965,10 +1266,20 @@ export class DashboardBackend {
         FOREIGN KEY(project_id) REFERENCES projects(id)
       );
 
+      CREATE TABLE IF NOT EXISTS database_connections (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        connection_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE UNIQUE INDEX IF NOT EXISTS sheets_project_title_unique
         ON sheets(project_id, title COLLATE NOCASE);
       CREATE INDEX IF NOT EXISTS sheets_project_updated_idx
         ON sheets(project_id, updated_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS database_connections_name_unique
+        ON database_connections(name COLLATE NOCASE);
     `);
 
     this.patchExistingActivityDatesToYesterday();
@@ -1079,6 +1390,31 @@ export class DashboardBackend {
       updatedAt: row.updated_at,
       autoSaveEnabled: row.auto_save_enabled === 1,
     };
+  }
+
+  private mapDatabaseConnection(
+    row: DatabaseConnectionRow,
+  ): DatabaseConnection {
+    try {
+      return normalizeDatabaseConnection(
+        JSON.parse(row.connection_json) as DatabaseConnection,
+      );
+    } catch (error) {
+      console.error(`[database:${row.id}] Failed to read connection`, error);
+      return normalizeDatabaseConnection({
+        id: row.id,
+        name: row.name,
+        type: "MySQL",
+        status: "error",
+        host: "",
+        port: "3306",
+        user: "",
+        schema: "",
+        latency: "Not tested",
+        uptime: "Not connected",
+        activeSessions: 0,
+      });
+    }
   }
 
   private nextProjectId(name: string, code: string): string {
@@ -2325,6 +2661,226 @@ function parseSheetContent(value: string): SheetContentJson {
 
   return EMPTY_SHEET_CONTENT;
 }
+
+function normalizeDatabaseConnection(
+  connection: DatabaseConnection,
+): DatabaseConnection {
+  const database = connection.database?.trim() ?? "";
+  const schema =
+    connection.schema?.trim() ||
+    database ||
+    connection.serviceName?.trim() ||
+    connection.sid?.trim() ||
+    connection.connectString?.trim() ||
+    "";
+
+  return {
+    id: connection.id?.trim() || randomUUID(),
+    name: connection.name?.trim() || "Database",
+    type: connection.type ?? "MySQL",
+    status: connection.status ?? "disconnected",
+    host: connection.host?.trim() ?? "",
+    port: String(connection.port ?? "").trim() || "3306",
+    user: connection.user?.trim() ?? "",
+    schema,
+    password: connection.password,
+    savePassword: connection.savePassword ?? true,
+    connectionTimeoutMs: connection.connectionTimeoutMs ?? 10000,
+    database,
+    sslMode: connection.sslMode ?? "disabled",
+    connectionMode: connection.connectionMode ?? "serviceName",
+    serviceName: connection.serviceName?.trim() ?? "",
+    sid: connection.sid?.trim() ?? "",
+    connectString: connection.connectString?.trim() ?? "",
+    role: connection.role?.trim() ?? "",
+    walletPath: connection.walletPath?.trim() ?? "",
+    latency: connection.latency || "Not tested",
+    uptime: connection.uptime || "Not connected",
+    activeSessions: connection.activeSessions ?? 0,
+  };
+}
+
+function toMysqlConnectionOptions(connection: DatabaseConnection): {
+  host: string;
+  port: number;
+  user: string;
+  password?: string;
+  database?: string;
+  connectTimeout: number;
+  ssl?: Record<string, never>;
+  dateStrings: boolean;
+  supportBigNumbers: boolean;
+  bigNumberStrings: boolean;
+} {
+  const database = connection.database?.trim();
+  return {
+    host: connection.host.trim(),
+    port: Number(connection.port) || 3306,
+    user: connection.user.trim(),
+    password: connection.password ?? "",
+    database: database || undefined,
+    connectTimeout: connection.connectionTimeoutMs ?? 10000,
+    ssl: connection.sslMode === "required" ? {} : undefined,
+    dateStrings: true,
+    supportBigNumbers: true,
+    bigNumberStrings: true,
+  };
+}
+
+function selectRelevantSchemas(
+  schemas: string[],
+  connection: DatabaseConnection,
+): string[] {
+  const selected = (connection.database || connection.schema || "").trim();
+  if (selected && schemas.includes(selected)) {
+    return [selected];
+  }
+
+  return schemas.filter(
+    (schema) =>
+      !["information_schema", "mysql", "performance_schema", "sys"].includes(
+        schema.toLowerCase(),
+      ),
+  );
+}
+
+function createEmptyDatabaseMetadata(schemas: string[] = []): DatabaseMetadata {
+  return {
+    schemas,
+    tables: [],
+    views: [],
+    procedures: [],
+    functions: [],
+  };
+}
+
+function qualifyDatabaseObject(schema: unknown, name: unknown): string {
+  const schemaName = String(schema ?? "");
+  const objectName = String(name ?? "");
+  return schemaName ? `${schemaName}.${objectName}` : objectName;
+}
+
+function createColumnMetadata(row: RowDataPacket): Array<{
+  label: string;
+  value: string;
+}> {
+  return [
+    { label: "Type", value: String(row.columnType ?? "") },
+    { label: "Key", value: String(row.columnKey || "None") },
+    {
+      label: "Null",
+      value:
+        String(row.isNullable).toUpperCase() === "YES"
+          ? "Nullable"
+          : "Not nullable",
+    },
+    {
+      label: "Default",
+      value: row.columnDefault == null ? "None" : String(row.columnDefault),
+    },
+    { label: "Comment", value: String(row.columnComment || "No comment") },
+    ...(row.extra ? [{ label: "Extra", value: String(row.extra) }] : []),
+  ].filter((item) => item.value !== "");
+}
+
+function normalizeMysqlRow(
+  row: RowDataPacket,
+): Record<string, DatabaseQueryValue> {
+  const normalized: Record<string, DatabaseQueryValue> = {};
+  for (const [key, value] of Object.entries(row)) {
+    normalized[key] = normalizeMysqlValue(value);
+  }
+  return normalized;
+}
+
+function normalizeMysqlValue(value: unknown): DatabaseQueryValue {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Buffer.isBuffer(value)) {
+    return `0x${value.toString("hex")}`;
+  }
+  return JSON.stringify(value);
+}
+
+function isResultSetHeader(value: unknown): value is ResultSetHeader {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "affectedRows" in value &&
+    typeof (value as { affectedRows?: unknown }).affectedRows === "number"
+  );
+}
+
+function formatMysqlColumnType(field: FieldPacket): string | undefined {
+  const columnType = field.columnType;
+  if (columnType === undefined) {
+    return undefined;
+  }
+
+  const typeName = MYSQL_COLUMN_TYPE_NAMES[columnType];
+  if (!typeName) {
+    return undefined;
+  }
+
+  const columnLength = field.columnLength ?? 0;
+
+  if (["varchar", "varbinary"].includes(typeName) && columnLength > 0) {
+    const length =
+      field.characterSet === 63
+        ? columnLength
+        : columnLength % 4 === 0
+          ? columnLength / 4
+          : columnLength;
+    return `${typeName}(${length})`;
+  }
+
+  if (["decimal", "newdecimal"].includes(typeName) && field.decimals > 0) {
+    return `decimal(${columnLength},${field.decimals})`;
+  }
+
+  return typeName === "newdecimal" ? "decimal" : typeName;
+}
+
+const MYSQL_COLUMN_TYPE_NAMES: Record<number, string> = {
+  0: "decimal",
+  1: "tinyint",
+  2: "smallint",
+  3: "int",
+  4: "float",
+  5: "double",
+  6: "null",
+  7: "timestamp",
+  8: "bigint",
+  9: "mediumint",
+  10: "date",
+  11: "time",
+  12: "datetime",
+  13: "year",
+  15: "varchar",
+  16: "bit",
+  245: "json",
+  246: "newdecimal",
+  247: "enum",
+  248: "set",
+  249: "tinyblob",
+  250: "mediumblob",
+  251: "longblob",
+  252: "text",
+  253: "varchar",
+  254: "char",
+  255: "geometry",
+};
 
 function normalizeBuildSortKey(
   value: BuildQuerySortKey | undefined,

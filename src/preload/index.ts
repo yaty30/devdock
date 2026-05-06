@@ -13,6 +13,17 @@ import type {
 
 const api: DashboardApi = {
   getSnapshot: () => ipcRenderer.invoke("dashboard:getSnapshot"),
+  getDatabaseConnections: () => ipcRenderer.invoke("database:getConnections"),
+  saveDatabaseConnection: (connection) =>
+    ipcRenderer.invoke("database:saveConnection", connection),
+  deleteDatabaseConnection: (connectionId) =>
+    ipcRenderer.invoke("database:deleteConnection", connectionId),
+  testDatabaseConnection: (connection) =>
+    ipcRenderer.invoke("database:testConnection", connection),
+  getDatabaseMetadata: (connection) =>
+    ipcRenderer.invoke("database:getMetadata", connection),
+  executeDatabaseStatements: (connection, statements) =>
+    ipcRenderer.invoke("database:executeStatements", connection, statements),
   getDashboardOverview: () =>
     ipcRenderer.invoke("dashboard:getDashboardOverview"),
   getProjectState: (projectId) =>

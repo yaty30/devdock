@@ -10,6 +10,7 @@ import {
   PanelLeftOpen,
   Plus,
   Sun,
+  Trash2,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
 import type {
@@ -29,6 +30,7 @@ export function Sidebar({
   collapsed,
   onProjectChange,
   onDatabaseConnectionChange,
+  onDatabaseConnectionDelete,
   onSectionChange,
   onAddProject,
   onAddDatabaseConnection,
@@ -44,6 +46,7 @@ export function Sidebar({
   collapsed: boolean;
   onProjectChange: (project: Project) => void;
   onDatabaseConnectionChange: (connection: DatabaseConnection) => void;
+  onDatabaseConnectionDelete: (connection: DatabaseConnection) => void;
   onSectionChange: (section: AppSection) => void;
   onAddProject: () => void;
   onAddDatabaseConnection: () => void;
@@ -168,27 +171,45 @@ export function Sidebar({
           {databaseConnections.map((connection) => {
             const displayName = getConnectionDisplayName(connection);
             return (
-              <button
+              <div
                 className={`project-item database-item${
                   activeSection === "database" &&
                   connection.id === selectedDatabaseConnectionId
                     ? " active"
                     : ""
                 }`}
-                type="button"
                 key={connection.id}
-                tabIndex={databasesOpen || collapsed ? 0 : -1}
                 title={formatDatabaseConnectionTooltip(connection)}
                 aria-label={formatDatabaseConnectionTooltip(connection)}
-                onClick={() => onDatabaseConnectionChange(connection)}
               >
-                <span className={`database-status-dot ${connection.status}`} />
-                <span className="database-connection-initials">
-                  {getConnectionInitials(connection)}
-                </span>
-                <span className="database-connection-name">{displayName}</span>
-                <span className="database-type-label">{connection.type}</span>
-              </button>
+                <button
+                  className="database-item-main"
+                  type="button"
+                  tabIndex={databasesOpen || collapsed ? 0 : -1}
+                  onClick={() => onDatabaseConnectionChange(connection)}
+                >
+                  <span className={`database-status-dot ${connection.status}`} />
+                  <span className="database-connection-initials">
+                    {getConnectionInitials(connection)}
+                  </span>
+                  <span className="database-connection-name">
+                    {displayName}
+                  </span>
+                  <span className="database-type-label">{connection.type}</span>
+                </button>
+                {!collapsed ? (
+                  <button
+                    className="database-item-delete"
+                    type="button"
+                    tabIndex={databasesOpen ? 0 : -1}
+                    aria-label={`Delete ${connection.name}`}
+                    title={`Delete ${connection.name}`}
+                    onClick={() => onDatabaseConnectionDelete(connection)}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                ) : null}
+              </div>
             );
           })}
           <button

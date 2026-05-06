@@ -193,6 +193,86 @@ export type BrowsePathOptions = {
   }>;
 };
 
+export type DatabaseConnectionStatus = "connected" | "disconnected" | "error";
+export type DatabaseConnectionType = "MySQL" | "Oracle";
+export type DatabaseSslMode = "disabled" | "preferred" | "required";
+export type OracleConnectionMode = "serviceName" | "sid" | "connectString";
+
+export type DatabaseConnection = {
+  id: string;
+  name: string;
+  type: DatabaseConnectionType;
+  status: DatabaseConnectionStatus;
+  host: string;
+  port: string;
+  user: string;
+  schema: string;
+  password?: string;
+  savePassword?: boolean;
+  connectionTimeoutMs?: number;
+  database?: string;
+  sslMode?: DatabaseSslMode;
+  connectionMode?: OracleConnectionMode;
+  serviceName?: string;
+  sid?: string;
+  connectString?: string;
+  role?: string;
+  walletPath?: string;
+  latency: string;
+  uptime: string;
+  activeSessions: number;
+};
+
+export type DatabaseConnectionTestResult = {
+  success: boolean;
+  message: string;
+  latency?: string;
+};
+
+export type DatabaseColumnMetadata = Array<{ label: string; value: string }>;
+
+export type DatabaseColumn = {
+  name: string;
+  metadata: DatabaseColumnMetadata;
+};
+
+export type DatabaseTable = {
+  schema: string;
+  name: string;
+  columns: DatabaseColumn[];
+};
+
+export type DatabaseMetadata = {
+  schemas: string[];
+  tables: DatabaseTable[];
+  views: string[];
+  procedures: string[];
+  functions: string[];
+};
+
+export type DatabaseQueryValue = string | number | boolean | null;
+
+export type DatabaseQueryColumn = {
+  key: string;
+  label: string;
+  type?: string;
+};
+
+export type DatabaseStatementExecutionResult = {
+  statement: string;
+  columns: DatabaseQueryColumn[];
+  rows: Array<Record<string, DatabaseQueryValue>>;
+  status: "success" | "error";
+  errorMessage?: string;
+  durationMs: number;
+  rowsFetched: number;
+  rowsAffected?: number;
+};
+
+export type DatabaseExecutionBatchResult = {
+  results: DatabaseStatementExecutionResult[];
+};
+
 export type DashboardEvent =
   | {
       type: "log";
@@ -234,6 +314,21 @@ export type DashboardEvent =
 
 export type DashboardApi = {
   getSnapshot: () => Promise<DashboardSnapshot>;
+  getDatabaseConnections: () => Promise<DatabaseConnection[]>;
+  saveDatabaseConnection: (
+    connection: DatabaseConnection,
+  ) => Promise<DatabaseConnection>;
+  deleteDatabaseConnection: (connectionId: string) => Promise<void>;
+  testDatabaseConnection: (
+    connection: DatabaseConnection,
+  ) => Promise<DatabaseConnectionTestResult>;
+  getDatabaseMetadata: (
+    connection: DatabaseConnection,
+  ) => Promise<DatabaseMetadata>;
+  executeDatabaseStatements: (
+    connection: DatabaseConnection,
+    statements: string[],
+  ) => Promise<DatabaseExecutionBatchResult>;
   getDashboardOverview: () => Promise<ProjectDashboardSummary[]>;
   getProjectState: (projectId: string) => Promise<ProjectRuntimeState>;
   saveProjectSettings: (

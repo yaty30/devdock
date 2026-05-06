@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Trash2 } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
@@ -45,27 +45,6 @@ const SPLASH_READY_FRAME_MS = 800;
 const SPLASH_FADE_OUT_MS = 1100;
 const SPLASH_LOGO_SIZE = "min(90px, 11vw)";
 
-const DUMMY_DATABASE_CONNECTIONS: DatabaseConnection[] = [
-  {
-    id: "local_mysql",
-    name: "local_mysql",
-    type: "MySQL",
-    status: "connected",
-    host: "localhost",
-    port: "3306",
-    user: "ivsd_mysql",
-    schema: "sakila",
-    password: "ivsd_mysql",
-    savePassword: true,
-    connectionTimeoutMs: 10000,
-    database: "sakila",
-    sslMode: "disabled",
-    latency: "2.3 ms",
-    uptime: "3h 42m",
-    activeSessions: 4,
-  },
-];
-
 type SplashFrame = "open" | "close";
 type SplashPhase = "visible" | "exiting" | "hidden";
 type SnackbarState = {
@@ -79,13 +58,17 @@ function App(): JSX.Element {
   const [projects, setProjects] = useState<Project[]>([]);
   const [databaseConnections, setDatabaseConnections] = useState<
     DatabaseConnection[]
-  >(() => DUMMY_DATABASE_CONNECTIONS);
+  >([]);
   const [databaseConnectionModal, setDatabaseConnectionModal] = useState<
     "add" | "edit" | null
   >(null);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedDatabaseConnectionId, setSelectedDatabaseConnectionId] =
-    useState<string | null>(DUMMY_DATABASE_CONNECTIONS[0]?.id ?? null);
+    useState<string | null>(null);
+  const [deleteDatabaseConnectionRequest, setDeleteDatabaseConnectionRequest] =
+    useState<DatabaseConnection | null>(null);
+  const [deletedDatabaseConnectionId, setDeletedDatabaseConnectionId] =
+    useState<string | null>(null);
   const [activeDatabaseTab, setActiveDatabaseTab] =
     useState<DatabaseWorkspaceTab>("connection");
   const [databaseExecutionHistory, setDatabaseExecutionHistory] = useState<
@@ -142,10 +125,13 @@ function App(): JSX.Element {
     let cancelled = false;
     async function loadInitialState(): Promise<void> {
       const snapshot = await window.ivsDashboard.getSnapshot();
+      const connections = await window.ivsDashboard.getDatabaseConnections();
       if (cancelled) {
         return;
       }
       setProjects(snapshot.projects);
+      setDatabaseConnections(connections);
+      setSelectedDatabaseConnectionId(connections[0]?.id ?? null);
       void refreshDashboardOverview();
       const active =
         snapshot.projects.find(
@@ -173,6 +159,7 @@ function App(): JSX.Element {
 
   useEffect(() => {
     window.localStorage.setItem("ivs-dashboard-theme", theme);
+    document.documentElement.dataset.theme = theme;
   }, [theme]);
 
   useEffect(() => {
@@ -475,6 +462,7 @@ function App(): JSX.Element {
   }
 
   function handleAddDatabaseConnection(): void {
+    setActiveSection("database");
     setDatabaseConnectionModal("add");
   }
 
@@ -487,33 +475,83 @@ function App(): JSX.Element {
     setDatabaseConnectionModal("edit");
   }
 
-  function handleSaveDatabaseConnection(
+  async function handleSaveDatabaseConnection(
     savedConnection: DatabaseConnection,
-  ): void {
-    if (databaseConnectionModal === "add") {
-      setDatabaseConnections((current) => [...current, savedConnection]);
-      setSelectedDatabaseConnectionId(savedConnection.id);
-      setActiveDatabaseTab("connection");
-      setActiveSection("database");
+  ): Promise<boolean> {
+    try {
+      const persisted =
+        await window.ivsDashboard.saveDatabaseConnection(savedConnection);
+      if (databaseConnectionModal === "add") {
+        setDatabaseConnections((current) => [...current, persisted]);
+        setSelectedDatabaseConnectionId(persisted.id);
+        setActiveDatabaseTab("connection");
+        setActiveSection("database");
+        setDatabaseConnectionModal(null);
+        showSnackbar("Connection saved", "valid");
+        return true;
+      }
+
+      setDatabaseConnections((current) =>
+        current.map((connection) =>
+          connection.id === persisted.id
+            ? {
+                ...connection,
+                ...persisted,
+                name: persisted.name || connection.name,
+              }
+            : connection,
+        ),
+      );
+      setSelectedDatabaseConnectionId(persisted.id);
       setDatabaseConnectionModal(null);
-      showSnackbar("Connection saved", "valid");
+      showSnackbar("Connection settings saved", "valid");
+      return true;
+    } catch (error) {
+      console.error(error);
+      showSnackbar(
+        error instanceof Error
+          ? error.message
+          : "Connection could not be saved",
+        "invalid",
+      );
+      return false;
+    }
+  }
+
+  async function confirmDeleteDatabaseConnection(): Promise<void> {
+    if (!deleteDatabaseConnectionRequest) {
       return;
     }
 
-    setDatabaseConnections((current) =>
-      current.map((connection) =>
-        connection.id === savedConnection.id
-          ? {
-              ...connection,
-              ...savedConnection,
-              name: savedConnection.name || connection.name,
-            }
-          : connection,
-      ),
-    );
-    setSelectedDatabaseConnectionId(savedConnection.id);
-    setDatabaseConnectionModal(null);
-    showSnackbar("Connection settings saved", "valid");
+    const deleted = deleteDatabaseConnectionRequest;
+    try {
+      await window.ivsDashboard.deleteDatabaseConnection(deleted.id);
+      const remaining = databaseConnections.filter(
+        (connection) => connection.id !== deleted.id,
+      );
+      setDatabaseConnections(remaining);
+      setDeletedDatabaseConnectionId(deleted.id);
+      setDeleteDatabaseConnectionRequest(null);
+      setDatabaseExecutionHistory((current) =>
+        current.filter((entry) => entry.connection !== deleted.name),
+      );
+      if (selectedDatabaseConnectionId === deleted.id) {
+        setSelectedDatabaseConnectionId(remaining[0]?.id ?? null);
+        setActiveDatabaseTab("connection");
+        if (remaining.length === 0) {
+          setActiveSection("database");
+        }
+      }
+      showSnackbar(`${deleted.name} deleted.`, "valid");
+    } catch (error) {
+      console.error(error);
+      showSnackbar(
+        error instanceof Error
+          ? error.message
+          : "Connection could not be deleted",
+        "invalid",
+      );
+    }
   }
 
   function handleDatabaseExecution(record: DatabaseExecutionRecord): void {
@@ -647,6 +685,18 @@ function App(): JSX.Element {
     />
   );
 
+  const databaseDeleteDialog = deleteDatabaseConnectionRequest ? (
+    <ConfirmDialog
+      title="Delete Database Connection?"
+      message={`Deleting "${deleteDatabaseConnectionRequest.name}" will remove its sheets, query results, and cached schema metadata from this workspace. Other projects and database connections will not be changed.`}
+      confirmLabel="Delete"
+      cancelLabel="Cancel"
+      variant="danger"
+      onClose={() => setDeleteDatabaseConnectionRequest(null)}
+      onConfirm={() => void confirmDeleteDatabaseConnection()}
+    />
+  ) : null;
+
   if (!selectedProject && !initialStateLoaded) {
     return (
       <div
@@ -688,6 +738,7 @@ function App(): JSX.Element {
           collapsed={sidebarCollapsed}
           onProjectChange={switchProject}
           onDatabaseConnectionChange={switchDatabaseConnection}
+          onDatabaseConnectionDelete={setDeleteDatabaseConnectionRequest}
           onSectionChange={handleSectionChange}
           onAddProject={openAddProjectDialog}
           onAddDatabaseConnection={handleAddDatabaseConnection}
@@ -706,6 +757,11 @@ function App(): JSX.Element {
                   onTabChange={setActiveDatabaseTab}
                 />
               </div>
+            ) : activeSection === "database" ? (
+              <div>
+                <h1>Databases</h1>
+                <p>Create a connection to browse objects and run SQL.</p>
+              </div>
             ) : (
               <div>
                 <h1>Overview</h1>
@@ -718,21 +774,29 @@ function App(): JSX.Element {
                 fontSizeMode={fontSizeMode}
                 onFontSizeChange={setFontSizeMode}
                 onSettingsClick={openDatabaseConnectionSettings}
+                onDeleteClick={() =>
+                  setDeleteDatabaseConnectionRequest(selectedDatabaseConnection)
+                }
               />
             ) : null}
           </header>
 
-          {activeSection === "database" && selectedDatabaseConnection ? (
-            <DatabaseWorkspace
-              connection={selectedDatabaseConnection}
-              activeTab={activeDatabaseTab}
-              executionHistory={databaseExecutionHistory}
-              queryCount={databaseQueryCount}
-              lastRefreshTime={databaseLastRefreshTime}
-              onExecution={handleDatabaseExecution}
-              onRefresh={refreshDatabaseMetadata}
-              onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
-            />
+          {activeSection === "database" ? (
+            selectedDatabaseConnection ? (
+              <DatabaseWorkspace
+                connection={selectedDatabaseConnection}
+                activeTab={activeDatabaseTab}
+                executionHistory={databaseExecutionHistory}
+                queryCount={databaseQueryCount}
+                lastRefreshTime={databaseLastRefreshTime}
+                onExecution={handleDatabaseExecution}
+                onRefresh={refreshDatabaseMetadata}
+                onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
+                deletedConnectionId={deletedDatabaseConnectionId}
+              />
+            ) : (
+              <DatabaseEmptyState onCreate={handleAddDatabaseConnection} />
+            )
           ) : (
             <DashboardContent
               projects={dashboardOverview}
@@ -757,6 +821,7 @@ function App(): JSX.Element {
           />
         ) : null}
         {databaseConnectionDialog}
+        {databaseDeleteDialog}
         {splashOverlay}
       </div>
     );
@@ -779,6 +844,7 @@ function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onProjectChange={switchProject}
         onDatabaseConnectionChange={switchDatabaseConnection}
+        onDatabaseConnectionDelete={setDeleteDatabaseConnectionRequest}
         onSectionChange={handleSectionChange}
         onAddProject={openAddProjectDialog}
         onAddDatabaseConnection={handleAddDatabaseConnection}
@@ -808,6 +874,11 @@ function App(): JSX.Element {
                 onTabChange={setActiveDatabaseTab}
               />
             </div>
+          ) : activeSection === "database" ? (
+            <div>
+              <h1>Databases</h1>
+              <p>Create a connection to browse objects and run SQL.</p>
+            </div>
           ) : (
             <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
           )}
@@ -832,6 +903,9 @@ function App(): JSX.Element {
               fontSizeMode={fontSizeMode}
               onFontSizeChange={setFontSizeMode}
               onSettingsClick={openDatabaseConnectionSettings}
+              onDeleteClick={() =>
+                setDeleteDatabaseConnectionRequest(selectedDatabaseConnection)
+              }
             />
           ) : null}
         </header>
@@ -841,17 +915,22 @@ function App(): JSX.Element {
             projects={dashboardOverview}
             loading={dashboardOverviewLoading}
           />
-        ) : activeSection === "database" && selectedDatabaseConnection ? (
-          <DatabaseWorkspace
-            connection={selectedDatabaseConnection}
-            activeTab={activeDatabaseTab}
-            executionHistory={databaseExecutionHistory}
-            queryCount={databaseQueryCount}
-            lastRefreshTime={databaseLastRefreshTime}
-            onExecution={handleDatabaseExecution}
-            onRefresh={refreshDatabaseMetadata}
-            onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
-          />
+        ) : activeSection === "database" ? (
+          selectedDatabaseConnection ? (
+            <DatabaseWorkspace
+              connection={selectedDatabaseConnection}
+              activeTab={activeDatabaseTab}
+              executionHistory={databaseExecutionHistory}
+              queryCount={databaseQueryCount}
+              lastRefreshTime={databaseLastRefreshTime}
+              onExecution={handleDatabaseExecution}
+              onRefresh={refreshDatabaseMetadata}
+              onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
+              deletedConnectionId={deletedDatabaseConnectionId}
+            />
+          ) : (
+            <DatabaseEmptyState onCreate={handleAddDatabaseConnection} />
+          )
         ) : activeSection === "project" ? (
           <>
             {activeTab === "dashboard" ? (
@@ -957,6 +1036,8 @@ function App(): JSX.Element {
         </div>
       ) : null}
 
+      {databaseDeleteDialog}
+
       {pendingNav ? (
         <ConfirmDialog
           title="Unsaved Changes"
@@ -1013,12 +1094,14 @@ function DatabaseHeaderActions({
   fontSizeMode,
   onFontSizeChange,
   onSettingsClick,
+  onDeleteClick,
   disabled = false,
 }: {
   connection: DatabaseConnection;
   fontSizeMode: FontSizeMode;
   onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
+  onDeleteClick: () => void;
   disabled?: boolean;
 }): JSX.Element {
   return (
@@ -1036,8 +1119,45 @@ function DatabaseHeaderActions({
         disabled={disabled}
         settingsIcon="cog"
       />
+      <button
+        className="icon-button danger"
+        type="button"
+        aria-label={`Delete ${connection.name}`}
+        title="Delete connection"
+        disabled={disabled}
+        onClick={onDeleteClick}
+      >
+        <Trash2 size={16} />
+      </button>
     </div>
   );
+}
+
+function DatabaseEmptyState({
+  onCreate,
+}: {
+  onCreate: () => void;
+}): JSX.Element {
+  return (
+    <section className="database-empty-screen resizable-panel-screen">
+      <div className="panel database-empty-panel">
+        <DatabaseConnectionIcon />
+        <h2>No database connections</h2>
+        <p>Saved connections will appear in the database list.</p>
+        <button
+          className="button primary compact"
+          type="button"
+          onClick={onCreate}
+        >
+          New connection
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function DatabaseConnectionIcon(): JSX.Element {
+  return <span className="database-empty-icon">DB</span>;
 }
 
 function applyDashboardEvent(

@@ -17,6 +17,7 @@
   --border: #e5e7eb;
   --text: #111827;
   --muted: #6b7280;
+  --muted-soft: #a1a4ab38;
   --accent: #444ce7;
   --accent-soft: #eef2ff;
   --success: #16a34a;
@@ -3584,12 +3585,18 @@ body {
   border-radius: 6px;
   cursor: pointer;
   user-select: none;
+  transition: background-color 100ms ease, border-color 100ms ease;
 }
 
 .custom-select-option:hover,
 .custom-select-option.focused {
   border-color: var(--border);
   background: var(--accent-soft);
+}
+
+.custom-select-option.selected {
+  background: color-mix(in srgb, var(--accent) 9%, var(--field-bg));
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
 }
 
 .custom-select-option.selected .custom-select-option-label {
@@ -3638,6 +3645,8 @@ select option {
 .custom-select-dropdown-portal {
   max-height: min(260px, calc(100dvh - 24px));
   overflow: auto;
+  display: grid;
+  gap: 4px;
 }
 
 .activity-feed-panel {
@@ -5152,6 +5161,53 @@ select option {
 .database-item {
   gap: 8px;
   min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.database-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+}
+
+.database-item-main:hover {
+  background: transparent;
+  border-color: transparent;
+}
+
+.database-item-delete {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  margin-right: 3px;
+  color: var(--error);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  opacity: 0;
+}
+
+.database-item:hover .database-item-delete,
+.database-item:focus-within .database-item-delete {
+  opacity: 1;
+}
+
+.database-item-delete:hover {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  border-color: color-mix(in srgb, var(--error) 24%, transparent);
 }
 
 .database-status-dot {
@@ -5210,6 +5266,12 @@ select option {
 
 .sidebar.collapsed .database-item .database-status-dot {
   display: inline-block;
+}
+
+.sidebar.collapsed .database-item-main {
+  justify-content: center;
+  width: 100%;
+  padding: 0;
 }
 
 .sidebar.collapsed .database-item .database-connection-initials {
@@ -5275,6 +5337,48 @@ select option {
 
 .database-screen {
   overflow: hidden;
+}
+
+.database-empty-screen {
+  display: grid;
+  place-items: center;
+}
+
+.database-empty-panel {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: min(420px, 100%);
+  padding: 26px;
+  text-align: center;
+}
+
+.database-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 850;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 8px;
+}
+
+.database-empty-panel h2,
+.database-empty-panel p {
+  margin: 0;
+}
+
+.database-empty-panel h2 {
+  color: var(--text);
+  font-size: 18px;
+}
+
+.database-empty-panel p {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .database-workspace-view {
@@ -5435,6 +5539,14 @@ select option {
   transform: rotate(180deg);
 }
 
+.database-tree-group .database-tree-count {
+  color: var(--muted);
+  opacity: 0.5;
+  font-size: 11px;
+  font-weight: 700;
+  margin-left: 8px;
+}
+
 .database-tree-children {
   display: grid;
   gap: 2px;
@@ -5586,6 +5698,40 @@ select option {
   min-width: 0;
   height: 100%;
   padding-right: 20px;
+}
+
+.database-result-column-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.database-result-column-label .database-column-type {
+  margin-left: 10px;
+  background-color: var(--muted-soft);
+  padding: 4px 6px;
+  border-radius: 8px;
+  color: var(--cm-sql-comment);
+  opacity: 0.6;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.database-null-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  height: 20px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  background: var(--muted-soft);
+  border: 1px solid color-mix(in srgb, var(--muted) 24%, transparent);
+  border-radius: 999px;
 }
 
 .database-column-resize-handle {
@@ -5740,7 +5886,7 @@ select option {
 .database-summary-card span {
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
+  color: var(--accent);
   font-size: 11.5px;
   font-weight: 800;
   line-height: 1.15;
@@ -5926,12 +6072,13 @@ select option {
   display: grid;
   gap: 10px;
   min-width: 0;
+  margin-bottom: 10px;
 }
 
 .database-connection-section-title {
   margin: 0;
-  color: var(--nav-text);
-  font-size: 12px;
+  color: var(--accent);
+  font-size: 14px;
   font-weight: 850;
   letter-spacing: 0;
 }
@@ -5987,6 +6134,42 @@ select option {
 .database-connection-field input:disabled {
   color: var(--muted);
   background: var(--subtle-bg);
+}
+
+.database-password-field {
+  position: relative;
+  display: block;
+  min-width: 0;
+}
+
+.database-password-field input {
+  padding-right: 38px;
+}
+
+.database-password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  transform: translateY(-50%);
+}
+
+.database-password-toggle:active {
+  transform: translateY(-50%) scale(0.98);
+}
+
+.database-password-toggle:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .database-connection-field strong {
@@ -6050,6 +6233,12 @@ select option {
   border: 0;
 }
 
+.database-tree-button .database-column-count {
+  color: var(--muted);
+  opacity: 0.5;
+  font-size: 11px;
+}
+
 .database-tree-button .open,
 .database-column-button .open {
   transform: rotate(180deg);
@@ -6081,6 +6270,14 @@ select option {
   flex-wrap: wrap;
   gap: 5px;
   margin: 1px 0 7px 24px;
+}
+
+.database-tree-column-metadata.nullable {
+  color: var(--accent);
+}
+
+.database-tree-column-metadata.not-nullable {
+  color: var(--error);
 }
 
 .metadata-pill {
@@ -6354,6 +6551,47 @@ select option {
 .database-output-reload {
   width: 28px;
   height: 28px;
+}
+
+.database-result-tabs-region {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.database-result-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-height: 35px;
+  padding: 5px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+}
+
+.database-result-tabs button {
+  flex: 0 0 auto;
+  max-width: 180px;
+  height: 25px;
+  padding: 0 10px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+
+.database-result-tabs button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
 .database-result-region {

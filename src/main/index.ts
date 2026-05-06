@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DashboardBackend } from "./dashboardBackend";
 import type {
   BuildQueryOptions,
+  DatabaseConnection,
   ProjectSettingsRecord,
   ServiceAction,
   ServiceName,
@@ -34,6 +35,44 @@ function getBackend(): DashboardBackend {
 function registerIpc(): void {
   ipcMain.handle("dashboard:getSnapshot", () =>
     withLoggedErrors("dashboard:getSnapshot", () => getBackend().getSnapshot()),
+  );
+  ipcMain.handle("database:getConnections", () =>
+    withLoggedErrors("database:getConnections", () =>
+      getBackend().getDatabaseConnections(),
+    ),
+  );
+  ipcMain.handle(
+    "database:saveConnection",
+    (_event, connection: DatabaseConnection) =>
+      withLoggedErrors("database:saveConnection", () =>
+        getBackend().saveDatabaseConnection(connection),
+      ),
+  );
+  ipcMain.handle("database:deleteConnection", (_event, connectionId: string) =>
+    withLoggedErrors("database:deleteConnection", () =>
+      getBackend().deleteDatabaseConnection(connectionId),
+    ),
+  );
+  ipcMain.handle(
+    "database:testConnection",
+    (_event, connection: DatabaseConnection) =>
+      withLoggedErrors("database:testConnection", () =>
+        getBackend().testDatabaseConnection(connection),
+      ),
+  );
+  ipcMain.handle(
+    "database:getMetadata",
+    (_event, connection: DatabaseConnection) =>
+      withLoggedErrors("database:getMetadata", () =>
+        getBackend().getDatabaseMetadata(connection),
+      ),
+  );
+  ipcMain.handle(
+    "database:executeStatements",
+    (_event, connection: DatabaseConnection, statements: string[]) =>
+      withLoggedErrors("database:executeStatements", () =>
+        getBackend().executeDatabaseStatements(connection, statements),
+      ),
   );
   ipcMain.handle("dashboard:getDashboardOverview", () =>
     withLoggedErrors("dashboard:getDashboardOverview", () =>
