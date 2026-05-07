@@ -1,5 +1,2 @@
-export {
-  DatabaseConnectionModal,
-  DatabaseWorkspace,
-  DatabaseWorkspaceTabs,
-} from "./DatabaseWorkspace";
+export { DatabaseWorkspace, DatabaseWorkspaceTabs } from "./DatabaseWorkspace";
+export { DatabaseConnectionModal } from "./DatabaseConnectionModal";
