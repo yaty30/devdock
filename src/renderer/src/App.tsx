@@ -182,9 +182,7 @@ function App(): JSX.Element {
     }
     databaseSleepTimerRef.current = window.setTimeout(() => {
       databaseSleepTimerRef.current = null;
-      if (activeSection !== "database") {
-        setDatabaseRuntimeStatus("disconnected");
-      }
+      setDatabaseRuntimeStatus("disconnected");
     }, DATABASE_IDLE_DISCONNECT_MS);
   }, [activeSection, selectedDatabaseConnectionId]);
 
@@ -901,6 +899,7 @@ function App(): JSX.Element {
           ) : (
             <DashboardContent
               projects={dashboardOverview}
+              databaseConnections={databaseConnections}
               loading={dashboardOverviewLoading}
             />
           )}
@@ -1011,6 +1010,7 @@ function App(): JSX.Element {
         {activeSection === "dashboard" ? (
           <DashboardContent
             projects={dashboardOverview}
+            databaseConnections={databaseConnections}
             loading={dashboardOverviewLoading}
           />
         ) : activeSection === "database" ? (

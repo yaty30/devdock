@@ -1193,7 +1193,7 @@ body {
 
 .dashboard-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 18px;
 }
 
@@ -1334,6 +1334,12 @@ body {
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
   border-radius: 8px;
   user-select: none;
+}
+
+.dashboard-database-code {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--info) 28%, var(--border));
 }
 
 .dashboard-project-card h2,
@@ -1569,6 +1575,73 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: var(--shadow);
+}
+
+.dashboard-database-empty {
+  min-height: 128px;
+}
+
+.dashboard-database-card .dashboard-project-meta strong:first-of-type {
+  max-width: min(280px, 28vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .dashboard-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-project-card-header,
+  .dashboard-project-title-group {
+    align-items: flex-start;
+  }
+
+  .dashboard-project-card-header {
+    flex-direction: column;
+  }
+
+  .dashboard-project-status-groups {
+    justify-content: flex-start;
+  }
+
+  .dashboard-project-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px 0;
+  }
+
+  .dashboard-project-detail:nth-child(odd) {
+    padding-left: 6px;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard-overview-screen {
+    padding: 14px 16px 34px;
+  }
+
+  .dashboard-kpi-grid,
+  .dashboard-project-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-project-detail {
+    min-height: 0;
+    padding: 0 0 14px;
+    border-left: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dashboard-project-detail:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+  }
+
+  .dashboard-database-card .dashboard-project-meta strong:first-of-type {
+    max-width: 100%;
+  }
 }
 
 [data-theme="dark"] .dashboard-overview-screen {

@@ -12,6 +12,7 @@ import {
   CheckCircle2,
   CircleDot,
   Clock3,
+  Database,
   ExternalLink,
   FolderKanban,
   GitBranch,
@@ -38,6 +39,7 @@ import {
 import type { LogLine } from "../../../../shared/dashboardTypes";
 import type {
   BuildStage,
+  DatabaseConnection,
   LogChannel,
   ProjectDashboardSummary,
   ProjectRuntimeState,
@@ -690,9 +692,11 @@ function TailLogPanel({
 
 export function DashboardContent({
   projects,
+  databaseConnections,
   loading,
 }: {
   projects: ProjectDashboardSummary[];
+  databaseConnections: DatabaseConnection[];
   loading: boolean;
 }): JSX.Element {
   const hasRunningService = projects.some((summary) =>
@@ -706,6 +710,9 @@ export function DashboardContent({
     0,
   );
   const expectedServices = projects.length * 2;
+  const connectedDatabases = databaseConnections.filter(
+    (connection) => connection.status === "connected",
+  ).length;
   const lastUpdated = latestCheckedAt(projects);
 
   return (
@@ -727,6 +734,12 @@ export function DashboardContent({
           tone="service"
         />
         <OverviewKpi
+          icon={<Database size={22} />}
+          label="Databases"
+          value={`${connectedDatabases}/${databaseConnections.length}`}
+          tone="database"
+        />
+        <OverviewKpi
           icon={<Clock3 size={22} />}
           label="Last Updated"
           value={lastUpdated ? formatTime(lastUpdated) : "--"}
@@ -736,15 +749,21 @@ export function DashboardContent({
 
       <div className="dashboard-project-list">
         {projects.length > 0 ? (
-          projects.map((summary) => (
-            <ProjectStatusRow
-              key={summary.project.id}
-              summary={summary}
-              now={now}
-            />
-          ))
+          <>
+            {projects.map((summary) => (
+              <ProjectStatusRow
+                key={summary.project.id}
+                summary={summary}
+                now={now}
+              />
+            ))}
+            <DatabaseOverviewSection connections={databaseConnections} />
+          </>
         ) : (
-          <div className="dashboard-empty">No projects configured.</div>
+          <>
+            <div className="dashboard-empty">No projects configured.</div>
+            <DatabaseOverviewSection connections={databaseConnections} />
+          </>
         )}
       </div>
       {loading ? (
@@ -769,7 +788,7 @@ function OverviewKpi({
   icon: JSX.Element;
   label: string;
   value: string;
-  tone: "project" | "service" | "time";
+  tone: "project" | "service" | "database" | "time";
 }): JSX.Element {
   return (
     <article className="dashboard-kpi-card">
@@ -777,6 +796,129 @@ function OverviewKpi({
       <div>
         <span>{label}</span>
         <strong>{value}</strong>
+      </div>
+    </article>
+  );
+}
+
+function DatabaseOverviewSection({
+  connections,
+}: {
+  connections: DatabaseConnection[];
+}): JSX.Element {
+  if (connections.length === 0) {
+    return (
+      <div className="dashboard-empty dashboard-database-empty">
+        No database connections configured.
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {connections.map((connection) => (
+        <DatabaseStatusRow connection={connection} key={connection.id} />
+      ))}
+    </>
+  );
+}
+
+function DatabaseStatusRow({
+  connection,
+}: {
+  connection: DatabaseConnection;
+}): JSX.Element {
+  const status = databaseConnectionStatus(connection.status);
+  const databaseName = connection.database || connection.schema || "Not set";
+  const target = formatDatabaseTarget(connection);
+
+  return (
+    <article className="dashboard-project-card dashboard-database-card">
+      <header className="dashboard-project-card-header">
+        <div className="dashboard-project-title-group">
+          <span className="dashboard-project-code dashboard-database-code">
+            DB
+          </span>
+          <div>
+            <h2>{connection.name}</h2>
+            <div className="dashboard-project-meta">
+              <span>Connection ID</span>
+              <strong>{connection.id}</strong>
+              <i />
+              <span>Driver</span>
+              <strong>{connection.type}</strong>
+            </div>
+          </div>
+        </div>
+
+        <div className="dashboard-project-status-groups">
+          <div className="dashboard-status-group">
+            <span>
+              <span className={`dashboard-status-dot ${status.tone}`} />
+              Connection Status
+            </span>
+            {databaseStatusPill(connection.status)}
+          </div>
+          <div className="dashboard-status-group">
+            <span>Target</span>
+            <strong className="dashboard-status-value idle">{target}</strong>
+          </div>
+        </div>
+      </header>
+
+      <div className="dashboard-project-detail-grid">
+        <section className="dashboard-project-detail">
+          <header>
+            <Database size={18} />
+            <h3>Database</h3>
+            {databaseStatusPill(connection.status)}
+          </header>
+          <DashboardDetailRow label="Schema">
+            <strong>{databaseName}</strong>
+          </DashboardDetailRow>
+          <DashboardDetailRow label="User">
+            <strong>{connection.user || "Not set"}</strong>
+          </DashboardDetailRow>
+        </section>
+
+        <section className="dashboard-project-detail">
+          <header>
+            <Layers3 size={18} />
+            <h3>Server</h3>
+          </header>
+          <DashboardDetailRow label="Host">
+            <strong>{connection.host || "Not set"}</strong>
+          </DashboardDetailRow>
+          <DashboardDetailRow label="Port">
+            <strong>{connection.port || "--"}</strong>
+          </DashboardDetailRow>
+        </section>
+
+        <section className="dashboard-project-detail">
+          <header>
+            <Activity size={18} />
+            <h3>Session</h3>
+          </header>
+          <DashboardDetailRow label="Latency">
+            <strong>{connection.latency || "Not tested"}</strong>
+          </DashboardDetailRow>
+          <DashboardDetailRow label="Uptime">
+            <strong>{connection.uptime || "Not connected"}</strong>
+          </DashboardDetailRow>
+        </section>
+
+        <section className="dashboard-project-detail">
+          <header>
+            <Clock3 size={18} />
+            <h3>Security</h3>
+          </header>
+          <DashboardDetailRow label="SSL">
+            <strong>{connection.sslMode ?? "disabled"}</strong>
+          </DashboardDetailRow>
+          <DashboardDetailRow label="Password">
+            <strong>{connection.savePassword ? "Saved" : "Session only"}</strong>
+          </DashboardDetailRow>
+        </section>
       </div>
     </article>
   );
@@ -947,6 +1089,44 @@ function DashboardDetailRow({
       {children}
     </div>
   );
+}
+
+function databaseConnectionStatus(
+  status: DatabaseConnection["status"],
+): {
+  label: string;
+  tone: "success" | "warning" | "failed" | "idle";
+  pillClass: "success" | "stopped" | "failed";
+} {
+  if (status === "connected") {
+    return { label: "Connected", tone: "success", pillClass: "success" };
+  }
+  if (status === "error") {
+    return { label: "Error", tone: "failed", pillClass: "failed" };
+  }
+  return { label: "Disconnected", tone: "warning", pillClass: "stopped" };
+}
+
+function databaseStatusPill(
+  status: DatabaseConnection["status"],
+): JSX.Element {
+  const state = databaseConnectionStatus(status);
+  return <span className={`status-pill ${state.pillClass}`}>{state.label}</span>;
+}
+
+function formatDatabaseTarget(connection: DatabaseConnection): string {
+  const host = connection.host.trim();
+  const port = connection.port.trim();
+  if (!host && !port) {
+    return "Not set";
+  }
+  if (!port) {
+    return host;
+  }
+  if (!host) {
+    return port;
+  }
+  return `${host}:${port}`;
 }
 
 function projectOverallStatus(summary: ProjectDashboardSummary): {
