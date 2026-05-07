@@ -44,6 +44,7 @@ import type {
 const SPLASH_READY_FRAME_MS = 800;
 const SPLASH_FADE_OUT_MS = 1100;
 const SPLASH_LOGO_SIZE = "min(90px, 11vw)";
+const DATABASE_IDLE_DISCONNECT_MS = 2 * 60 * 1000;
 
 type SplashFrame = "open" | "close";
 type SplashPhase = "visible" | "exiting" | "hidden";
@@ -51,6 +52,14 @@ type SnackbarState = {
   message: string;
   tone: "valid" | "invalid" | "warning";
 };
+type DatabaseRuntimeStatus =
+  | "idle"
+  | "connecting"
+  | "connected"
+  | "sleeping"
+  | "disconnected"
+  | "reconnecting"
+  | "error";
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
@@ -77,6 +86,8 @@ function App(): JSX.Element {
   const [databaseLastRefreshTime, setDatabaseLastRefreshTime] = useState(() =>
     new Date().toISOString(),
   );
+  const [databaseRuntimeStatus, setDatabaseRuntimeStatus] =
+    useState<DatabaseRuntimeStatus>("idle");
   const [projectState, setProjectState] = useState<ProjectRuntimeState | null>(
     null,
   );
@@ -119,6 +130,87 @@ function App(): JSX.Element {
   const snackbarCloseTimerRef = useRef<number | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarTransitionReadyRef = useRef(false);
+  const databaseSleepTimerRef = useRef<number | null>(null);
+  const hadDatabaseConnectionRef = useRef(false);
+
+  useEffect(() => {
+    return () => {
+      if (databaseSleepTimerRef.current !== null) {
+        window.clearTimeout(databaseSleepTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const hasConnection = Boolean(selectedDatabaseConnectionId);
+    if (!hasConnection) {
+      hadDatabaseConnectionRef.current = false;
+      if (databaseSleepTimerRef.current !== null) {
+        window.clearTimeout(databaseSleepTimerRef.current);
+        databaseSleepTimerRef.current = null;
+      }
+      setDatabaseRuntimeStatus("idle");
+      return;
+    }
+
+    if (activeSection === "database") {
+      if (databaseSleepTimerRef.current !== null) {
+        window.clearTimeout(databaseSleepTimerRef.current);
+        databaseSleepTimerRef.current = null;
+      }
+      setDatabaseRuntimeStatus((current) => {
+        if (current === "connected") {
+          return current;
+        }
+        if (current === "sleeping" || current === "disconnected") {
+          return "reconnecting";
+        }
+        return hadDatabaseConnectionRef.current ? "reconnecting" : "connecting";
+      });
+      return;
+    }
+
+    setDatabaseRuntimeStatus((current) =>
+      current === "connected" ||
+      current === "connecting" ||
+      current === "reconnecting"
+        ? "sleeping"
+        : current,
+    );
+    if (databaseSleepTimerRef.current !== null) {
+      window.clearTimeout(databaseSleepTimerRef.current);
+    }
+    databaseSleepTimerRef.current = window.setTimeout(() => {
+      databaseSleepTimerRef.current = null;
+      if (activeSection !== "database") {
+        setDatabaseRuntimeStatus("disconnected");
+      }
+    }, DATABASE_IDLE_DISCONNECT_MS);
+  }, [activeSection, selectedDatabaseConnectionId]);
+
+  useEffect(() => {
+    if (
+      activeSection !== "database" ||
+      !selectedDatabaseConnectionId ||
+      (databaseRuntimeStatus !== "connecting" &&
+        databaseRuntimeStatus !== "reconnecting")
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const connectTimer = window.setTimeout(() => {
+      if (!cancelled) {
+        hadDatabaseConnectionRef.current = true;
+        setDatabaseRuntimeStatus("connected");
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(connectTimer);
+    };
+  }, [activeSection, selectedDatabaseConnectionId, databaseRuntimeStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -780,6 +872,7 @@ function App(): JSX.Element {
             {activeSection === "database" && selectedDatabaseConnection ? (
               <DatabaseHeaderActions
                 connection={selectedDatabaseConnection}
+                databaseStatus={databaseRuntimeStatus}
                 fontSizeMode={fontSizeMode}
                 onFontSizeChange={setFontSizeMode}
                 onSettingsClick={openDatabaseConnectionSettings}
@@ -792,6 +885,7 @@ function App(): JSX.Element {
               <DatabaseWorkspace
                 connection={selectedDatabaseConnection}
                 activeTab={activeDatabaseTab}
+                databaseStatus={databaseRuntimeStatus}
                 onTabChange={setActiveDatabaseTab}
                 executionHistory={selectedDatabaseExecutionHistory}
                 queryCount={selectedDatabaseExecutionHistory.length}
@@ -906,6 +1000,7 @@ function App(): JSX.Element {
           ) : activeSection === "database" && selectedDatabaseConnection ? (
             <DatabaseHeaderActions
               connection={selectedDatabaseConnection}
+              databaseStatus={databaseRuntimeStatus}
               fontSizeMode={fontSizeMode}
               onFontSizeChange={setFontSizeMode}
               onSettingsClick={openDatabaseConnectionSettings}
@@ -923,6 +1018,7 @@ function App(): JSX.Element {
             <DatabaseWorkspace
               connection={selectedDatabaseConnection}
               activeTab={activeDatabaseTab}
+              databaseStatus={databaseRuntimeStatus}
               onTabChange={setActiveDatabaseTab}
               executionHistory={selectedDatabaseExecutionHistory}
               queryCount={selectedDatabaseExecutionHistory.length}
@@ -1095,12 +1191,14 @@ function App(): JSX.Element {
 
 function DatabaseHeaderActions({
   connection,
+  databaseStatus,
   fontSizeMode,
   onFontSizeChange,
   onSettingsClick,
   disabled = false,
 }: {
   connection: DatabaseConnection;
+  databaseStatus: DatabaseRuntimeStatus;
   fontSizeMode: FontSizeMode;
   onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
@@ -1109,7 +1207,9 @@ function DatabaseHeaderActions({
   return (
     <div className="header-actions database-header-actions">
       <div className="database-header-context" aria-label="Database context">
-        <span className={`database-status-dot ${connection.status}`} />
+        <span className={`database-status-dot ${databaseStatus}`} />
+        <span>{databaseStatus}</span>
+        <span>•</span>
         <span>{connection.user}</span>
         <span>-</span>
         <strong>{connection.name}</strong>
