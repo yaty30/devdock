@@ -875,6 +875,7 @@ function ConnectionField({
 
 export function DatabaseWorkspace({
   connection,
+  databaseStatus,
   activeTab,
   onTabChange,
   executionHistory,
@@ -886,6 +887,14 @@ export function DatabaseWorkspace({
   deletedConnectionId,
 }: {
   connection: DatabaseConnection;
+  databaseStatus:
+    | "idle"
+    | "connecting"
+    | "connected"
+    | "sleeping"
+    | "disconnected"
+    | "reconnecting"
+    | "error";
   activeTab: DatabaseWorkspaceTab;
   onTabChange: (tab: DatabaseWorkspaceTab) => void;
   executionHistory: DatabaseExecutionRecord[];
@@ -907,6 +916,7 @@ export function DatabaseWorkspace({
       >
         <ConnectionActionWorkspace
           connection={connection}
+          databaseStatus={databaseStatus}
           onExecution={onExecution}
           onRefresh={onRefresh}
           onSheetSaved={onSheetSaved}
@@ -934,6 +944,7 @@ export function DatabaseWorkspace({
 
 function ConnectionActionWorkspace({
   connection,
+  databaseStatus,
   onExecution,
   onRefresh,
   onSheetSaved,
@@ -941,6 +952,14 @@ function ConnectionActionWorkspace({
   rerunRequest,
 }: {
   connection: DatabaseConnection;
+  databaseStatus:
+    | "idle"
+    | "connecting"
+    | "connected"
+    | "sleeping"
+    | "disconnected"
+    | "reconnecting"
+    | "error";
   onExecution: (record: DatabaseExecutionRecord) => void;
   onRefresh: () => void;
   onSheetSaved: () => void;
@@ -1072,6 +1091,10 @@ function ConnectionActionWorkspace({
   }, []);
 
   useEffect(() => {
+    if (databaseStatus !== "connected" && databaseStatus !== "reconnecting") {
+      return;
+    }
+
     if (metadataStateByConnection[connection.id]) {
       return;
     }
@@ -1114,7 +1137,7 @@ function ConnectionActionWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [connection]);
+  }, [connection, databaseStatus, metadataStateByConnection]);
 
   useEffect(() => {
     if (!contextMenu) {
