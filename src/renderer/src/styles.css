@@ -1178,14 +1178,15 @@ body {
 
 .dashboard-overview-screen {
   position: relative;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: var(--space-section);
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   margin-top: 4px;
   padding: 18px 32px 48px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-top: 1px solid var(--border);
   scrollbar-color: var(--accent-soft) transparent;
   scrollbar-width: thin;
@@ -6147,29 +6148,6 @@ select option {
   grid-template-rows:
     auto minmax(160px, var(--database-editor-height, 260px)) 14px
     minmax(160px, 1fr);
-}
-
-.database-query-panel.loading .database-sql-editor-shell,
-.database-query-panel.loading .database-editor-result-splitter,
-.database-query-panel.loading .database-output-panel {
-  pointer-events: none;
-  opacity: 0.58;
-}
-
-.database-workspace-loading-overlay {
-  position: absolute;
-  inset: 56px 14px 14px 14px;
-  z-index: 2;
-  display: grid;
-  place-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  background: color-mix(in srgb, var(--surface) 72%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  backdrop-filter: blur(2px);
 }
 
 .database-sheet-tree-item.active,

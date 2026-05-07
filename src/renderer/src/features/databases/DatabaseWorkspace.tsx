@@ -272,6 +272,7 @@ const DATABASE_EDITOR_MIN_HEIGHT = 160;
 const DATABASE_OUTPUT_MIN_HEIGHT = 160;
 const DATABASE_EDITOR_SPLITTER_SIZE = 14;
 const DEFAULT_CONNECTION_TIMEOUT_SECONDS = "10";
+const DATABASE_METADATA_LOAD_TIMEOUT_MS = 30_000;
 
 const DATABASE_TYPE_OPTIONS: Array<AppSelectOption<DatabaseConnectionType>> = [
   { value: "MySQL", label: "MySQL", dotColor: "#2563eb" },
@@ -1002,6 +1003,7 @@ function ConnectionActionWorkspace({
     useState<Set<string>>(() => new Set());
   const persistedWorksheetTimerRef = useRef<number | null>(null);
   const handledRerunRequestIdRef = useRef<string | null>(null);
+  const metadataLoadStartedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     setSheetStateByConnection((current) => {
@@ -1080,6 +1082,7 @@ function ConnectionActionWorkspace({
       next.delete(deletedConnectionId);
       return next;
     });
+    metadataLoadStartedRef.current.delete(deletedConnectionId);
   }, [deletedConnectionId]);
 
   useEffect(() => {
@@ -1095,11 +1098,15 @@ function ConnectionActionWorkspace({
       return;
     }
 
-    if (metadataStateByConnection[connection.id]) {
+    if (
+      metadataLoadStartedRef.current.has(connection.id) ||
+      metadataStateByConnection[connection.id]
+    ) {
       return;
     }
 
     let cancelled = false;
+    metadataLoadStartedRef.current.add(connection.id);
     setMetadataStateByConnection((current) => ({
       ...current,
       [connection.id]: createLoadingMetadataState(
@@ -1137,7 +1144,7 @@ function ConnectionActionWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [connection, databaseStatus, metadataStateByConnection]);
+  }, [connection, databaseStatus]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -1278,6 +1285,7 @@ function ConnectionActionWorkspace({
   }
 
   function refreshMetadata(): void {
+    metadataLoadStartedRef.current.add(connection.id);
     setMetadataStateByConnection((current) => ({
       ...current,
       [connection.id]: createLoadingMetadataState(
@@ -2136,7 +2144,7 @@ function ConnectionActionWorkspace({
       />
 
       <section
-        className={`panel database-query-panel${metadataLoading ? " loading" : ""}${
+        className={`panel database-query-panel${
           activeOutput.hasExecuted ? " has-output" : " no-output"
         }`}
         ref={queryPanelRef}
@@ -2205,7 +2213,7 @@ function ConnectionActionWorkspace({
               className="button primary compact"
               type="button"
               onClick={executeFromActiveEditor}
-              disabled={!activeSheet || isExecuting || metadataLoading}
+              disabled={!activeSheet || isExecuting}
             >
               {isExecuting ? (
                 <LoaderCircle className="button-spinner" size={15} />
@@ -2227,12 +2235,6 @@ function ConnectionActionWorkspace({
           }}
           completionData={completionData}
         />
-        {metadataLoading ? (
-          <div className="database-workspace-loading-overlay">
-            <LoaderCircle className="button-spinner" size={18} />
-            <span>Loading metadata...</span>
-          </div>
-        ) : null}
         {activeOutput.hasExecuted ? (
           <>
             <div
@@ -3632,8 +3634,29 @@ async function fetchDatabaseMetadata(
   connection: DatabaseConnection,
 ): Promise<DatabaseMetadata> {
   return normalizeDatabaseMetadata(
-    await window.ivsDashboard.getDatabaseMetadata(connection),
+    await withTimeout(
+      window.ivsDashboard.getDatabaseMetadata(connection),
+      DATABASE_METADATA_LOAD_TIMEOUT_MS,
+      "Database metadata loading timed out. You can still run SQL; retry Object Explorer when the database is reachable.",
+    ),
   );
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  let timeoutId: number | null = null;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  });
 }
 
 function normalizeDatabaseMetadata(
