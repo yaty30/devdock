@@ -1,10 +1,12 @@
 import {
+  Fragment,
   useEffect,
   useCallback,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type MouseEvent,
   type PointerEvent,
   type ReactNode,
 } from "react";
@@ -37,10 +39,12 @@ import { tags } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
 import {
   ArrowLeftRight,
+  BetweenHorizonalStart,
   Box,
   Braces,
   Carrot,
   ChevronDown,
+  ChevronRight,
   Columns3,
   Component,
   Cpu,
@@ -51,6 +55,7 @@ import {
   FileText,
   Ghost,
   GitBranch,
+  GitCompare,
   Key,
   Leaf,
   LoaderCircle,
@@ -58,10 +63,10 @@ import {
   Play,
   Puzzle,
   RefreshCcw,
-  Save,
   Share,
   Sigma,
   SquareFunction,
+  SquareMousePointer,
   Table2,
   Trash2,
   View,
@@ -220,6 +225,34 @@ type ResultColumnDragState = {
   startWidth: number;
 };
 
+type ResultRowContextMenu = {
+  x: number;
+  y: number;
+  rowIndex: number;
+  row: ResultRow;
+};
+
+type ResultCompareSelection = {
+  rowIndex: number;
+  row: ResultRow;
+};
+
+type ResultCompareState = {
+  base: ResultCompareSelection;
+  target: ResultCompareSelection;
+};
+
+type ExportSnackbarState = {
+  tone: "valid" | "invalid";
+  message: string;
+  path?: string;
+};
+
+type ResultSnackbarState = {
+  tone: "valid" | "invalid";
+  message: string;
+};
+
 type DatabaseCompletionData = {
   keywords: string[];
   tables: string[];
@@ -267,6 +300,8 @@ const DATABASE_QUERY_MIN_WIDTH = 600;
 const DATABASE_SPLITTER_SIZE = 16;
 const DEFAULT_EXPLORER_WIDTH = 320;
 const DEFAULT_PAGE_SIZE = 5;
+const RESULT_ROW_BATCH_SIZE = 100;
+const WORKSHEET_AUTO_SAVE_DELAY_MS = 1500;
 const DEFAULT_EDITOR_HEIGHT = 260;
 const DATABASE_EDITOR_MIN_HEIGHT = 160;
 const DATABASE_OUTPUT_MIN_HEIGHT = 160;
@@ -290,6 +325,8 @@ const ORACLE_CONNECTION_MODES: Array<AppSelectOption<OracleConnectionMode>> = [
   { value: "sid", label: "SID" },
   { value: "connectString", label: "Connection string" },
 ];
+
+const databaseSheetStateCache: Record<string, SheetConnectionState> = {};
 
 const sqlHighlightStyle = HighlightStyle.define([
   { tag: tags.keyword, color: "var(--cm-sql-keyword)", fontWeight: "800" },
@@ -974,16 +1011,21 @@ function ConnectionActionWorkspace({
   const executingRef = useRef(false);
   const dragRef = useRef<DatabaseDragState | null>(null);
   const editorDragRef = useRef<DatabaseEditorDragState | null>(null);
+  const latestSheetStateRef = useRef<SheetConnectionState | null>(null);
+  const loadedWorksheetConnectionIdsRef = useRef<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [sheetStateByConnection, setSheetStateByConnection] = useState<
     Record<string, SheetConnectionState>
-  >(() => ({
-    [connection.id]: {
-      sheets: [initialSheet],
-      activeSheetId: initialSheet.id,
-      openSheetIds: [initialSheet.id],
-    },
-  }));
+  >(() => {
+    const cachedState = databaseSheetStateCache[connection.id];
+    return {
+      [connection.id]: cachedState ?? {
+        sheets: [initialSheet],
+        activeSheetId: initialSheet.id,
+        openSheetIds: [initialSheet.id],
+      },
+    };
+  });
   const [contextMenu, setContextMenu] = useState<SheetContextMenu | null>(null);
   const [deleteRequest, setDeleteRequest] = useState<SheetDeleteRequest | null>(
     null,
@@ -999,6 +1041,12 @@ function ConnectionActionWorkspace({
   const [metadataStateByConnection, setMetadataStateByConnection] = useState<
     Record<string, DatabaseMetadataState>
   >({});
+  const [selectedSchemaByConnection, setSelectedSchemaByConnection] = useState<
+    Record<string, string>
+  >(() => ({
+    [connection.id]: connection.database || connection.schema || "",
+  }));
+  const [autoSaveError, setAutoSaveError] = useState<string | null>(null);
   const [loadedWorksheetConnectionIds, setLoadedWorksheetConnectionIds] =
     useState<Set<string>>(() => new Set());
   const persistedWorksheetTimerRef = useRef<number | null>(null);
@@ -1011,6 +1059,14 @@ function ConnectionActionWorkspace({
         return current;
       }
 
+      const cachedState = databaseSheetStateCache[connection.id];
+      if (cachedState?.sheets.length) {
+        return {
+          ...current,
+          [connection.id]: cachedState,
+        };
+      }
+
       const sheet = createQuerySheet("Untitled-1", "");
       return {
         ...current,
@@ -1021,10 +1077,25 @@ function ConnectionActionWorkspace({
         },
       };
     });
+    setSelectedSchemaByConnection((current) =>
+      current[connection.id] !== undefined
+        ? current
+        : {
+            ...current,
+            [connection.id]: connection.database || connection.schema || "",
+          },
+    );
   }, [connection.id]);
 
   useEffect(() => {
     if (loadedWorksheetConnectionIds.has(connection.id)) {
+      return undefined;
+    }
+
+    if (databaseSheetStateCache[connection.id]?.sheets.length) {
+      setLoadedWorksheetConnectionIds((current) =>
+        new Set(current).add(connection.id),
+      );
       return undefined;
     }
 
@@ -1082,31 +1153,66 @@ function ConnectionActionWorkspace({
       next.delete(deletedConnectionId);
       return next;
     });
-    metadataLoadStartedRef.current.delete(deletedConnectionId);
+    delete databaseSheetStateCache[deletedConnectionId];
+    setSelectedSchemaByConnection((current) => {
+      const next = { ...current };
+      delete next[deletedConnectionId];
+      return next;
+    });
+    for (const key of metadataLoadStartedRef.current) {
+      if (key.startsWith(`${deletedConnectionId}:`)) {
+        metadataLoadStartedRef.current.delete(key);
+      }
+    }
   }, [deletedConnectionId]);
 
   useEffect(() => {
     return () => {
       if (persistedWorksheetTimerRef.current !== null) {
         window.clearTimeout(persistedWorksheetTimerRef.current);
+        persistedWorksheetTimerRef.current = null;
+      }
+
+      const latestState = latestSheetStateRef.current;
+      if (
+        latestState &&
+        loadedWorksheetConnectionIdsRef.current.has(connection.id) &&
+        worksheetStateNeedsPersist(latestState)
+      ) {
+        databaseSheetStateCache[connection.id] = latestState;
+        void persistSavedWorksheetState(connection.id, latestState).catch(
+          (error) => console.error(error),
+        );
       }
     };
-  }, []);
+  }, [connection.id]);
+
+  const selectedSchema =
+    selectedSchemaByConnection[connection.id] ??
+    connection.database ??
+    connection.schema ??
+    "";
+  const effectiveConnection = useMemo(
+    () => ({
+      ...connection,
+      schema: selectedSchema || connection.schema,
+      database: selectedSchema || connection.database,
+    }),
+    [connection, selectedSchema],
+  );
 
   useEffect(() => {
     if (databaseStatus !== "connected" && databaseStatus !== "reconnecting") {
       return;
     }
 
-    if (
-      metadataLoadStartedRef.current.has(connection.id) ||
-      metadataStateByConnection[connection.id]
-    ) {
+    const metadataLoadKey = `${connection.id}:${selectedSchema}`;
+    if (metadataLoadStartedRef.current.has(metadataLoadKey)) {
       return;
     }
 
     let cancelled = false;
-    metadataLoadStartedRef.current.add(connection.id);
+    metadataLoadStartedRef.current.add(metadataLoadKey);
     setMetadataStateByConnection((current) => ({
       ...current,
       [connection.id]: createLoadingMetadataState(
@@ -1114,7 +1220,7 @@ function ConnectionActionWorkspace({
       ),
     }));
 
-    void fetchDatabaseMetadata(connection)
+    void fetchDatabaseMetadata(effectiveConnection)
       .then((metadataResult) => {
         if (cancelled) {
           return;
@@ -1144,7 +1250,7 @@ function ConnectionActionWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [connection, databaseStatus]);
+  }, [connection.id, databaseStatus, effectiveConnection, selectedSchema]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -1212,11 +1318,43 @@ function ConnectionActionWorkspace({
     () => createDatabaseCompletionData(metadata.tables),
     [metadata.tables],
   );
+  const schemaOptions = useMemo<Array<AppSelectOption<string>>>(() => {
+    const options: Array<AppSelectOption<string>> = [
+      { value: "", label: "Default schema" },
+    ];
+    if (selectedSchema && !metadata.schemas.includes(selectedSchema)) {
+      options.push({ value: selectedSchema, label: selectedSchema });
+    }
+    metadata.schemas.forEach((schema) => {
+      options.push({ value: schema, label: schema });
+    });
+    return options;
+  }, [metadata.schemas, selectedSchema]);
 
   const gridStyle = {
     "--database-explorer-width": `${explorerWidth}px`,
     "--database-editor-height": `${editorHeight}px`,
   } as CSSProperties;
+
+  useEffect(() => {
+    latestSheetStateRef.current = sheetState;
+    if (sheetState.sheets.length > 0) {
+      databaseSheetStateCache[connection.id] = sheetState;
+    }
+  }, [connection.id, sheetState]);
+
+  useEffect(() => {
+    loadedWorksheetConnectionIdsRef.current = loadedWorksheetConnectionIds;
+  }, [loadedWorksheetConnectionIds]);
+
+  useEffect(() => {
+    if (!autoSaveError) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setAutoSaveError(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [autoSaveError]);
 
   useEffect(() => {
     if (!loadedWorksheetConnectionIds.has(connection.id)) {
@@ -1227,12 +1365,44 @@ function ConnectionActionWorkspace({
       window.clearTimeout(persistedWorksheetTimerRef.current);
     }
 
+    if (!worksheetStateNeedsPersist(sheetState)) {
+      return undefined;
+    }
+
     persistedWorksheetTimerRef.current = window.setTimeout(() => {
       persistedWorksheetTimerRef.current = null;
-      void persistSavedWorksheetState(connection.id, sheetState).catch(
-        (error) => console.error(error),
-      );
-    }, 250);
+      const snapshot = sheetState;
+      const savedAt = new Date().toISOString();
+
+      void persistSavedWorksheetState(connection.id, snapshot)
+        .then(() => {
+          setSheetStateByConnection((current) => {
+            const state = current[connection.id];
+            if (!state) {
+              return current;
+            }
+            const nextState = markWorksheetStateSnapshotSaved(
+              state,
+              snapshot,
+              savedAt,
+            );
+            databaseSheetStateCache[connection.id] = nextState;
+            return {
+              ...current,
+              [connection.id]: nextState,
+            };
+          });
+          setAutoSaveError(null);
+        })
+        .catch((error) => {
+          console.error(error);
+          setAutoSaveError(
+            error instanceof Error
+              ? error.message
+              : "SQL sheet auto-save failed.",
+          );
+        });
+    }, WORKSHEET_AUTO_SAVE_DELAY_MS);
 
     return () => {
       if (persistedWorksheetTimerRef.current !== null) {
@@ -1285,7 +1455,8 @@ function ConnectionActionWorkspace({
   }
 
   function refreshMetadata(): void {
-    metadataLoadStartedRef.current.add(connection.id);
+    const metadataLoadKey = `${connection.id}:${selectedSchema}`;
+    metadataLoadStartedRef.current.add(metadataLoadKey);
     setMetadataStateByConnection((current) => ({
       ...current,
       [connection.id]: createLoadingMetadataState(
@@ -1293,7 +1464,7 @@ function ConnectionActionWorkspace({
       ),
     }));
 
-    void fetchDatabaseMetadata(connection)
+    void fetchDatabaseMetadata(effectiveConnection)
       .then((metadataResult) => {
         setMetadataStateByConnection((current) => ({
           ...current,
@@ -1314,6 +1485,21 @@ function ConnectionActionWorkspace({
           },
         }));
       });
+  }
+
+  function changeSchema(schema: string): void {
+    setSelectedSchemaByConnection((current) => ({
+      ...current,
+      [connection.id]: schema,
+    }));
+    setFilter("");
+    setMetadataStateByConnection((current) => ({
+      ...current,
+      [connection.id]: createLoadingMetadataState(
+        current[connection.id]?.metadata,
+      ),
+    }));
+    metadataLoadStartedRef.current.delete(`${connection.id}:${schema}`);
   }
 
   function createNewSheet(): void {
@@ -1488,33 +1674,36 @@ function ConnectionActionWorkspace({
     }
 
     const savedAt = new Date().toISOString();
-    const nextState: SheetConnectionState = {
-      ...sheetState,
-      sheets: sheetState.sheets.map((sheet) =>
-        sheet.id === activeSheet.id
-          ? {
-              ...sheet,
-              savedName: sheet.name,
-              savedSql: sheet.sql,
-              savedAt,
-              output: prependSheetMessage(
-                sheet.output,
-                "success",
-                `${sheet.name} saved.`,
-              ),
-            }
-          : sheet,
-      ),
-    };
+    const snapshot = sheetState;
 
-    setSheetStateByConnection((current) => ({
-      ...current,
-      [connection.id]: nextState,
-    }));
-    void persistSavedWorksheetState(connection.id, nextState)
-      .then(() => onSheetSaved())
+    void persistSavedWorksheetState(connection.id, snapshot)
+      .then(() => {
+        setSheetStateByConnection((current) => {
+          const state = current[connection.id];
+          if (!state) {
+            return current;
+          }
+          const nextState = markWorksheetStateSnapshotSaved(
+            state,
+            snapshot,
+            savedAt,
+          );
+          databaseSheetStateCache[connection.id] = nextState;
+          return {
+            ...current,
+            [connection.id]: nextState,
+          };
+        });
+        setAutoSaveError(null);
+        onSheetSaved();
+      })
       .catch((error) => {
         console.error(error);
+        setAutoSaveError(
+          error instanceof Error
+            ? error.message
+            : "SQL sheet auto-save failed.",
+        );
         addMessage(
           "error",
           error instanceof Error ? error.message : "Sheet could not be saved.",
@@ -1575,14 +1764,16 @@ function ConnectionActionWorkspace({
       }
 
       const batch = await window.ivsDashboard.executeDatabaseStatements(
-        connection,
+        effectiveConnection,
         statements,
       );
       const now = new Date().toISOString();
       const resultTabs = createResultTabs(batch.results);
       const activeResultTabId = selectInitialResultTabId(resultTabs);
       const messages = createBatchMessages(batch.results, now, source);
-      const activeOutputTab = resultTabs.some((tab) => tab.rows.length > 0)
+      const activeOutputTab = resultTabs.some(
+        (tab) => tab.meta.status === "success" && tab.columns.length > 0,
+      )
         ? "results"
         : "messages";
 
@@ -1606,7 +1797,7 @@ function ConnectionActionWorkspace({
           time: result.executedAt ?? now,
           connectionId: connection.id,
           connection: connection.name,
-          user: connection.user,
+          user: effectiveConnection.user,
           query: result.statement || "(empty query)",
           duration: formatDurationMs(result.durationMs),
           status: result.status,
@@ -1616,6 +1807,8 @@ function ConnectionActionWorkspace({
               : (result.rowsAffected ?? 0),
           rowsAffected: result.rowsAffected,
           errorMessage: result.errorMessage,
+          message:
+            result.executionMessage ?? createExecutionHistoryMessage(result),
         });
       });
 
@@ -1651,7 +1844,7 @@ function ConnectionActionWorkspace({
       view.dispatch({ effects: setExecutedSqlRange.of(target) });
       void runDatabaseQuery(target, activeSheet.id, "execute");
     },
-    [activeSheet, connection, metadataLoading],
+    [activeSheet, effectiveConnection, metadataLoading],
   );
 
   function executeFromActiveEditor(): void {
@@ -1807,6 +2000,39 @@ function ConnectionActionWorkspace({
     setContextMenu(null);
   }
 
+  function appendTableSelectTemplate(table: DatabaseTable): void {
+    const template = createSelectTemplate(table);
+    const view = editorViewRef.current;
+
+    if (!activeSheet) {
+      const sheet = createQuerySheet(
+        nextUntitledName(sheetState.sheets),
+        template,
+      );
+      updateCurrentConnectionState((state) => ({
+        sheets: [...state.sheets, sheet],
+        activeSheetId: sheet.id,
+        openSheetIds: [...state.openSheetIds, sheet.id],
+      }));
+      setContextMenu(null);
+      return;
+    }
+
+    const nextSql = appendSqlStatement(activeSheet.sql, template);
+    if (view) {
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: nextSql,
+        },
+      });
+    } else {
+      updateActiveSheetSql(nextSql);
+    }
+    setContextMenu(null);
+  }
+
   const startResize = (event: PointerEvent<HTMLDivElement>): void => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -1936,6 +2162,20 @@ function ConnectionActionWorkspace({
           <StatusPill status={connection.status} />
         </div>
 
+        <label className="database-schema-selector">
+          <span>Schema</span>
+          <AppSelect
+            className="database-schema-select"
+            value={selectedSchema}
+            options={schemaOptions}
+            disabled={metadataLoading && metadata.schemas.length === 0}
+            onChange={changeSchema}
+            ariaLabel="Schema"
+            minDropdownWidth={180}
+            showDots={false}
+          />
+        </label>
+
         {/* <label className="database-search-field">
           <Search size={14} />
           <input
@@ -1966,7 +2206,7 @@ function ConnectionActionWorkspace({
               </button>
             </div>
           ) : null}
-          <ObjectTreeGroup
+          {/* <ObjectTreeGroup
             title={
               <>
                 <span>Schemas</span>
@@ -1979,15 +2219,22 @@ function ConnectionActionWorkspace({
           >
             {metadata.schemas.length > 0 ? (
               metadata.schemas.map((schema) => (
-                <div className="database-tree-item schema-item" key={schema}>
+                <button
+                  className={`database-tree-item schema-item${
+                    schema === selectedSchema ? " active" : ""
+                  }`}
+                  type="button"
+                  key={schema}
+                  onClick={() => changeSchema(schema)}
+                >
                   <Database size={15} />
                   <span>{schema}</span>
-                </div>
+                </button>
               ))
             ) : (
               <div className="database-tree-empty">No schemas loaded.</div>
             )}
-          </ObjectTreeGroup>
+          </ObjectTreeGroup> */}
           <ObjectTreeGroup
             title={
               <>
@@ -2200,16 +2447,6 @@ function ConnectionActionWorkspace({
           </div>
           <div className="execute-button-container">
             <button
-              className="icon-button secondary"
-              type="button"
-              aria-label="Save sheet"
-              title="Save sheet"
-              onClick={saveActiveSheet}
-              disabled={!activeSheet}
-            >
-              <Save size={16} />
-            </button>
-            <button
               className="button primary compact"
               type="button"
               onClick={executeFromActiveEditor}
@@ -2317,6 +2554,7 @@ function ConnectionActionWorkspace({
                 <ResultTabsPanel
                   tabs={activeOutput.resultTabs}
                   activeTabId={activeOutput.activeResultTabId}
+                  metadataTables={metadata.tables}
                   onTabChange={(activeResultTabId) =>
                     updateActiveSheetOutput((output) => ({
                       ...output,
@@ -2344,6 +2582,7 @@ function ConnectionActionWorkspace({
           onNewSheet={createNewSheet}
           onRename={startRename}
           onDelete={requestDeleteSheet}
+          onSelectTable={appendTableSelectTemplate}
           onInsertTableTemplate={insertTableTemplate}
         />
       ) : null}
@@ -2368,6 +2607,11 @@ function ConnectionActionWorkspace({
           onClose={() => setCloseRequest(null)}
           onConfirm={() => closeSheetTabConfirmed(closeRequest.sheetId, true)}
         />
+      ) : null}
+      {autoSaveError ? (
+        <div className="app-snackbar database-autosave-snackbar invalid">
+          {autoSaveError}
+        </div>
       ) : null}
     </div>
   );
@@ -2593,7 +2837,9 @@ function ColumnTreeItem({ column }: { column: DatabaseColumn }): JSX.Element {
 
         <span>{column.name}</span>
         {hasMetadata && (
-          <strong>{column.metadata.find((m) => m.label === "Type")?.value}</strong>
+          <strong>
+            {column.metadata.find((m) => m.label === "Type")?.value}
+          </strong>
         )}
       </button>
       {open && hasMetadata ? (
@@ -2619,12 +2865,14 @@ function SheetContextMenuView({
   onNewSheet,
   onRename,
   onDelete,
+  onSelectTable,
   onInsertTableTemplate,
 }: {
   menu: SheetContextMenu;
   onNewSheet: () => void;
   onRename: (sheetId: string) => void;
   onDelete: (sheetId: string) => void;
+  onSelectTable: (table: DatabaseTable) => void;
   onInsertTableTemplate: (table: DatabaseTable) => void;
 }): JSX.Element {
   return (
@@ -2639,13 +2887,24 @@ function SheetContextMenuView({
           New sheet
         </button>
       ) : menu.kind === "table" ? (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => onInsertTableTemplate(menu.table)}
-        >
-          INSERT INTO {formatQualifiedObjectName(menu.table)}
-        </button>
+        <>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => onSelectTable(menu.table)}
+          >
+            <SquareMousePointer size={13} /> SELECT{" "}
+            {formatQualifiedObjectName(menu.table)}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => onInsertTableTemplate(menu.table)}
+          >
+            <BetweenHorizonalStart size={13} />
+            INSERT INTO {formatQualifiedObjectName(menu.table)}
+          </button>
+        </>
       ) : (
         <>
           <button
@@ -2761,11 +3020,13 @@ function SqlEditor({
 function ResultTabsPanel({
   tabs,
   activeTabId,
+  metadataTables,
   onTabChange,
   onColumnWidthsChange,
 }: {
   tabs: ResultTab[];
   activeTabId: string | null;
+  metadataTables: DatabaseTable[];
   onTabChange: (tabId: string) => void;
   onColumnWidthsChange: (
     columnWidths: Partial<Record<ResultColumnKey, number>>,
@@ -2807,6 +3068,7 @@ function ResultTabsPanel({
         rows={activeTab.rows}
         columns={activeTab.columns}
         meta={activeTab.meta}
+        metadataTables={metadataTables}
         columnWidths={activeTab.columnWidths}
         onColumnWidthsChange={onColumnWidthsChange}
       />
@@ -2824,12 +3086,22 @@ function ResultExportMenu({
   sheet: QuerySheet | null;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const [snackbar, setSnackbar] = useState<ExportSnackbarState | null>(null);
   const disabled =
     !resultTab ||
     resultTab.rows.length === 0 ||
     resultTab.meta.status === "error";
 
-  function exportResult(format: ExportFormat): void {
+  useEffect(() => {
+    if (!snackbar) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setSnackbar(null), 3600);
+    return () => window.clearTimeout(timer);
+  }, [snackbar]);
+
+  async function exportResult(format: ExportFormat): Promise<void> {
     if (!resultTab || disabled) {
       return;
     }
@@ -2839,89 +3111,121 @@ function ResultExportMenu({
       `${connection.name}-${sheet?.name ?? "worksheet"}-${resultTab.name}`,
     );
 
-    if (format === "json") {
-      downloadBlob(
-        `${baseName}.json`,
-        "application/json",
-        JSON.stringify(resultTab.rows, null, 2),
+    try {
+      const exportPayload =
+        format === "json"
+          ? {
+              fileName: `${baseName}.json`,
+              content: JSON.stringify(resultTab.rows, null, 2),
+            }
+          : format === "csv"
+            ? {
+                fileName: `${baseName}.csv`,
+                content: createCsv(resultTab),
+              }
+            : {
+                fileName: `${baseName}.pdf`,
+                content: createResultPdf(
+                  resultTab,
+                  connection,
+                  sheet?.name ?? "Worksheet",
+                  exportedAt,
+                ),
+              };
+      const exportResult = await window.ivsDashboard.exportDatabaseResult(
+        exportPayload.fileName,
+        toBase64(exportPayload.content),
       );
-      return;
+      if (!exportResult.success) {
+        setOpen(false);
+        return;
+      }
+      setOpen(false);
+      setSnackbar({
+        message: "Exported",
+        tone: "valid",
+        path: exportResult.path,
+      });
+    } catch (error) {
+      console.error(error);
+      setOpen(false);
+      setSnackbar({
+        message: error instanceof Error ? error.message : "Export failed",
+        tone: "invalid",
+      });
     }
-
-    if (format === "csv") {
-      downloadBlob(
-        `${baseName}.csv`,
-        "text/csv;charset=utf-8",
-        createCsv(resultTab),
-      );
-      return;
-    }
-
-    downloadBlob(
-      `${baseName}.pdf`,
-      "application/pdf",
-      createResultPdf(
-        resultTab,
-        connection,
-        sheet?.name ?? "Worksheet",
-        exportedAt,
-      ),
-    );
   }
 
   return (
-    <div
-      className="build-dropdown database-export-dropdown"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
-      <button
-        className={`icon-button secondary database-output-share${open ? " open" : ""}`}
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-label="Export results"
-        title="Export results"
-        disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <Share size={15} />
-      </button>
+    <>
       <div
-        className={`build-dropdown-popover${open && !disabled ? " open" : ""}`}
-        aria-hidden={!open || disabled}
+        className="build-dropdown database-export-dropdown"
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
       >
-        <div className="build-dropdown-menu" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            disabled={disabled}
-            onClick={() => exportResult("json")}
-          >
-            <Braces size={14} />
-            <span>JSON</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={disabled}
-            onClick={() => exportResult("csv")}
-          >
-            <FileText size={14} />
-            <span>CSV</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={disabled}
-            onClick={() => exportResult("pdf")}
-          >
-            <File size={14} />
-            <span>PDF</span>
-          </button>
+        <button
+          className={`icon-button secondary database-output-share${open ? " open" : ""}`}
+          type="button"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-label="Export results"
+          title="Export results"
+          disabled={disabled}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <Share size={15} />
+        </button>
+        <div
+          className={`build-dropdown-popover${open && !disabled ? " open" : ""}`}
+          aria-hidden={!open || disabled}
+        >
+          <div className="build-dropdown-menu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              disabled={disabled}
+              onClick={() => void exportResult("json")}
+            >
+              <Braces size={14} />
+              <span>JSON</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={disabled}
+              onClick={() => void exportResult("csv")}
+            >
+              <FileText size={14} />
+              <span>CSV</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={disabled}
+              onClick={() => void exportResult("pdf")}
+            >
+              <File size={14} />
+              <span>PDF</span>
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      {snackbar ? (
+        <div
+          className={`app-snackbar database-export-snackbar ${snackbar.tone}`}
+        >
+          <span>{snackbar.message}</span>
+          {snackbar.path ? (
+            <button
+              type="button"
+              onClick={() => void window.ivsDashboard.openPath(snackbar.path!)}
+            >
+              Open
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -2929,12 +3233,14 @@ function ResultGrid({
   rows,
   columns,
   meta,
+  metadataTables,
   columnWidths,
   onColumnWidthsChange,
 }: {
   rows: ResultRow[];
   columns: ResultColumn[];
   meta: ResultMeta;
+  metadataTables: DatabaseTable[];
   columnWidths: Partial<Record<ResultColumnKey, number>>;
   onColumnWidthsChange: (
     columnWidths: Partial<Record<ResultColumnKey, number>>,
@@ -2943,7 +3249,21 @@ function ResultGrid({
   const resultScrollRef = useRef<HTMLDivElement>(null);
   const columnDragRef = useRef<ResultColumnDragState | null>(null);
   const [panelWidth, setPanelWidth] = useState(0);
+  const [visibleRowCount, setVisibleRowCount] = useState(RESULT_ROW_BATCH_SIZE);
+  const [loadingMoreRows, setLoadingMoreRows] = useState(false);
+  const [expandedRowIndex, setExpandedRowIndex] = useState<number | null>(null);
+  const [rowContextMenu, setRowContextMenu] =
+    useState<ResultRowContextMenu | null>(null);
+  const [compareBase, setCompareBase] = useState<ResultCompareSelection | null>(
+    null,
+  );
+  const [compareState, setCompareState] = useState<ResultCompareState | null>(
+    null,
+  );
+  const [snackbar, setSnackbar] = useState<ResultSnackbarState | null>(null);
   const hasColumns = columns.length > 0;
+  const visibleRows = rows.slice(0, visibleRowCount);
+  const hasMoreRows = visibleRowCount < rows.length;
   const displayColumns = useMemo(
     () =>
       hasColumns && rows.length > 0
@@ -2980,6 +3300,50 @@ function ResultGrid({
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    setVisibleRowCount(RESULT_ROW_BATCH_SIZE);
+    setExpandedRowIndex(null);
+    setRowContextMenu(null);
+    setCompareBase(null);
+    setCompareState(null);
+    setSnackbar(null);
+    if (resultScrollRef.current) {
+      resultScrollRef.current.scrollTop = 0;
+    }
+  }, [rows, columns]);
+
+  useEffect(() => {
+    if (!snackbar) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setSnackbar(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [snackbar]);
+
+  useEffect(() => {
+    if (!rowContextMenu) {
+      return undefined;
+    }
+
+    function closeContextMenu(): void {
+      setRowContextMenu(null);
+    }
+
+    function closeOnEscape(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setRowContextMenu(null);
+      }
+    }
+
+    window.addEventListener("pointerdown", closeContextMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeContextMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [rowContextMenu]);
 
   const startColumnResize = (
     column: ResultColumn,
@@ -3033,9 +3397,115 @@ function ResultGrid({
     onColumnWidthsChange(next);
   };
 
+  function loadMoreRows(): void {
+    if (loadingMoreRows || !hasMoreRows) {
+      return;
+    }
+
+    setLoadingMoreRows(true);
+    window.setTimeout(() => {
+      setVisibleRowCount((current) =>
+        Math.min(rows.length, current + RESULT_ROW_BATCH_SIZE),
+      );
+      setLoadingMoreRows(false);
+    }, 80);
+  }
+
+  function handleResultScroll(): void {
+    const element = resultScrollRef.current;
+    if (!element || loadingMoreRows || !hasMoreRows) {
+      return;
+    }
+
+    const distanceToBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceToBottom < 180) {
+      loadMoreRows();
+    }
+  }
+
+  function toggleRowExpanded(rowIndex: number): void {
+    setExpandedRowIndex((current) => (current === rowIndex ? null : rowIndex));
+  }
+
+  function openRowContextMenu(
+    event: MouseEvent<HTMLTableRowElement>,
+    row: ResultRow,
+    rowIndex: number,
+  ): void {
+    event.preventDefault();
+    setRowContextMenu({
+      x: event.clientX,
+      y: event.clientY,
+      row,
+      rowIndex,
+    });
+  }
+
+  function copyContextRowAsJson(): void {
+    if (!rowContextMenu) {
+      return;
+    }
+
+    try {
+      const writeText = navigator.clipboard?.writeText;
+      if (!writeText) {
+        throw new Error("Clipboard is not available.");
+      }
+
+      void writeText
+        .call(navigator.clipboard, JSON.stringify(rowContextMenu.row, null, 2))
+        .then(() => setSnackbar({ tone: "valid", message: "Copied JSON" }))
+        .catch((error) => {
+          console.error(error);
+          setSnackbar({
+            tone: "invalid",
+            message:
+              error instanceof Error ? error.message : "Copy JSON failed",
+          });
+        });
+    } catch (error) {
+      console.error(error);
+      setSnackbar({
+        tone: "invalid",
+        message: error instanceof Error ? error.message : "Copy JSON failed",
+      });
+    }
+    setRowContextMenu(null);
+  }
+
+  function selectContextRowForCompare(): void {
+    if (!rowContextMenu) {
+      return;
+    }
+
+    const selected = {
+      rowIndex: rowContextMenu.rowIndex,
+      row: rowContextMenu.row,
+    };
+    if (!compareBase) {
+      setCompareBase(selected);
+      setRowContextMenu(null);
+      return;
+    }
+
+    if (compareBase.rowIndex === selected.rowIndex) {
+      setRowContextMenu(null);
+      return;
+    }
+
+    setCompareState({ base: compareBase, target: selected });
+    setCompareBase(null);
+    setRowContextMenu(null);
+  }
+
   return (
     <div className="database-result-region">
-      <div className="database-result-scroll" ref={resultScrollRef}>
+      <div
+        className="database-result-scroll"
+        ref={resultScrollRef}
+        onScroll={handleResultScroll}
+      >
         {hasColumns ? (
           <table
             className="recent-builds-table database-result-table"
@@ -3075,24 +3545,145 @@ function ResultGrid({
               </tr>
             </thead>
             <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {displayColumns.map((column) => (
-                    <td key={`${rowIndex}-${column.key}`}>
-                      {column.key === SEQ_RESULT_COLUMN_KEY
-                        ? rowIndex + 1
-                        : renderResultValue(row[column.key])}
-                    </td>
-                  ))}
+              {rows.length === 0 ? (
+                <tr className="database-result-empty-row">
+                  <td colSpan={displayColumns.length}>No records found</td>
                 </tr>
-              ))}
+              ) : null}
+              {visibleRows.map((row, rowIndex) => {
+                const expanded = expandedRowIndex === rowIndex;
+                return (
+                  <Fragment key={`result-row-${rowIndex}`}>
+                    <tr
+                      className={`database-result-row${
+                        compareBase?.rowIndex === rowIndex
+                          ? " compare-base"
+                          : ""
+                      }`}
+                      key={`row-${rowIndex}`}
+                      onClick={() => toggleRowExpanded(rowIndex)}
+                      onContextMenu={(event) =>
+                        openRowContextMenu(event, row, rowIndex)
+                      }
+                    >
+                      {displayColumns.map((column) => (
+                        <td key={`${rowIndex}-${column.key}`}>
+                          {column.key === SEQ_RESULT_COLUMN_KEY ? (
+                            <span className="database-result-seq-cell">
+                              <button
+                                className="database-row-expand-button"
+                                type="button"
+                                aria-label={
+                                  expanded
+                                    ? `Collapse row ${rowIndex + 1}`
+                                    : `Expand row ${rowIndex + 1}`
+                                }
+                                title={
+                                  expanded
+                                    ? `Collapse row ${rowIndex + 1}`
+                                    : `Expand row ${rowIndex + 1}`
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleRowExpanded(rowIndex);
+                                }}
+                              >
+                                {expanded ? (
+                                  <ChevronDown size={13} />
+                                ) : (
+                                  <ChevronRight size={13} />
+                                )}
+                              </button>
+                              <span>{rowIndex + 1}</span>
+                            </span>
+                          ) : (
+                            renderResultValue(row[column.key])
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                    {expanded ? (
+                      <tr
+                        className={`database-result-detail-row ${expanded ? "expanded" : ""}`}
+                        key={`detail-${rowIndex}`}
+                      >
+                        <td colSpan={displayColumns.length}>
+                          <ResultRowDetails
+                            row={row}
+                            columns={columns}
+                            metadataTables={metadataTables}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         ) : null}
-        {rows.length === 0 ? (
-          <p className="database-empty-state">No result rows.</p>
+        {loadingMoreRows ? (
+          <div className="database-result-loading-more">
+            <LoaderCircle className="button-spinner" size={15} />
+            <span>Loading more rows...</span>
+          </div>
+        ) : null}
+        {!hasColumns && rows.length === 0 ? (
+          <p className="database-empty-state">No records found.</p>
         ) : null}
       </div>
+      {rowContextMenu ? (
+        <div
+          className="database-context-menu database-result-context-menu"
+          style={{ left: rowContextMenu.x, top: rowContextMenu.y }}
+          role="menu"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          <button type="button" role="menuitem" onClick={copyContextRowAsJson}>
+            <Braces size={14} />
+            Copy record in JSON
+          </button>
+          {compareBase?.rowIndex === rowContextMenu.rowIndex ? null : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={selectContextRowForCompare}
+            >
+              <GitCompare size={16} />
+              {compareBase
+                ? `Select to compare with row ${compareBase.rowIndex + 1}`
+                : "Select to compare"}
+            </button>
+          )}
+        </div>
+      ) : null}
+      {snackbar ? (
+        <div
+          className={`app-snackbar database-result-snackbar ${snackbar.tone}`}
+        >
+          {snackbar.message}
+        </div>
+      ) : null}
+      <Modal
+        open={compareState !== null}
+        title="Compare Rows"
+        subtitle={
+          compareState
+            ? `Row ${compareState.base.rowIndex + 1} vs Row ${
+                compareState.target.rowIndex + 1
+              }`
+            : undefined
+        }
+        size="xl"
+        className="database-row-compare-modal"
+        contentClassName="database-row-compare-modal-content"
+        closeLabel="Close row comparison"
+        onClose={() => setCompareState(null)}
+      >
+        {compareState ? (
+          <ResultRowComparison compare={compareState} columns={columns} />
+        ) : null}
+      </Modal>
       <div
         className={`database-result-footer${meta.status === "error" ? " error" : ""}`}
       >
@@ -3105,6 +3696,111 @@ function ResultGrid({
         </span>
         <time>{meta.hasRun ? formatCompactTime(meta.queriedAt) : ""}</time>
       </div>
+    </div>
+  );
+}
+
+function ResultRowDetails({
+  row,
+  columns,
+  metadataTables,
+}: {
+  row: ResultRow;
+  columns: ResultColumn[];
+  metadataTables: DatabaseTable[];
+}): JSX.Element {
+  return (
+    <div
+      className="database-result-row-details"
+      onClick={(event) => event.stopPropagation()}
+    >
+      <table className="database-result-row-details-table">
+        <colgroup>
+          <col className="database-detail-column-col" />
+          <col className="database-detail-value-col" />
+          <col className="database-detail-meta-col" />
+          <col className="database-detail-meta-col" />
+          <col className="database-detail-meta-col" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>Value</th>
+            <th>Type</th>
+            <th>Nullable</th>
+            <th>Key</th>
+          </tr>
+        </thead>
+        <tbody>
+          {columns.map((column) => {
+            const metadata = resolveResultColumnMetadata(
+              column,
+              metadataTables,
+            );
+            return (
+              <tr key={column.key}>
+                <td title={column.label}>{column.label}</td>
+                <td title={formatPlainResultValue(row[column.key])}>
+                  {renderResultValue(row[column.key])}
+                </td>
+                <td title={metadata.type}>{metadata.type}</td>
+                <td title={metadata.nullability}>{metadata.nullability}</td>
+                <td title={metadata.keyInfo}>{metadata.keyInfo}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ResultRowComparison({
+  compare,
+  columns,
+}: {
+  compare: ResultCompareState;
+  columns: ResultColumn[];
+}): JSX.Element {
+  const baseLabel = `Row ${compare.base.rowIndex + 1}`;
+  const targetLabel = `Row ${compare.target.rowIndex + 1}`;
+
+  return (
+    <div className="database-row-comparison">
+      <table className="database-row-comparison-table">
+        <colgroup>
+          <col className="database-row-comparison-column-col" />
+          <col />
+          <col />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>{baseLabel}</th>
+            <th>{targetLabel}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {columns.map((column) => (
+            <tr key={column.key}>
+              <td
+                title={column.label}
+                className="database-row-comparison-column"
+              >
+                {column.label}
+              </td>
+              <td title={formatPlainResultValue(compare.base.row[column.key])}>
+                {renderResultValue(compare.base.row[column.key])}
+              </td>
+              <td
+                title={formatPlainResultValue(compare.target.row[column.key])}
+              >
+                {renderResultValue(compare.target.row[column.key])}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -3234,6 +3930,7 @@ function DatabaseMonitor({
                 <th>Query</th>
                 <th>Duration</th>
                 <th>Status</th>
+                <th>Message</th>
                 <th>Rows</th>
                 <th>Re-run</th>
               </tr>
@@ -3260,6 +3957,12 @@ function DatabaseMonitor({
                     >
                       {entry.status === "success" ? "Success" : "Error"}
                     </span>
+                  </td>
+                  <td
+                    className="database-history-message-cell"
+                    title={entry.message ?? entry.errorMessage ?? ""}
+                  >
+                    {entry.message ?? entry.errorMessage ?? ""}
                   </td>
                   <td>{entry.rows}</td>
                   <td>
@@ -3550,16 +4253,14 @@ function serializePersistedWorksheetState(
   connectionId: string,
   state: SheetConnectionState,
 ): DatabaseWorksheetState {
-  const persistedSheets = state.sheets
-    .filter((sheet) => sheet.savedAt !== null)
-    .map((sheet) => ({
-      connectionId,
-      sheetId: sheet.id,
-      sheetName: sheet.savedName,
-      sql: sheet.savedSql,
-      savedAt: sheet.savedAt ?? new Date().toISOString(),
-      isOpen: state.openSheetIds.includes(sheet.id),
-    }));
+  const persistedSheets = state.sheets.map((sheet) => ({
+    connectionId,
+    sheetId: sheet.id,
+    sheetName: sheet.name.trim() || "Untitled",
+    sql: sheet.sql,
+    savedAt: new Date().toISOString(),
+    isOpen: state.openSheetIds.includes(sheet.id),
+  }));
   const activeSheetId = persistedSheets.some(
     (sheet) => sheet.sheetId === state.activeSheetId,
   )
@@ -3567,6 +4268,49 @@ function serializePersistedWorksheetState(
     : null;
 
   return { connectionId, sheets: persistedSheets, activeSheetId };
+}
+
+function worksheetStateNeedsPersist(state: SheetConnectionState): boolean {
+  return state.sheets.some(
+    (sheet) =>
+      sheet.savedAt === null ||
+      sheet.name !== sheet.savedName ||
+      sheet.sql !== sheet.savedSql,
+  );
+}
+
+function markWorksheetStateSnapshotSaved(
+  current: SheetConnectionState,
+  snapshot: SheetConnectionState,
+  savedAt: string,
+): SheetConnectionState {
+  const snapshotSheets = new Map(
+    snapshot.sheets.map((sheet) => [
+      sheet.id,
+      { name: sheet.name, sql: sheet.sql },
+    ]),
+  );
+
+  return {
+    ...current,
+    sheets: current.sheets.map((sheet) => {
+      const snapshotSheet = snapshotSheets.get(sheet.id);
+      if (
+        !snapshotSheet ||
+        sheet.name !== snapshotSheet.name ||
+        sheet.sql !== snapshotSheet.sql
+      ) {
+        return sheet;
+      }
+
+      return {
+        ...sheet,
+        savedName: snapshotSheet.name,
+        savedSql: snapshotSheet.sql,
+        savedAt,
+      };
+    }),
+  };
 }
 
 async function persistSavedWorksheetState(
@@ -3895,7 +4639,7 @@ function createSeqResultColumn(): ResultColumn {
     key: SEQ_RESULT_COLUMN_KEY,
     label: "seq",
     kind: "number",
-    minWidth: 56,
+    minWidth: 72,
     weight: 0.35,
   };
 }
@@ -3978,7 +4722,7 @@ function formatResultColumnHeader(column: ResultColumn): JSX.Element {
   return column.databaseType ? (
     <>
       <span>{column.label}</span>
-      <span className="database-column-type">({column.databaseType})</span>
+      <span className="database-column-type">{column.databaseType}</span>
     </>
   ) : (
     <span>{column.label}</span>
@@ -3990,6 +4734,37 @@ function renderResultValue(value: DatabaseQueryValue): ReactNode {
     return <span className="database-null-pill">NULL</span>;
   }
   return String(value);
+}
+
+function formatPlainResultValue(value: DatabaseQueryValue): string {
+  return value === null ? "NULL" : String(value);
+}
+
+function resolveResultColumnMetadata(
+  column: ResultColumn,
+  metadataTables: DatabaseTable[],
+): { type: string; nullability: string; keyInfo: string } {
+  const matches = metadataTables.flatMap((table) =>
+    table.columns
+      .filter((candidate) => candidate.name === column.label)
+      .map((candidate) => candidate.metadata),
+  );
+  const metadata = matches[0] ?? [];
+  const type =
+    metadata.find((item) => item.label.toLowerCase() === "type")?.value ??
+    column.databaseType ??
+    "Unknown type";
+  const nullability =
+    metadata.find((item) => item.label.toLowerCase() === "null")?.value ??
+    "Nullability unknown";
+  const keyValue =
+    metadata.find((item) => item.label.toLowerCase() === "key")?.value ??
+    "None";
+  return {
+    type,
+    nullability,
+    keyInfo: keyValue === "PRI" ? "Primary key" : keyValue,
+  };
 }
 
 function formatResultFooter(meta: ResultMeta): string {
@@ -4005,7 +4780,7 @@ function formatObjectName(table: DatabaseTable): string {
 }
 
 function formatQualifiedObjectName(table: DatabaseTable): string {
-  return table.schema ? `${table.schema}.${table.name}` : table.name;
+  return table.name;
 }
 
 function quoteSqlIdentifier(identifier: string): string {
@@ -4038,6 +4813,52 @@ function createInsertTemplate(table: DatabaseTable): string {
     .join("\n");
 
   return `INSERT INTO ${quoteQualifiedTableName(table)} (\n${columnLines}\n) VALUES (\n${valueLines}\n);`;
+}
+
+function createSelectTemplate(table: DatabaseTable): string {
+  const columns = table.columns.map((column) => column.name);
+  const columnLines =
+    columns.length > 0
+      ? columns
+          .map(
+            (column, index) =>
+              `  ${quoteSqlIdentifier(column)}${index < columns.length - 1 ? "," : ""}`,
+          )
+          .join("\n")
+      : "  column_1";
+
+  return `SELECT\n${columnLines}\nFROM ${quoteQualifiedTableName(table)};`;
+}
+
+function appendSqlStatement(sql: string, statement: string): string {
+  const trimmedSql = sql.trimEnd();
+  return trimmedSql ? `${trimmedSql}\n\n${statement}` : statement;
+}
+
+function createExecutionHistoryMessage(
+  result: DatabaseStatementExecutionResult,
+): string {
+  if (result.status === "error") {
+    return result.errorMessage
+      ? `Failed: ${result.errorMessage}`
+      : "Execution failed.";
+  }
+
+  if (result.rowsFetched > 0) {
+    return `${result.rowsFetched} ${pluralize(
+      "row",
+      result.rowsFetched,
+    )} fetched in ${formatDurationMs(result.durationMs)}.`;
+  }
+
+  if (result.rowsAffected !== undefined) {
+    return `${result.rowsAffected} ${pluralize(
+      "row",
+      result.rowsAffected,
+    )} affected in ${formatDurationMs(result.durationMs)}.`;
+  }
+
+  return `Succeeded in ${formatDurationMs(result.durationMs)}.`;
 }
 
 function formatIndexLabel(index: DatabaseTable["indexes"][number]): string {
@@ -4115,6 +4936,16 @@ function createCsv(tab: ResultTab): string {
     tab.columns.map((column) => csvCell(row[column.key])).join(","),
   );
   return [headers.map(csvCell).join(","), ...rows].join("\r\n");
+}
+
+function toBase64(content: string | Uint8Array): string {
+  const bytes =
+    typeof content === "string" ? new TextEncoder().encode(content) : content;
+  let binary = "";
+  for (let index = 0; index < bytes.length; index += 1) {
+    binary += String.fromCharCode(bytes[index]);
+  }
+  return window.btoa(binary);
 }
 
 function csvCell(value: DatabaseQueryValue): string {

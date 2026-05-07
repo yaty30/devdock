@@ -32,6 +32,8 @@ const api: DashboardApi = {
     ipcRenderer.invoke("database:getExecutionHistory", connectionId),
   executeDatabaseStatements: (connection, statements) =>
     ipcRenderer.invoke("database:executeStatements", connection, statements),
+  exportDatabaseResult: (fileName, contentBase64) =>
+    ipcRenderer.invoke("database:exportResult", fileName, contentBase64),
   getDashboardOverview: () =>
     ipcRenderer.invoke("dashboard:getDashboardOverview"),
   getProjectState: (projectId) =>

@@ -23,6 +23,7 @@ export function AppSelect<T extends string>({
   disabled = false,
   ariaLabel,
   minDropdownWidth = 0,
+  showDots = true,
 }: {
   value: T;
   options: ReadonlyArray<AppSelectOption<T>>;
@@ -31,6 +32,7 @@ export function AppSelect<T extends string>({
   disabled?: boolean;
   ariaLabel?: string;
   minDropdownWidth?: number;
+  showDots?: boolean;
 }): JSX.Element {
   const listboxId = useId();
   const [open, setOpen] = useState(false);
@@ -218,17 +220,19 @@ export function AppSelect<T extends string>({
           onMouseEnter={() => setFocusedIndex(index)}
           onClick={() => selectOption(option)}
         >
-          <span
-            className="custom-select-dot"
-            style={
-              option.dotColor
-                ? { background: option.dotColor }
-                : {
-                    background: "transparent",
-                    border: "1.5px solid var(--muted)",
-                  }
-            }
-          />
+          {showDots ? (
+            <span
+              className="custom-select-dot"
+              style={
+                option.dotColor
+                  ? { background: option.dotColor }
+                  : {
+                      background: "transparent",
+                      border: "1.5px solid var(--muted)",
+                    }
+              }
+            />
+          ) : null}
           <span className="custom-select-option-label">{option.label}</span>
           {option.value === value ? (
             <Check size={13} className="custom-select-check" />
@@ -260,7 +264,7 @@ export function AppSelect<T extends string>({
         aria-label={ariaLabel}
         disabled={disabled}
       >
-        {current?.dotColor ? (
+        {showDots && current?.dotColor ? (
           <span
             className="custom-select-dot"
             style={{ background: current.dotColor }}

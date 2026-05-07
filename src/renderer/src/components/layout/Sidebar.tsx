@@ -185,7 +185,9 @@ export function Sidebar({
                   tabIndex={databasesOpen || collapsed ? 0 : -1}
                   onClick={() => onDatabaseConnectionChange(connection)}
                 >
-                  <span className={`database-status-dot ${connection.status}`} />
+                  <span
+                    className={`database-status-dot ${connection.status}`}
+                  />
                   <span className="database-connection-initials">
                     {getConnectionInitials(connection)}
                   </span>

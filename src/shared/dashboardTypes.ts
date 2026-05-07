@@ -283,6 +283,7 @@ export type DatabaseQueryColumn = {
 export type DatabaseStatementExecutionResult = {
   executionRecordId?: string;
   executedAt?: string;
+  executionMessage?: string;
   statement: string;
   columns: DatabaseQueryColumn[];
   rows: Array<Record<string, DatabaseQueryValue>>;
@@ -296,6 +297,16 @@ export type DatabaseStatementExecutionResult = {
 export type DatabaseExecutionBatchResult = {
   results: DatabaseStatementExecutionResult[];
 };
+
+export type DatabaseExportResult =
+  | {
+      success: true;
+      path: string;
+    }
+  | {
+      success: false;
+      canceled: true;
+    };
 
 export type DatabaseWorksheet = {
   connectionId: string;
@@ -324,6 +335,7 @@ export type DatabaseExecutionRecord = {
   rows: number;
   rowsAffected?: number;
   errorMessage?: string;
+  message?: string;
 };
 
 export type DashboardEvent =
@@ -395,6 +407,10 @@ export type DashboardApi = {
     connection: DatabaseConnection,
     statements: string[],
   ) => Promise<DatabaseExecutionBatchResult>;
+  exportDatabaseResult: (
+    fileName: string,
+    contentBase64: string,
+  ) => Promise<DatabaseExportResult>;
   getDashboardOverview: () => Promise<ProjectDashboardSummary[]>;
   getProjectState: (projectId: string) => Promise<ProjectRuntimeState>;
   saveProjectSettings: (

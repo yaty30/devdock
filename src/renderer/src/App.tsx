@@ -256,6 +256,7 @@ function App(): JSX.Element {
 
   useEffect(() => {
     window.localStorage.setItem("ivs-dashboard-font-size", fontSizeMode);
+    document.documentElement.dataset.fontSize = fontSizeMode;
   }, [fontSizeMode]);
 
   useEffect(() => {
@@ -652,9 +653,17 @@ function App(): JSX.Element {
   }
 
   function handleDatabaseExecution(record: DatabaseExecutionRecord): void {
-    setDatabaseExecutionHistory((current) =>
-      [record, ...current].slice(0, 1000),
-    );
+    setDatabaseExecutionHistory((current) => {
+      const countsByConnection = new Map<string, number>();
+      return [record, ...current].filter((entry) => {
+        const count = countsByConnection.get(entry.connectionId) ?? 0;
+        if (count >= 1000) {
+          return false;
+        }
+        countsByConnection.set(entry.connectionId, count + 1);
+        return true;
+      });
+    });
   }
 
   function refreshDatabaseMetadata(): void {
@@ -1209,7 +1218,7 @@ function DatabaseHeaderActions({
       <div className="database-header-context" aria-label="Database context">
         <span className={`database-status-dot ${databaseStatus}`} />
         <span>{databaseStatus}</span>
-        <span>•</span>
+        <span>-</span>
         <span>{connection.user}</span>
         <span>-</span>
         <strong>{connection.name}</strong>

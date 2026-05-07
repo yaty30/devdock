@@ -1,7 +1,7 @@
 import started from "electron-squirrel-startup";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import type { OpenDialogOptions } from "electron";
-import { join } from "node:path";
+import type { OpenDialogOptions, SaveDialogOptions } from "electron";
+import { extname, join } from "node:path";
 import { DashboardBackend } from "./dashboardBackend";
 import type {
   BuildQueryOptions,
@@ -24,6 +24,7 @@ let backend: DashboardBackend | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
+const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
 
 function getBackend(): DashboardBackend {
   if (!backend) {
@@ -34,6 +35,7 @@ function getBackend(): DashboardBackend {
 }
 
 function registerIpc(): void {
+  console.info("[main:ipc] registering IPC handlers");
   ipcMain.handle("dashboard:getSnapshot", () =>
     withLoggedErrors("dashboard:getSnapshot", () => getBackend().getSnapshot()),
   );
@@ -68,12 +70,10 @@ function registerIpc(): void {
         getBackend().getDatabaseMetadata(connection),
       ),
   );
-  ipcMain.handle(
-    "database:getWorksheetState",
-    (_event, connectionId: string) =>
-      withLoggedErrors("database:getWorksheetState", () =>
-        getBackend().getDatabaseWorksheetState(connectionId),
-      ),
+  ipcMain.handle("database:getWorksheetState", (_event, connectionId: string) =>
+    withLoggedErrors("database:getWorksheetState", () =>
+      getBackend().getDatabaseWorksheetState(connectionId),
+    ),
   );
   ipcMain.handle(
     "database:saveWorksheetState",
@@ -103,6 +103,43 @@ function registerIpc(): void {
         getBackend().executeDatabaseStatements(connection, statements),
       ),
   );
+  ipcMain.handle(
+    DATABASE_EXPORT_RESULT_CHANNEL,
+    async (event, fileName: string, contentBase64: string) =>
+      withLoggedErrors(DATABASE_EXPORT_RESULT_CHANNEL, async () => {
+        const suggestedFileName = sanitizeExportFileName(fileName);
+        console.info(`[main:ipc] ${DATABASE_EXPORT_RESULT_CHANNEL} invoked`, {
+          fileName: suggestedFileName,
+          byteLength: Buffer.byteLength(contentBase64, "base64"),
+        });
+
+        const window = BrowserWindow.fromWebContents(event.sender);
+        const dialogOptions: SaveDialogOptions = {
+          title: "Export query results",
+          defaultPath: join(app.getPath("documents"), suggestedFileName),
+          filters: getDatabaseExportFilters(suggestedFileName),
+          properties: ["createDirectory", "showOverwriteConfirmation"],
+        };
+        const saveResult = window
+          ? await dialog.showSaveDialog(window, dialogOptions)
+          : await dialog.showSaveDialog(dialogOptions);
+
+        if (saveResult.canceled || !saveResult.filePath) {
+          console.info(`[main:ipc] ${DATABASE_EXPORT_RESULT_CHANNEL} canceled`);
+          return { success: false, canceled: true } as const;
+        }
+
+        const result = getBackend().exportDatabaseResult(
+          saveResult.filePath,
+          contentBase64,
+        );
+        console.info(`[main:ipc] ${DATABASE_EXPORT_RESULT_CHANNEL} completed`, {
+          path: result.success ? result.path : undefined,
+        });
+        return result;
+      }),
+  );
+  console.info(`[main:ipc] registered ${DATABASE_EXPORT_RESULT_CHANNEL}`);
   ipcMain.handle("dashboard:getDashboardOverview", () =>
     withLoggedErrors("dashboard:getDashboardOverview", () =>
       getBackend().getDashboardOverview(),
@@ -305,6 +342,30 @@ async function withLoggedErrors<T>(
     console.error(`[${label}]`, error);
     throw error;
   }
+}
+
+function sanitizeExportFileName(fileName: string): string {
+  const trimmed = fileName.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-");
+  const compact = trimmed.replace(/\s+/g, " ").replace(/^-+|-+$/g, "");
+  return compact || `query-results-${Date.now()}.json`;
+}
+
+function getDatabaseExportFilters(
+  fileName: string,
+): SaveDialogOptions["filters"] {
+  const extension = extname(fileName).slice(1).toLowerCase();
+
+  if (extension === "json") {
+    return [{ name: "JSON", extensions: ["json"] }];
+  }
+  if (extension === "csv") {
+    return [{ name: "CSV", extensions: ["csv"] }];
+  }
+  if (extension === "pdf") {
+    return [{ name: "PDF", extensions: ["pdf"] }];
+  }
+
+  return [{ name: "All Files", extensions: ["*"] }];
 }
 
 function delay(ms: number): Promise<void> {

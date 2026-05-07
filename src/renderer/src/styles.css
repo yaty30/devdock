@@ -17,7 +17,7 @@
   --border: #e5e7eb;
   --text: #111827;
   --muted: #6b7280;
-  --muted-soft: #a1a4ab38;
+  --muted-soft: #e6e6e6;
   --accent: #444ce7;
   --accent-soft: #eef2ff;
   --success: #16a34a;
@@ -33,7 +33,7 @@
   --field-bg: #ffffff;
   --subtle-bg: #f9fafb;
   --icon-muted: #6b7280;
-  --terminal-bg: #f0f0f075;
+  --terminal-bg: #f8f8f8;
   --terminal-border: #d6d6d6;
   --cm-sql-keyword: #1d4ed8;
   --cm-sql-string: #15803d;
@@ -42,7 +42,7 @@
   --cm-sql-function: #9333ea;
   --cm-sql-operator: #334155;
   --cm-sql-atom: #be123c;
-  --cm-sql-name: #111827;
+  --cm-sql-name: #0a0a0a;
   --control-sm: 30px;
   --control-md: 34px;
   --control-lg: 40px;
@@ -54,6 +54,41 @@
   --font-lg: 14px;
   --font-xl: 16px;
   --font-title: 27px;
+  --font-code: calc(var(--font-sm) + 0.5px);
+  --font-table: var(--font-sm);
+  --font-meta: var(--font-xs);
+  --database-code-font-size: var(--font-code);
+  --database-table-font-size: var(--font-table);
+}
+
+:root[data-font-size="large"] {
+  --control-sm: 35px;
+  --control-md: 41px;
+  --control-lg: 48px;
+  --space-panel: 20px;
+  --space-section: 20px;
+  --font-xs: 13px;
+  --font-sm: 14px;
+  --font-md: 15px;
+  --font-lg: 17px;
+  --font-xl: 19px;
+  --font-title: 32px;
+  --font-code: var(--font-md);
+}
+
+:root[data-font-size="small"] {
+  --control-sm: 28px;
+  --control-md: 32px;
+  --control-lg: 38px;
+  --space-panel: 14px;
+  --space-section: 14px;
+  --font-xs: 10.5px;
+  --font-sm: 11.5px;
+  --font-md: 12px;
+  --font-lg: 13px;
+  --font-xl: 15px;
+  --font-title: 25px;
+  --font-code: var(--font-xs);
 }
 
 [data-theme="dark"] {
@@ -64,8 +99,9 @@
   --border: #24262c;
   --text: #f9fafb;
   --muted: #a1a1aa;
+  --muted-soft: #cccccc;
   --accent: #8b8df8;
-  --accent-soft: rgba(139, 141, 248, 0.16);
+  --accent-soft: #2a2c40;
   --success: #4ade80;
   --info: #60a5fa;
   --info-soft: #112d50;
@@ -298,6 +334,7 @@ body {
   --font-lg: 17px;
   --font-xl: 19px;
   --font-title: 32px;
+  --font-code: var(--font-md);
 }
 
 .app-shell[data-font-size="small"] {
@@ -312,6 +349,7 @@ body {
   --font-lg: 13px;
   --font-xl: 15px;
   --font-title: 25px;
+  --font-code: var(--font-xs);
 }
 
 .app-shell.sidebar-collapsed {
@@ -722,7 +760,7 @@ body {
 }
 
 .build-dropdown-trigger {
-  width: var(--build-dropdown-width);
+  width: max-content;
   min-width: var(--build-dropdown-width);
 }
 
@@ -813,8 +851,9 @@ body {
   top: 100%;
   right: 0;
   z-index: 20;
-  width: var(--build-dropdown-width);
-  padding-top: 8px;
+  width: max-content;
+  min-width: 100%;
+  padding-top: 6px;
   opacity: 0;
   pointer-events: none;
   transform: translateY(-5px);
@@ -835,7 +874,8 @@ body {
 .build-dropdown-menu {
   display: grid;
   gap: 4px;
-  width: var(--build-dropdown-width);
+  min-width: var(--build-dropdown-width);
+  width: 100%;
   padding: 6px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -856,11 +896,30 @@ body {
   background: transparent;
   border: 0;
   border-radius: 6px;
+  width: 100%;
+  min-width: calc(var(--build-dropdown-width) - 10px);
 }
 
 .build-dropdown-menu button:hover {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.build-dropdown-menu button span {
+  min-width: 0;
+  margin-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.build-dropdown-menu button kbd {
+  margin-left: auto;
+  color: var(--muted);
+  opacity: 0.6;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .build-dropdown-menu button.active {
@@ -1379,7 +1438,7 @@ body {
 
 .dashboard-project-meta strong:first-of-type {
   height: 26px;
-  padding: 2px 10px;
+  padding: 4px 6px;
   color: var(--text);
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -5525,6 +5584,39 @@ select option {
   font-weight: 700;
 }
 
+.database-schema-selector {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.database-schema-selector select {
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 9px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+  background: var(--field-bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  outline: none;
+}
+
+.database-schema-selector .custom-select,
+.database-schema-selector .custom-select-trigger {
+  width: 100%;
+}
+
+.database-schema-selector select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 .database-search-field {
   display: flex;
   align-items: center;
@@ -5645,6 +5737,11 @@ select option {
 
 .database-tree-empty {
   user-select: none;
+}
+
+button.database-tree-item {
+  width: 100%;
+  text-align: left;
 }
 
 .database-tree-item.schema-item.active {
@@ -5877,6 +5974,174 @@ select option {
   white-space: nowrap;
 }
 
+.database-result-row.compare-base td {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.database-result-row {
+  cursor: pointer;
+}
+
+.database-result-seq-cell {
+  display: inline-grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+
+.database-row-expand-button {
+  display: grid;
+  place-items: center;
+  height: 18px;
+  padding: 0;
+  color: var(--accent);
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  transform: translateX(-10px);
+}
+
+.database-result-detail-row td {
+  padding: 0;
+  overflow: visible;
+  white-space: normal;
+  background: var(--subtle-bg);
+}
+
+.database-result-table tbody tr.database-result-detail-row:hover > td,
+[data-theme="dark"]
+  .database-result-table
+  tbody
+  tr.database-result-detail-row:hover
+  > td,
+.database-result-table tbody tr.database-result-empty-row:hover td,
+[data-theme="dark"]
+  .database-result-table
+  tbody
+  tr.database-result-empty-row:hover
+  td {
+  background: var(--subtle-bg);
+}
+
+.database-result-empty-row td {
+  height: 44px;
+  color: var(--muted);
+  font-style: italic;
+  text-align: center;
+  background: var(--subtle-bg);
+}
+
+.database-result-row-details {
+  max-width: 100%;
+  padding: 8px 10px;
+  overflow-x: auto;
+}
+
+.database-result-row-details-table {
+  width: 100%;
+  min-width: 680px;
+  table-layout: auto;
+  border-collapse: collapse;
+  color: var(--nav-text);
+  font-size: 12px;
+}
+
+.database-detail-column-col {
+  width: 1%;
+}
+
+.database-detail-value-col {
+  width: auto;
+}
+
+.database-detail-meta-col {
+  width: 1%;
+}
+
+.database-result-row-details-table th,
+.database-result-row-details-table td {
+  height: 28px;
+  padding: 0 10px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.database-result-row-details-table th {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 850;
+  background: var(--subtle-bg);
+}
+
+.database-result-row-details-table td {
+  font-weight: 680;
+}
+
+.database-result-row-details-table th:nth-child(1),
+.database-result-row-details-table td:nth-child(1) {
+  width: 1%;
+  max-width: 100%;
+  padding-right: 80px;
+  font-weight: 800;
+}
+
+.database-result-row-details-table th:nth-child(2),
+.database-result-row-details-table td:nth-child(2) {
+  width: auto;
+  min-width: 180px;
+}
+
+.database-result-row-details-table th:nth-child(3),
+.database-result-row-details-table td:nth-child(3),
+.database-result-row-details-table th:nth-child(4),
+.database-result-row-details-table td:nth-child(4),
+.database-result-row-details-table th:nth-child(5),
+.database-result-row-details-table td:nth-child(5) {
+  width: 1%;
+  max-width: 180px;
+}
+
+.database-result-row-details-table td:nth-child(2) {
+  min-width: 0;
+  color: var(--text);
+}
+
+.database-result-table
+  tbody
+  tr.database-result-detail-row:hover
+  .database-result-row-details-table
+  tbody
+  tr:not(:hover)
+  > td {
+  background: transparent;
+}
+
+.database-result-row-details-table tbody tr:hover > td {
+  background: var(--accent-soft);
+}
+
+.database-result-loading-more {
+  position: sticky;
+  bottom: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: var(--shadow);
+}
+
 .database-result-th-content {
   position: relative;
   display: flex;
@@ -5895,7 +6160,7 @@ select option {
 
 .database-result-column-label .database-column-type {
   margin-left: 10px;
-  background-color: var(--muted-soft);
+  background-color: color-mix(in srgb, var(--muted) 10%, transparent);
   padding: 4px 6px;
   border-radius: 8px;
   color: var(--cm-sql-comment);
@@ -5942,13 +6207,20 @@ select option {
 }
 
 .database-history-table {
-  min-width: 980px;
+  min-width: 1120px;
 }
 
 .database-query-cell {
   max-width: 420px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.database-history-message-cell {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .database-history-query {
@@ -6215,11 +6487,139 @@ select option {
   background: transparent;
   border: 0;
   border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .database-context-menu button:hover {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.database-context-menu button:hover svg {
+  color: var(--accent);
+}
+
+.database-context-menu button svg {
+  flex: 0 0 auto;
+  color: var(--icon-muted);
+}
+
+.database-result-context-menu {
+  min-width: 210px;
+}
+
+.database-result-context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.database-result-context-menu button svg {
+  transform: translateY(1px);
+}
+
+.database-row-compare-modal {
+  width: min(90vw, 1100px);
+}
+
+.database-row-compare-modal-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.database-row-comparison {
+  width: 100%;
+  max-height: min(620px, calc(100vh - 220px));
+  overflow: auto;
+}
+
+.database-row-comparison-table {
+  width: 100%;
+  min-width: 760px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  color: var(--nav-text);
+  font-size: 12px;
+}
+
+.database-row-comparison-column-col {
+  width: clamp(150px, 20%, 260px);
+}
+
+.database-row-comparison-table tr:hover {
+  background-color: var(--subtle-bg);
+}
+
+.database-row-comparison-table tr:hover td {
+  color: var(--accent);
+}
+
+.database-row-comparison-table th,
+.database-row-comparison-table td {
+  height: 32px;
+  padding: 0 12px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+
+.database-row-comparison-table th:last-child,
+.database-row-comparison-table td:last-child {
+  border-right: 0;
+}
+
+.database-row-comparison-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--accent);
+  font-weight: 850;
+  background: var(--surface);
+}
+
+.database-row-comparison-table td:first-child {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.database-row-comparison-column {
+  max-width: 260px;
+}
+
+.database-row-comparison-table td:nth-child(2),
+.database-row-comparison-table td:nth-child(3) {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.database-export-snackbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.database-result-snackbar {
+  max-width: min(420px, calc(100vw - 48px));
+}
+
+.database-export-snackbar button {
+  height: 24px;
+  padding: 0 9px;
+  color: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid currentColor;
+  border-radius: 6px;
+}
+
+.database-autosave-snackbar {
+  max-width: min(520px, calc(100vw - 48px));
 }
 
 .database-connection-modal {
@@ -6772,6 +7172,29 @@ select option {
   gap: 6px;
 }
 
+.database-sheet-save-status {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.database-sheet-save-status.saved {
+  color: var(--success);
+}
+
+.database-sheet-save-status.saving {
+  color: var(--info);
+}
+
+.database-sheet-save-status.unsaved {
+  color: var(--warning);
+}
+
+.database-sheet-save-status.failed {
+  color: var(--error);
+}
+
 .database-export-dropdown {
   --build-dropdown-width: 116px;
 }
@@ -6900,9 +7323,23 @@ select option {
   font-weight: 850;
 }
 
+.app-shell[data-font-size] {
+  --database-code-font-size: var(--font-code);
+  --database-table-font-size: var(--font-table);
+}
+
+.app-shell[data-font-size] button,
+.app-shell[data-font-size] input,
+.app-shell[data-font-size] select,
+.app-shell[data-font-size] textarea {
+  font-size: var(--font-md);
+}
+
 .app-shell[data-font-size] .nav-item,
 .app-shell[data-font-size] .project-item,
+.app-shell[data-font-size] .database-item,
 .app-shell[data-font-size] .button,
+.app-shell[data-font-size] .icon-button,
 .app-shell[data-font-size] .build-dropdown-menu button,
 .app-shell[data-font-size] .tab,
 .app-shell[data-font-size] .service-control-card span,
@@ -6913,23 +7350,31 @@ select option {
 .app-shell[data-font-size] .auto-start-checks,
 .app-shell[data-font-size] .settings-inline-input,
 .app-shell[data-font-size] .custom-select-trigger,
-.app-shell[data-font-size] .custom-select-option,
 .app-shell[data-font-size] .monitor-card-rows,
 .app-shell[data-font-size] .dashboard-status-grid,
 .app-shell[data-font-size] .git-command-input,
-.app-shell[data-font-size] .database-item,
 .app-shell[data-font-size] .database-header-context,
 .app-shell[data-font-size] .database-connection-summary strong,
 .app-shell[data-font-size] .database-connection-summary div > span,
+.app-shell[data-font-size] .database-schema-selector,
+.app-shell[data-font-size] .database-schema-selector select,
 .app-shell[data-font-size] .database-tree-group > button,
 .app-shell[data-font-size] .database-tree-item,
+.app-shell[data-font-size] .database-object-row,
 .app-shell[data-font-size] .database-tree-empty,
 .app-shell[data-font-size] .query-tab-main,
 .app-shell[data-font-size] .database-output-tabs button,
 .app-shell[data-font-size] .database-result-footer,
 .app-shell[data-font-size] .database-message,
 .app-shell[data-font-size] .database-summary-card strong,
-.app-shell[data-font-size] .database-tree-button .database-column-count {
+.app-shell[data-font-size] .database-sheet-rename-input,
+.app-shell[data-font-size] .database-connection-field,
+.app-shell[data-font-size] .database-connection-field input,
+.app-shell[data-font-size] .database-connection-field select,
+.app-shell[data-font-size] .database-connection-field .custom-select-trigger,
+.app-shell[data-font-size] .confirm-dialog-detail-row,
+.app-shell[data-font-size] .add-project-dialog label,
+.app-shell[data-font-size] .add-project-dialog input {
   font-size: var(--font-md);
 }
 
@@ -6952,7 +7397,6 @@ select option {
 .app-shell[data-font-size] .log-find-count,
 .app-shell[data-font-size] .log-jump-bar button,
 .app-shell[data-font-size] .log-search-count,
-.app-shell[data-font-size] .log-jump-bar button,
 .app-shell[data-font-size] .database-type-label,
 .app-shell[data-font-size] .metadata-pill,
 .app-shell[data-font-size] .metadata-pill-label,
@@ -6960,28 +7404,69 @@ select option {
 .app-shell[data-font-size] .database-summary-card span,
 .app-shell[data-font-size] .database-history-count,
 .app-shell[data-font-size] .database-pagination-controls select,
-.app-shell[data-font-size] .database-context-menu button
-.app-shell[data-font-size] .database-history-count,
-.app-shell[data-font-size] .database-tree-button .database-column-count {
+.app-shell[data-font-size] .database-context-menu button,
+.app-shell[data-font-size] .database-tree-button .database-column-count,
+.app-shell[data-font-size] .database-object-count,
+.app-shell[data-font-size] .database-column-count,
+.app-shell[data-font-size] .database-tree-count,
+.app-shell[data-font-size] .database-result-column-label .database-column-type,
+.app-shell[data-font-size] .database-null-pill,
+.app-shell[data-font-size] .database-result-loading-more,
+.app-shell[data-font-size] .database-query-toggle,
+.app-shell[data-font-size] .database-empty-state,
+.app-shell[data-font-size] .database-export-snackbar button,
+.app-shell[data-font-size] .confirm-dialog p,
+.app-shell[data-font-size] .confirm-dialog-change-list,
+.app-shell[data-font-size] .add-project-dialog p,
+.app-shell[data-font-size] .modal-header p {
   font-size: var(--font-sm);
 }
 
-.app-shell[data-font-size] .database-sql-editor-shell {
-  --database-code-font-size: calc(var(--font-sm) + 0.5px);
+.app-shell[data-font-size] .recent-builds-table,
+.app-shell[data-font-size] .recent-builds-table th,
+.app-shell[data-font-size] .recent-builds-table td,
+.app-shell[data-font-size] .database-result-table,
+.app-shell[data-font-size] .database-result-table th,
+.app-shell[data-font-size] .database-result-table td,
+.app-shell[data-font-size] .database-history-table,
+.app-shell[data-font-size] .database-history-table th,
+.app-shell[data-font-size] .database-history-table td,
+.app-shell[data-font-size] .database-result-row-details-table,
+.app-shell[data-font-size] .database-result-row-details-table th,
+.app-shell[data-font-size] .database-result-row-details-table td,
+.app-shell[data-font-size] .database-row-comparison-table,
+.app-shell[data-font-size] .database-row-comparison-table th,
+.app-shell[data-font-size] .database-row-comparison-table td,
+.app-shell[data-font-size] .build-profiles-table,
+.app-shell[data-font-size] .build-profiles-table th,
+.app-shell[data-font-size] .build-profiles-table td {
+  font-size: var(--database-table-font-size);
 }
 
-.app-shell[data-font-size="large"] .database-sql-editor-shell {
-  --database-code-font-size: var(--font-md);
+.app-shell[data-font-size] .database-result-row-details-table th,
+.app-shell[data-font-size] .database-row-comparison-table th {
+  font-size: var(--font-xs);
 }
 
-.app-shell[data-font-size="small"] .database-sql-editor-shell {
-  --database-code-font-size: var(--font-xs);
+.app-shell[data-font-size] .database-sql-editor,
+.app-shell[data-font-size] .database-sql-editor-shell .cm-editor,
+.app-shell[data-font-size] .database-sql-editor-shell .cm-tooltip,
+.app-shell[data-font-size] .database-history-query pre,
+.app-shell[data-font-size] .git-command-prefix,
+.app-shell[data-font-size] .git-command-input,
+.app-shell[data-font-size] .log-lines,
+.app-shell[data-font-size] .terminal-line {
+  font-size: var(--database-code-font-size);
 }
 
 .app-shell[data-font-size] .panel-header h2,
 .app-shell[data-font-size] .build-status-panel .panel-header h2,
 .app-shell[data-font-size] .monitor-card h2,
-.app-shell[data-font-size] .modal-header h2 {
+.app-shell[data-font-size] .modal-header h2,
+.app-shell[data-font-size] .confirm-dialog h2,
+.app-shell[data-font-size] .add-project-dialog h2,
+.app-shell[data-font-size] .database-empty-panel h2,
+.app-shell[data-font-size] .database-connection-section-title {
   font-size: var(--font-xl);
 }
 
@@ -7017,9 +7502,27 @@ select option {
   min-height: calc(var(--control-md) + 2px);
 }
 
-.app-shell[data-font-size] .log-lines,
-.app-shell[data-font-size] .terminal-line {
-  font-size: calc(var(--font-xs) + 0.5px);
+:root[data-font-size] .custom-select-dropdown-portal,
+:root[data-font-size] .custom-select-dropdown-portal .custom-select-option {
+  font-size: var(--font-md);
+}
+
+.app-shell[data-font-size] .database-context-menu button {
+  min-height: var(--control-sm);
+  height: auto;
+  line-height: 1.25;
+}
+
+.app-shell[data-font-size] .database-result-table th,
+.app-shell[data-font-size] .database-result-table td,
+.app-shell[data-font-size] .database-history-table th,
+.app-shell[data-font-size] .database-history-table td,
+.app-shell[data-font-size] .database-result-row-details-table th,
+.app-shell[data-font-size] .database-result-row-details-table td,
+.app-shell[data-font-size] .database-row-comparison-table th,
+.app-shell[data-font-size] .database-row-comparison-table td {
+  min-height: calc(var(--control-sm) + 2px);
+  line-height: 1.35;
 }
 
 .settings-footer {

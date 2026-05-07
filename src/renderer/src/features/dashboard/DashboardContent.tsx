@@ -916,7 +916,9 @@ function DatabaseStatusRow({
             <strong>{connection.sslMode ?? "disabled"}</strong>
           </DashboardDetailRow>
           <DashboardDetailRow label="Password">
-            <strong>{connection.savePassword ? "Saved" : "Session only"}</strong>
+            <strong>
+              {connection.savePassword ? "Saved" : "Session only"}
+            </strong>
           </DashboardDetailRow>
         </section>
       </div>
@@ -1091,9 +1093,7 @@ function DashboardDetailRow({
   );
 }
 
-function databaseConnectionStatus(
-  status: DatabaseConnection["status"],
-): {
+function databaseConnectionStatus(status: DatabaseConnection["status"]): {
   label: string;
   tone: "success" | "warning" | "failed" | "idle";
   pillClass: "success" | "stopped" | "failed";
@@ -1107,11 +1107,11 @@ function databaseConnectionStatus(
   return { label: "Disconnected", tone: "warning", pillClass: "stopped" };
 }
 
-function databaseStatusPill(
-  status: DatabaseConnection["status"],
-): JSX.Element {
+function databaseStatusPill(status: DatabaseConnection["status"]): JSX.Element {
   const state = databaseConnectionStatus(status);
-  return <span className={`status-pill ${state.pillClass}`}>{state.label}</span>;
+  return (
+    <span className={`status-pill ${state.pillClass}`}>{state.label}</span>
+  );
 }
 
 function formatDatabaseTarget(connection: DatabaseConnection): string {

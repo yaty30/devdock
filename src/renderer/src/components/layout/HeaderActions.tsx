@@ -20,6 +20,8 @@ import type {
 } from "../../types";
 import { RUNNING_SERVER_LIMIT_MESSAGE } from "../../../../shared/appLimits";
 
+const BUILD_PROFILE_LABEL_MAX_LENGTH = 20;
+
 export function HeaderActions({
   projectId,
   settings,
@@ -258,6 +260,10 @@ function BuildActionsDropdown({
   const wildflyStatus = statuses.find((status) => status.service === "wildfly");
   const wildflyAvailable = wildflyStatus?.state === "running";
   const buildDisabled = disabled || (!buildRunning && !wildflyAvailable);
+  const latestProfileUsedToday = findLatestBuildProfileUsedToday(
+    recentBuilds,
+    settings.buildProfiles,
+  );
 
   useEffect(() => {
     if (openMode !== "click") {
@@ -289,6 +295,68 @@ function BuildActionsDropdown({
     }
   }, [latestBuildRunning]);
 
+  useEffect(() => {
+    let awaitingProfileDigit = false;
+    let sequenceTimer: number | null = null;
+
+    function clearSequence(): void {
+      awaitingProfileDigit = false;
+      if (sequenceTimer !== null) {
+        window.clearTimeout(sequenceTimer);
+        sequenceTimer = null;
+      }
+    }
+
+    function handleBuildHotkey(event: KeyboardEvent): void {
+      if (
+        buildDisabled ||
+        buildRunning ||
+        isEditableHotkeyTarget(event.target)
+      ) {
+        clearSequence();
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && key === "b") {
+        event.preventDefault();
+        awaitingProfileDigit = true;
+        if (sequenceTimer !== null) {
+          window.clearTimeout(sequenceTimer);
+        }
+        sequenceTimer = window.setTimeout(clearSequence, 1200);
+        return;
+      }
+
+      if (!awaitingProfileDigit || !(event.ctrlKey || event.metaKey)) {
+        return;
+      }
+
+      const profileIndex = Number(event.key) - 1;
+      if (
+        Number.isInteger(profileIndex) &&
+        profileIndex >= 0 &&
+        profileIndex < settings.buildProfiles.length
+      ) {
+        event.preventDefault();
+        clearSequence();
+        triggerBuild(settings.buildProfiles[profileIndex]);
+      }
+    }
+
+    window.addEventListener("keydown", handleBuildHotkey);
+    return () => {
+      clearSequence();
+      window.removeEventListener("keydown", handleBuildHotkey);
+    };
+  }, [
+    buildDisabled,
+    buildRunning,
+    projectId,
+    settings.buildProfiles,
+    gitStatus,
+  ]);
+
   function stopBuild(): void {
     setStoppingBuild(true);
     setOpenMode(null);
@@ -308,6 +376,15 @@ function BuildActionsDropdown({
         setRunningProfileId(null);
         setRunningProfileName(null);
       });
+  }
+
+  function triggerBuild(profile: BuildProfileRecord): void {
+    setOpenMode(null);
+    if (profile.confirm) {
+      openBuildConfirmation(profile);
+      return;
+    }
+    runBuild(profile);
   }
 
   function openBuildConfirmation(profile: BuildProfileRecord): void {
@@ -344,6 +421,10 @@ function BuildActionsDropdown({
       : `Run ${profile.buttonName} Build?`;
   }
 
+  function formatRunBuildLabel(profile: BuildProfileRecord): string {
+    return `Run ${truncateBuildProfileLabel(profile.buttonName)} Build`;
+  }
+
   return (
     <>
       <div
@@ -370,12 +451,18 @@ function BuildActionsDropdown({
           title={
             buildDisabled && !buildRunning
               ? "Start WildFly before running a build"
+              : latestProfileUsedToday
+                ? `Run ${latestProfileUsedToday.buttonName} Build`
               : undefined
           }
           disabled={buildDisabled || stoppingBuild}
           onClick={() => {
             if (buildRunning) {
               stopBuild();
+              return;
+            }
+            if (latestProfileUsedToday) {
+              triggerBuild(latestProfileUsedToday);
               return;
             }
             setOpenMode((current) => (current === "click" ? null : "click"));
@@ -387,7 +474,11 @@ function BuildActionsDropdown({
             <Play size={15} />
           )}
           <span className="build-dropdown-trigger-label">
-            {buildRunning ? "Stop Build" : "Run Build"}
+            {buildRunning
+              ? "Stop Build"
+              : latestProfileUsedToday
+                ? formatRunBuildLabel(latestProfileUsedToday)
+                : "Run Build"}
           </span>
           {stoppingBuild ? (
             <LoaderCircle className="button-spinner" size={16} />
@@ -403,27 +494,24 @@ function BuildActionsDropdown({
           aria-hidden={!open}
         >
           <div className="build-dropdown-menu" role="menu">
-            {settings.buildProfiles.map((profile) => (
+            {settings.buildProfiles.map((profile, index) => (
               <button
                 type="button"
                 role="menuitem"
                 key={profile.buttonName}
+                title={profile.buttonName}
                 disabled={buildDisabled || buildRunning}
                 onClick={() => {
-                  setOpenMode(null);
-                  if (profile.confirm) {
-                    openBuildConfirmation(profile);
-                    return;
-                  }
-                  runBuild(profile);
+                  triggerBuild(profile);
                 }}
               >
                 <Play size={14} />
                 <span>
                   {runningProfileId === profile.id
                     ? "Running..."
-                    : profile.buttonName}
+                    : truncateBuildProfileLabel(profile.buttonName)}
                 </span>
+                <kbd>Ctrl+B+{index + 1}</kbd>
               </button>
             ))}
           </div>
@@ -490,6 +578,64 @@ function BuildConfirmDetails({
         </div>
       ))}
     </>
+  );
+}
+
+function findLatestBuildProfileUsedToday(
+  builds: RecentBuildRecord[],
+  profiles: BuildProfileRecord[],
+): BuildProfileRecord | null {
+  const todayBuild = builds.find((build) => isLocalToday(build.startedAt));
+  if (!todayBuild) {
+    return null;
+  }
+
+  const normalizedBuildProfile = todayBuild.profile.trim().toLowerCase();
+  return (
+    profiles.find((profile) =>
+      [
+        profile.buttonName,
+        profile.profileName,
+        `${profile.buttonName} ${profile.profileName}`,
+      ]
+        .map((value) => value.trim().toLowerCase())
+        .includes(normalizedBuildProfile),
+    ) ?? null
+  );
+}
+
+function truncateBuildProfileLabel(label: string): string {
+  return label.length > BUILD_PROFILE_LABEL_MAX_LENGTH
+    ? `${label.slice(0, BUILD_PROFILE_LABEL_MAX_LENGTH - 3)}...`
+    : label;
+}
+
+function isLocalToday(value: string): boolean {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return false;
+  }
+
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+function isEditableHotkeyTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const tagName = target.tagName.toLowerCase();
+  return (
+    tagName === "input" ||
+    tagName === "textarea" ||
+    tagName === "select" ||
+    target.isContentEditable ||
+    target.closest(".cm-editor") !== null
   );
 }
 

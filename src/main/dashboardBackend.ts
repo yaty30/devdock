@@ -42,6 +42,7 @@ import type {
   DatabaseConnectionTestResult,
   DatabaseExecutionRecord,
   DatabaseExecutionBatchResult,
+  DatabaseExportResult,
   DatabaseMetadata,
   DatabaseQueryValue,
   DatabaseStatementExecutionResult,
@@ -174,6 +175,7 @@ type DatabaseExecutionHistoryRow = {
   row_count: number;
   rows_affected: number | null;
   error_message: string | null;
+  execution_message?: string | null;
 };
 
 type SettingsActivityEntry = {
@@ -189,6 +191,7 @@ const TAIL_INTERVAL_MS = 1000;
 const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
 const WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
 const RETENTION_DAYS = 3;
+const DATABASE_EXECUTION_HISTORY_LIMIT = 1000;
 const EMPTY_SHEET_CONTENT: SheetContentJson = {
   type: "doc",
   content: [{ type: "paragraph" }],
@@ -333,8 +336,10 @@ export class DashboardBackend {
     const activeSheetId = sheets.some(
       (sheet) => sheet.sheetId === state?.active_sheet_id,
     )
-      ? state?.active_sheet_id ?? null
-      : (sheets.find((sheet) => sheet.isOpen)?.sheetId ?? sheets[0]?.sheetId ?? null);
+      ? (state?.active_sheet_id ?? null)
+      : (sheets.find((sheet) => sheet.isOpen)?.sheetId ??
+        sheets[0]?.sheetId ??
+        null);
 
     return { connectionId, sheets, activeSheetId };
   }
@@ -411,7 +416,11 @@ export class DashboardBackend {
            SET active_sheet_id = ?, updated_at = ?
            WHERE connection_id = ?`,
         )
-        .run(nextActive?.sheet_id ?? null, new Date().toISOString(), connectionId);
+        .run(
+          nextActive?.sheet_id ?? null,
+          new Date().toISOString(),
+          connectionId,
+        );
     }
   }
 
@@ -419,9 +428,7 @@ export class DashboardBackend {
     connectionId?: string,
   ): DatabaseExecutionRecord[] {
     this.pruneDatabaseExecutionHistory(connectionId);
-    const whereParts = [
-      `datetime(executed_at) >= datetime('now', '-${RETENTION_DAYS} days')`,
-    ];
+    const whereParts: string[] = [];
     const params: unknown[] = [];
     if (connectionId) {
       this.ensureDatabaseConnectionExists(connectionId);
@@ -432,9 +439,9 @@ export class DashboardBackend {
     const rows = this.db
       .prepare(
         `SELECT * FROM database_execution_history
-         WHERE ${whereParts.join(" AND ")}
+         ${whereParts.length > 0 ? `WHERE ${whereParts.join(" AND ")}` : ""}
          ORDER BY datetime(executed_at) DESC, rowid DESC
-         LIMIT 1000`,
+         ${connectionId ? `LIMIT ${DATABASE_EXECUTION_HISTORY_LIMIT}` : ""}`,
       )
       .all(...params) as DatabaseExecutionHistoryRow[];
     return rows.map(mapDatabaseExecutionHistoryRow);
@@ -753,6 +760,15 @@ export class DashboardBackend {
     }
 
     return { results };
+  }
+
+  exportDatabaseResult(
+    targetPath: string,
+    contentBase64: string,
+  ): DatabaseExportResult {
+    mkdirSync(dirname(targetPath), { recursive: true });
+    writeFileSync(targetPath, Buffer.from(contentBase64, "base64"));
+    return { success: true, path: targetPath };
   }
 
   getDashboardOverview(): ProjectDashboardSummary[] {
@@ -1578,6 +1594,7 @@ export class DashboardBackend {
         row_count INTEGER NOT NULL,
         rows_affected INTEGER,
         error_message TEXT,
+        execution_message TEXT,
         FOREIGN KEY(connection_id) REFERENCES database_connections(id)
       );
 
@@ -1595,6 +1612,7 @@ export class DashboardBackend {
 
     this.patchExistingActivityDatesToYesterday();
     this.ensureBuildRunCleanlinessColumn();
+    this.ensureDatabaseExecutionMessageColumn();
     this.pruneDatabaseExecutionHistory();
   }
 
@@ -1748,14 +1766,15 @@ export class DashboardBackend {
     const rowsAffected = result.rowsAffected ?? null;
     const rowCount =
       result.rowsFetched > 0 ? result.rowsFetched : (result.rowsAffected ?? 0);
+    const executionMessage = createDatabaseExecutionMessage(result);
 
     this.db
       .prepare(
         `INSERT INTO database_execution_history (
            id, executed_at, connection_id, connection_name, database_user,
            sql_statement, duration_ms, status, row_count, rows_affected,
-           error_message
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           error_message, execution_message
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -1769,28 +1788,51 @@ export class DashboardBackend {
         rowCount,
         rowsAffected,
         result.errorMessage ?? null,
+        executionMessage,
       );
     result.executionRecordId = id;
     result.executedAt = executedAt;
+    result.executionMessage = executionMessage;
     this.pruneDatabaseExecutionHistory(connection.id);
   }
 
   private pruneDatabaseExecutionHistory(connectionId?: string): void {
-    const whereParts = [
-      `datetime(executed_at) < datetime('now', '-${RETENTION_DAYS} days')`,
-    ];
-    const params: unknown[] = [];
     if (connectionId) {
-      whereParts.push("connection_id = ?");
-      params.push(connectionId);
+      this.db
+        .prepare(
+          `DELETE FROM database_execution_history
+           WHERE connection_id = ?
+             AND rowid NOT IN (
+               SELECT rowid
+               FROM database_execution_history
+               WHERE connection_id = ?
+               ORDER BY datetime(executed_at) DESC, rowid DESC
+               LIMIT ${DATABASE_EXECUTION_HISTORY_LIMIT}
+             )`,
+        )
+        .run(connectionId, connectionId);
+      return;
     }
 
-    this.db
-      .prepare(
-        `DELETE FROM database_execution_history
-         WHERE ${whereParts.join(" AND ")}`,
-      )
-      .run(...params);
+    const rows = this.db
+      .prepare("SELECT DISTINCT connection_id FROM database_execution_history")
+      .all() as Array<{ connection_id: string }>;
+    for (const row of rows) {
+      this.pruneDatabaseExecutionHistory(row.connection_id);
+    }
+  }
+
+  private ensureDatabaseExecutionMessageColumn(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(database_execution_history)")
+      .all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "execution_message")) {
+      this.db.exec(
+        "ALTER TABLE database_execution_history ADD COLUMN execution_message TEXT",
+      );
+    }
   }
 
   private nextProjectId(name: string, code: string): string {
@@ -3073,7 +3115,34 @@ function mapDatabaseExecutionHistoryRow(
     rows: row.row_count,
     rowsAffected: row.rows_affected ?? undefined,
     errorMessage: row.error_message ?? undefined,
+    message: row.execution_message ?? row.error_message ?? undefined,
   };
+}
+
+function createDatabaseExecutionMessage(
+  result: DatabaseStatementExecutionResult,
+): string {
+  if (result.status === "error") {
+    return result.errorMessage
+      ? `Failed: ${result.errorMessage}`
+      : "Execution failed.";
+  }
+
+  if (result.rowsFetched > 0) {
+    return `${result.rowsFetched} ${pluralize(
+      "row",
+      result.rowsFetched,
+    )} fetched in ${formatDurationMs(result.durationMs)}.`;
+  }
+
+  if (result.rowsAffected !== undefined) {
+    return `${result.rowsAffected} ${pluralize(
+      "row",
+      result.rowsAffected,
+    )} affected in ${formatDurationMs(result.durationMs)}.`;
+  }
+
+  return `Succeeded in ${formatDurationMs(result.durationMs)}.`;
 }
 
 function normalizeDatabaseConnection(
@@ -3720,6 +3789,10 @@ function formatDuration(totalSeconds: number): string {
 
 function formatDurationMs(durationMs: number): string {
   return `${Math.max(1, durationMs).toFixed(1)} ms`;
+}
+
+function pluralize(word: string, count: number): string {
+  return count === 1 ? word : `${word}s`;
 }
 
 function formatDate(value: string): string {
