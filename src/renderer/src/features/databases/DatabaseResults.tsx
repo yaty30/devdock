@@ -15,10 +15,10 @@ import {
   ChevronRight,
   Copy,
   GitCompare,
-  LoaderCircle,
   LucideSquircle,
   SquareDashed,
 } from "lucide-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Modal } from "../../components/dialogs/Modal";
 import type { DatabaseQueryValue, DatabaseTable } from "../../types";
 import { formatCompactTime } from "./databaseFormatters";
@@ -65,7 +65,8 @@ type ResultSnackbarState = {
 };
 
 const SEQ_RESULT_COLUMN_KEY = "__ui_seq";
-const RESULT_ROW_BATCH_SIZE = 100;
+const RESULT_ROW_ESTIMATED_HEIGHT = 37;
+const RESULT_ROW_OVERSCAN = 10;
 
 export function ResultTabsPanel({
   tabs,
@@ -149,8 +150,6 @@ function ResultGrid({
   const [draftColumnWidths, setDraftColumnWidths] = useState<Partial<
     Record<ResultColumnKey, number>
   > | null>(null);
-  const [visibleRowCount, setVisibleRowCount] = useState(RESULT_ROW_BATCH_SIZE);
-  const [loadingMoreRows, setLoadingMoreRows] = useState(false);
   const [expandedRowIndex, setExpandedRowIndex] = useState<number | null>(null);
   const [selectedCell, setSelectedCell] = useState<SelectedResultCell | null>(
     null,
@@ -165,8 +164,13 @@ function ResultGrid({
   );
   const [snackbar, setSnackbar] = useState<ResultSnackbarState | null>(null);
   const hasColumns = columns.length > 0;
-  const visibleRows = rows.slice(0, visibleRowCount);
-  const hasMoreRows = visibleRowCount < rows.length;
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => resultScrollRef.current,
+    estimateSize: () => RESULT_ROW_ESTIMATED_HEIGHT,
+    overscan: RESULT_ROW_OVERSCAN,
+  });
+  const virtualRows = rowVirtualizer.getVirtualItems();
   const displayColumns = useMemo(
     () =>
       hasColumns && rows.length > 0
@@ -218,7 +222,6 @@ function ResultGrid({
   }, []);
 
   useEffect(() => {
-    setVisibleRowCount(RESULT_ROW_BATCH_SIZE);
     setExpandedRowIndex(null);
     setSelectedCell(null);
     setRowContextMenu(null);
@@ -344,33 +347,6 @@ function ResultGrid({
     onColumnWidthsChange(next);
   };
 
-  function loadMoreRows(): void {
-    if (loadingMoreRows || !hasMoreRows) {
-      return;
-    }
-
-    setLoadingMoreRows(true);
-    window.setTimeout(() => {
-      setVisibleRowCount((current) =>
-        Math.min(rows.length, current + RESULT_ROW_BATCH_SIZE),
-      );
-      setLoadingMoreRows(false);
-    }, 80);
-  }
-
-  function handleResultScroll(): void {
-    const element = resultScrollRef.current;
-    if (!element || loadingMoreRows || !hasMoreRows) {
-      return;
-    }
-
-    const distanceToBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight;
-    if (distanceToBottom < 180) {
-      loadMoreRows();
-    }
-  }
-
   function toggleRowExpanded(rowIndex: number): void {
     setExpandedRowIndex((current) => (current === rowIndex ? null : rowIndex));
   }
@@ -451,7 +427,6 @@ function ResultGrid({
       <div
         className="database-result-scroll"
         ref={resultScrollRef}
-        onScroll={handleResultScroll}
       >
         {hasColumns ? (
           <table
@@ -497,7 +472,17 @@ function ResultGrid({
                   <td colSpan={displayColumns.length}>No records found</td>
                 </tr>
               ) : null}
-              {visibleRows.map((row, rowIndex) => {
+              {rows.length > 0 && virtualRows.length > 0 ? (
+                <tr aria-hidden="true">
+                  <td
+                    colSpan={displayColumns.length}
+                    style={{ height: `${virtualRows[0]?.start ?? 0}px`, padding: 0 }}
+                  />
+                </tr>
+              ) : null}
+              {virtualRows.map((virtualRow) => {
+                const rowIndex = virtualRow.index;
+                const row = rows[rowIndex];
                 const expanded = expandedRowIndex === rowIndex;
                 return (
                   <Fragment key={`result-row-${rowIndex}`}>
@@ -586,14 +571,23 @@ function ResultGrid({
                   </Fragment>
                 );
               })}
+              {rows.length > 0 && virtualRows.length > 0 ? (
+                <tr aria-hidden="true">
+                  <td
+                    colSpan={displayColumns.length}
+                    style={{
+                      height: `${Math.max(
+                        0,
+                        rowVirtualizer.getTotalSize() -
+                          (virtualRows[virtualRows.length - 1]?.end ?? 0),
+                      )}px`,
+                      padding: 0,
+                    }}
+                  />
+                </tr>
+              ) : null}
             </tbody>
           </table>
-        ) : null}
-        {loadingMoreRows ? (
-          <div className="database-result-loading-more">
-            <LoaderCircle className="button-spinner" size={15} />
-            <span>Loading more rows...</span>
-          </div>
         ) : null}
         {!hasColumns && rows.length === 0 ? (
           <p className="database-empty-state">No records found.</p>
