@@ -41,6 +41,7 @@ type ToastTone = "valid" | "invalid";
 const MESSAGE_PAGE_SIZE = 50;
 const RECONNECT_BASE_MS = 900;
 const RECONNECT_MAX_MS = 10000;
+const USER_REFRESH_MS = 5000;
 const URL_PATTERN = /(https?:\/\/[^\s<]+[^\s<.,;:!?])/gi;
 
 export function ChatFeature({
@@ -181,6 +182,21 @@ export function ChatFeature({
       setProfileSettingsOpen(true);
     }
   }, [config, drawerOpen]);
+
+  useEffect(() => {
+    if (!drawerOpen || !config || !hasChatProfileName(config.profile)) {
+      return undefined;
+    }
+    if (connectionState === "offline") {
+      return undefined;
+    }
+
+    void loadUsers(config).catch((error) => console.error(error));
+    const refreshId = window.setInterval(() => {
+      void loadUsers(config).catch((error) => console.error(error));
+    }, USER_REFRESH_MS);
+    return () => window.clearInterval(refreshId);
+  }, [config, connectionState, drawerOpen]);
 
   useEffect(() => {
     if (!drawerOpen || !activeConversationId) return;
@@ -606,6 +622,17 @@ export function ChatFeature({
     });
   }
 
+  async function openNewConversation(): Promise<void> {
+    if (!requireChatProfile() || !config) return;
+    try {
+      await loadUsers(config);
+      setNewConversationOpen(true);
+    } catch (error) {
+      console.error(error);
+      onToast("Could not load chat users.", "invalid");
+    }
+  }
+
   function requireChatProfile(): boolean {
     if (hasChatProfileName(config?.profile ?? null)) {
       return true;
@@ -686,11 +713,7 @@ export function ChatFeature({
               type="button"
               aria-label="New conversation"
               title="New conversation"
-              onClick={() => {
-                if (requireChatProfile()) {
-                  setNewConversationOpen(true);
-                }
-              }}
+              onClick={() => void openNewConversation()}
               disabled={!config || connectionState === "offline"}
             >
               <Plus size={17} />

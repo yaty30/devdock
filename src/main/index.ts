@@ -14,6 +14,7 @@ import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DashboardBackend } from "./dashboardBackend";
 import { ChatService } from "./chatService";
+import os from "os";
 import type {
   BuildQueryOptions,
   DatabaseConnection,
@@ -47,9 +48,16 @@ const DEFAULT_CHAT_HOST = process.env.IVS_DASHBOARD_CHAT_HOST ?? "127.0.0.1";
 const DEFAULT_CHAT_PORT = Number(
   process.env.IVS_DASHBOARD_CHAT_PORT ?? "43781",
 );
+// const DEFAULT_CHAT_ROOT =
+//   process.env.IVS_DASHBOARD_CHAT_ROOT ??
+//   // "L:\\ABS\\JamesYip\\Host\\Helper\\IVS-Dashboard\\chat";
+//   String.raw`\\DESKTOP-Q97PLV1\chat`;
+
 const DEFAULT_CHAT_ROOT =
   process.env.IVS_DASHBOARD_CHAT_ROOT ??
-  "L:\\ABS\\JamesYip\\Host\\Helper\\IVS-Dashboard\\chat";
+  (os.platform() === "win32"
+    ? String.raw`\\DESKTOP-Q97PLV1\chat`
+    : "/Volumes/chat");
 
 function getBackend(): DashboardBackend {
   if (!backend) {
