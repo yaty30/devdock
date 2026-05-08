@@ -1,6 +1,10 @@
-import { BetweenHorizonalStart, SquareMousePointer } from "lucide-react";
+import {
+  BetweenHorizonalStart,
+  CircleArrowOutUpRight,
+  SquareMousePointer,
+} from "lucide-react";
 import type { DatabaseTable } from "../../types";
-import type { SheetContextMenu } from "./DatabaseWorkspace";
+import type { DatabaseObjectType, SheetContextMenu } from "./DatabaseWorkspace";
 
 export function SheetContextMenuView({
   menu,
@@ -20,9 +24,14 @@ export function SheetContextMenuView({
   onInsertTableTemplate: (table: DatabaseTable) => void;
   onOpenTableInNewTab: (table: DatabaseTable) => void;
   onCreateTemplateSheet: (
-    objectType: "view" | "procedure" | "function" | "trigger" | "index",
+    objectType: DatabaseObjectType,
+    table?: DatabaseTable,
   ) => void;
-}): JSX.Element {
+}): JSX.Element | null {
+  if (menu.kind === "object-group") {
+    return null;
+  }
+
   return (
     <div
       className="database-context-menu"
@@ -39,6 +48,14 @@ export function SheetContextMenuView({
           <button
             type="button"
             role="menuitem"
+            onClick={() => onOpenTableInNewTab(menu.table)}
+          >
+            <CircleArrowOutUpRight size={13} />
+            Open in new tab
+          </button>
+          <button
+            type="button"
+            role="menuitem"
             onClick={() => onSelectTable(menu.table)}
           >
             <SquareMousePointer size={13} /> SELECT{" "}
@@ -52,18 +69,7 @@ export function SheetContextMenuView({
             <BetweenHorizonalStart size={13} />
             INSERT INTO {formatQualifiedObjectName(menu.table)}
           </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => onOpenTableInNewTab(menu.table)}
-          >
-            Open in new tab
-          </button>
         </>
-      ) : menu.kind === "object-group" ? (
-        <button type="button" role="menuitem" onClick={() => onCreateTemplateSheet(menu.objectType)}>
-          Add new {menu.objectType}
-        </button>
       ) : (
         <>
           <button

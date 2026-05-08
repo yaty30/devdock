@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   BarChart3,
   Boxes,
@@ -8,8 +8,10 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
+  PlugZap,
   Plus,
   Sun,
+  Unplug,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
 import type {
@@ -29,6 +31,8 @@ export function Sidebar({
   collapsed,
   onProjectChange,
   onDatabaseConnectionChange,
+  onDatabaseConnect,
+  onDatabaseDisconnect,
   onSectionChange,
   onAddProject,
   onAddDatabaseConnection,
@@ -44,6 +48,8 @@ export function Sidebar({
   collapsed: boolean;
   onProjectChange: (project: Project) => void;
   onDatabaseConnectionChange: (connection: DatabaseConnection) => void;
+  onDatabaseConnect: (connection: DatabaseConnection) => void;
+  onDatabaseDisconnect: (connection: DatabaseConnection) => void;
   onSectionChange: (section: AppSection) => void;
   onAddProject: () => void;
   onAddDatabaseConnection: () => void;
@@ -52,6 +58,34 @@ export function Sidebar({
 }): JSX.Element {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [databasesOpen, setDatabasesOpen] = useState(true);
+  const [databaseContextMenu, setDatabaseContextMenu] = useState<{
+    connection: DatabaseConnection;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!databaseContextMenu) {
+      return undefined;
+    }
+
+    function closeContextMenu(): void {
+      setDatabaseContextMenu(null);
+    }
+
+    function closeOnEscape(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        setDatabaseContextMenu(null);
+      }
+    }
+
+    window.addEventListener("pointerdown", closeContextMenu);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeContextMenu);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [databaseContextMenu]);
 
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
@@ -178,6 +212,14 @@ export function Sidebar({
                 key={connection.id}
                 title={formatDatabaseConnectionTooltip(connection)}
                 aria-label={formatDatabaseConnectionTooltip(connection)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setDatabaseContextMenu({
+                    connection,
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
+                }}
               >
                 <button
                   className="database-item-main"
@@ -222,6 +264,44 @@ export function Sidebar({
           ) : null}
         </div>
       </nav>
+
+      {databaseContextMenu ? (
+        <div
+          className="database-context-menu sidebar-database-context-menu"
+          style={{
+            left: databaseContextMenu.x,
+            top: databaseContextMenu.y,
+          }}
+          role="menu"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {databaseContextMenu.connection.status === "connected" ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onDatabaseDisconnect(databaseContextMenu.connection);
+                setDatabaseContextMenu(null);
+              }}
+            >
+              <Unplug size={14} />
+              Disconnect
+            </button>
+          ) : (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onDatabaseConnect(databaseContextMenu.connection);
+                setDatabaseContextMenu(null);
+              }}
+            >
+              <PlugZap size={14} />
+              Connect
+            </button>
+          )}
+        </div>
+      ) : null}
 
       <div className="sidebar-footer">
         {!collapsed ? (

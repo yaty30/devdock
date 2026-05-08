@@ -51,6 +51,19 @@ function registerIpc(): void {
         getBackend().saveDatabaseConnection(connection),
       ),
   );
+  ipcMain.handle(
+    "database:updateConnectionSettings",
+    (
+      _event,
+      connectionId: string,
+      updates: Parameters<
+        DashboardBackend["updateDatabaseConnectionSettings"]
+      >[1],
+    ) =>
+      withLoggedErrors("database:updateConnectionSettings", () =>
+        getBackend().updateDatabaseConnectionSettings(connectionId, updates),
+      ),
+  );
   ipcMain.handle("database:deleteConnection", (_event, connectionId: string) =>
     withLoggedErrors("database:deleteConnection", () =>
       getBackend().deleteDatabaseConnection(connectionId),

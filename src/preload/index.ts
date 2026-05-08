@@ -16,6 +16,12 @@ const api: DashboardApi = {
   getDatabaseConnections: () => ipcRenderer.invoke("database:getConnections"),
   saveDatabaseConnection: (connection) =>
     ipcRenderer.invoke("database:saveConnection", connection),
+  updateDatabaseConnectionSettings: (connectionId, updates) =>
+    ipcRenderer.invoke(
+      "database:updateConnectionSettings",
+      connectionId,
+      updates,
+    ),
   deleteDatabaseConnection: (connectionId) =>
     ipcRenderer.invoke("database:deleteConnection", connectionId),
   testDatabaseConnection: (connection) =>

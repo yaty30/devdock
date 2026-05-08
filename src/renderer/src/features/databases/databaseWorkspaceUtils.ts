@@ -56,8 +56,14 @@ export function createQuerySheetFromPersisted(
 export function sheetStateFromPersisted(
   persistedState: DatabaseWorksheetState,
 ): SheetConnectionState {
-  const sheets = persistedState.sheets.map(createQuerySheetFromPersisted);
+  const sheets = persistedState.sheets
+    .filter(isPersistableWorksheet)
+    .map(createQuerySheetFromPersisted);
+  if (sheets.length === 0) {
+    return createInitialSheetState();
+  }
   const openSheetIds = persistedState.sheets
+    .filter(isPersistableWorksheet)
     .filter((sheet) => sheet.isOpen)
     .map((sheet) => sheet.sheetId);
   const activeSheetId =
@@ -81,16 +87,18 @@ export function serializePersistedWorksheetState(
   connectionId: string,
   state: SheetConnectionState,
 ): DatabaseWorksheetState {
-  const persistedSheets = state.sheets.map((sheet) => ({
-    connectionId,
-    sheetId: sheet.id,
-    sheetName: sheet.name.trim() || "Untitled",
-    sql: sheet.sql,
-    savedAt: new Date().toISOString(),
-    isOpen: state.openSheetIds.includes(sheet.id),
-    sheetMode: sheet.sheetMode,
-    objectBinding: sheet.objectBinding,
-  }));
+  const persistedSheets = state.sheets
+    .filter(isPersistableSheet)
+    .map((sheet) => ({
+      connectionId,
+      sheetId: sheet.id,
+      sheetName: sheet.name.trim() || "Untitled",
+      sql: sheet.sql,
+      savedAt: new Date().toISOString(),
+      isOpen: state.openSheetIds.includes(sheet.id),
+      sheetMode: sheet.sheetMode,
+      objectBinding: sheet.objectBinding,
+    }));
   const activeSheetId = persistedSheets.some(
     (sheet) => sheet.sheetId === state.activeSheetId,
   )
@@ -103,11 +111,30 @@ export function serializePersistedWorksheetState(
 export function worksheetStateNeedsPersist(
   state: SheetConnectionState,
 ): boolean {
-  return state.sheets.some(
-    (sheet) =>
+  return state.sheets.some((sheet) => {
+    if (!isPersistableSheet(sheet)) {
+      return false;
+    }
+
+    return (
       sheet.savedAt === null ||
       sheet.name !== sheet.savedName ||
-      sheet.sql !== sheet.savedSql,
+      sheet.sql !== sheet.savedSql
+    );
+  });
+}
+
+export function isPersistableSheet(sheet: QuerySheet): boolean {
+  return (
+    sheet.sheetMode !== "object-backed" &&
+    sheet.sheetMode !== "transient-preview"
+  );
+}
+
+function isPersistableWorksheet(sheet: DatabaseWorksheet): boolean {
+  return (
+    sheet.sheetMode !== "object-backed" &&
+    sheet.sheetMode !== "transient-preview"
   );
 }
 
@@ -126,6 +153,10 @@ export function markWorksheetStateSnapshotSaved(
   return {
     ...current,
     sheets: current.sheets.map((sheet) => {
+      if (!isPersistableSheet(sheet)) {
+        return sheet;
+      }
+
       const snapshotSheet = snapshotSheets.get(sheet.id);
       if (
         !snapshotSheet ||
@@ -246,6 +277,12 @@ export function normalizeDatabaseMetadata(
     tables: Array.isArray(metadata.tables)
       ? metadata.tables.map((table) => ({
           ...table,
+          estimatedRowCount:
+            typeof table.estimatedRowCount === "number"
+              ? table.estimatedRowCount
+              : table.estimatedRowCount === null
+                ? null
+                : undefined,
           columns: Array.isArray(table.columns) ? table.columns : [],
           indexes: Array.isArray(table.indexes) ? table.indexes : [],
           triggers: Array.isArray(table.triggers) ? table.triggers : [],
@@ -457,6 +494,18 @@ export function hasSuccessfulSchemaChange(
     (result) =>
       result.status === "success" &&
       isSchemaChangingStatement(result.statement),
+  );
+}
+
+export function hasSuccessfulRowCountChange(
+  results: DatabaseStatementExecutionResult[],
+): boolean {
+  return results.some(
+    (result) =>
+      result.status === "success" &&
+      ((result.rowsAffected ?? 0) > 0 ||
+        /^\s*truncate(?:\s+table)?\s+/i.test(result.statement)) &&
+      /^\s*(insert|delete|truncate|load\s+data)\b/i.test(result.statement),
   );
 }
 

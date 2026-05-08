@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Play } from "lucide-react";
+import { Play, Redo2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import type { DatabaseConnection, DatabaseExecutionRecord } from "../../types";
 import { formatCompactTime, formatSqlForDisplay } from "./databaseFormatters";
@@ -155,7 +155,7 @@ export function DatabaseMonitor({
                       title="Re-run query"
                       onClick={() => onRerun(entry)}
                     >
-                      <Play size={14} />
+                      <Redo2 size={14} />
                     </button>
                   </td>
                 </tr>

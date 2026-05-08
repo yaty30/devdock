@@ -34,6 +34,7 @@ type ResultColumnDragState = {
   key: ResultColumnKey;
   startX: number;
   startWidth: number;
+  nextWidth: number;
 };
 
 type ResultRowContextMenu = {
@@ -51,6 +52,11 @@ type ResultCompareSelection = {
 type ResultCompareState = {
   base: ResultCompareSelection;
   target: ResultCompareSelection;
+};
+
+type SelectedResultCell = {
+  rowIndex: number;
+  columnKey: ResultColumnKey;
 };
 
 type ResultSnackbarState = {
@@ -138,10 +144,17 @@ function ResultGrid({
 }): JSX.Element {
   const resultScrollRef = useRef<HTMLDivElement>(null);
   const columnDragRef = useRef<ResultColumnDragState | null>(null);
+  const columnResizeFrameRef = useRef<number | null>(null);
   const [panelWidth, setPanelWidth] = useState(0);
+  const [draftColumnWidths, setDraftColumnWidths] = useState<Partial<
+    Record<ResultColumnKey, number>
+  > | null>(null);
   const [visibleRowCount, setVisibleRowCount] = useState(RESULT_ROW_BATCH_SIZE);
   const [loadingMoreRows, setLoadingMoreRows] = useState(false);
   const [expandedRowIndex, setExpandedRowIndex] = useState<number | null>(null);
+  const [selectedCell, setSelectedCell] = useState<SelectedResultCell | null>(
+    null,
+  );
   const [rowContextMenu, setRowContextMenu] =
     useState<ResultRowContextMenu | null>(null);
   const [compareBase, setCompareBase] = useState<ResultCompareSelection | null>(
@@ -162,8 +175,13 @@ function ResultGrid({
     [columns, hasColumns, rows.length],
   );
   const calculatedColumns = useMemo(
-    () => calculateResultColumnWidths(displayColumns, panelWidth, columnWidths),
-    [displayColumns, panelWidth, columnWidths],
+    () =>
+      calculateResultColumnWidths(
+        displayColumns,
+        panelWidth,
+        draftColumnWidths ?? columnWidths,
+      ),
+    [displayColumns, panelWidth, columnWidths, draftColumnWidths],
   );
   const totalColumnWidth = calculatedColumns.reduce(
     (total, column) => total + column.width,
@@ -192,8 +210,17 @@ function ResultGrid({
   }, []);
 
   useEffect(() => {
+    return () => {
+      if (columnResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(columnResizeFrameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     setVisibleRowCount(RESULT_ROW_BATCH_SIZE);
     setExpandedRowIndex(null);
+    setSelectedCell(null);
     setRowContextMenu(null);
     setCompareBase(null);
     setCompareState(null);
@@ -248,7 +275,11 @@ function ResultGrid({
       startWidth:
         calculatedColumns.find((item) => item.key === column.key)?.width ??
         column.minWidth,
+      nextWidth:
+        calculatedColumns.find((item) => item.key === column.key)?.width ??
+        column.minWidth,
     };
+    setDraftColumnWidths(columnWidths);
   };
 
   const resizeColumn = (event: PointerEvent<HTMLSpanElement>): void => {
@@ -262,12 +293,25 @@ function ResultGrid({
       return;
     }
 
-    onColumnWidthsChange({
-      ...columnWidths,
-      [drag.key]: Math.max(
-        column.minWidth,
-        drag.startWidth + event.clientX - drag.startX,
-      ),
+    drag.nextWidth = Math.max(
+      column.minWidth,
+      drag.startWidth + event.clientX - drag.startX,
+    );
+
+    if (columnResizeFrameRef.current !== null) {
+      return;
+    }
+
+    columnResizeFrameRef.current = window.requestAnimationFrame(() => {
+      columnResizeFrameRef.current = null;
+      const latestDrag = columnDragRef.current;
+      if (!latestDrag) {
+        return;
+      }
+      setDraftColumnWidths({
+        ...columnWidths,
+        [latestDrag.key]: latestDrag.nextWidth,
+      });
     });
   };
 
@@ -278,12 +322,25 @@ function ResultGrid({
     ) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
+    const drag = columnDragRef.current;
+    if (columnResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(columnResizeFrameRef.current);
+      columnResizeFrameRef.current = null;
+    }
     columnDragRef.current = null;
+    setDraftColumnWidths(null);
+    if (drag) {
+      onColumnWidthsChange({
+        ...columnWidths,
+        [drag.key]: drag.nextWidth,
+      });
+    }
   };
 
   const resetColumnWidth = (column: ResultColumn): void => {
     const next = { ...columnWidths };
     delete next[column.key];
+    setDraftColumnWidths(null);
     onColumnWidthsChange(next);
   };
 
@@ -451,46 +508,66 @@ function ResultGrid({
                           : ""
                       }`}
                       key={`row-${rowIndex}`}
-                      onClick={() => toggleRowExpanded(rowIndex)}
                       onContextMenu={(event) =>
                         openRowContextMenu(event, row, rowIndex)
                       }
                     >
-                      {displayColumns.map((column) => (
-                        <td key={`${rowIndex}-${column.key}`}>
-                          {column.key === SEQ_RESULT_COLUMN_KEY ? (
-                            <span className="database-result-seq-cell">
-                              <button
-                                className="database-row-expand-button"
-                                type="button"
-                                aria-label={
-                                  expanded
-                                    ? `Collapse row ${rowIndex + 1}`
-                                    : `Expand row ${rowIndex + 1}`
-                                }
-                                title={
-                                  expanded
-                                    ? `Collapse row ${rowIndex + 1}`
-                                    : `Expand row ${rowIndex + 1}`
-                                }
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  toggleRowExpanded(rowIndex);
-                                }}
-                              >
-                                {expanded ? (
-                                  <ChevronDown size={13} />
-                                ) : (
-                                  <ChevronRight size={13} />
-                                )}
-                              </button>
-                              <span>{rowIndex + 1}</span>
-                            </span>
-                          ) : (
-                            renderResultValue(row[column.key])
-                          )}
-                        </td>
-                      ))}
+                      {displayColumns.map((column) => {
+                        const selected =
+                          selectedCell?.rowIndex === rowIndex &&
+                          selectedCell.columnKey === column.key;
+                        return (
+                          <td
+                            className={
+                              column.key !== SEQ_RESULT_COLUMN_KEY
+                                ? `database-result-value-cell${selected ? " selected" : ""}`
+                                : undefined
+                            }
+                            key={`${rowIndex}-${column.key}`}
+                            onClick={
+                              column.key === SEQ_RESULT_COLUMN_KEY
+                                ? undefined
+                                : () =>
+                                    setSelectedCell({
+                                      rowIndex,
+                                      columnKey: column.key,
+                                    })
+                            }
+                          >
+                            {column.key === SEQ_RESULT_COLUMN_KEY ? (
+                              <span className="database-result-seq-cell">
+                                <button
+                                  className="database-row-expand-button"
+                                  type="button"
+                                  aria-label={
+                                    expanded
+                                      ? `Collapse row ${rowIndex + 1}`
+                                      : `Expand row ${rowIndex + 1}`
+                                  }
+                                  title={
+                                    expanded
+                                      ? `Collapse row ${rowIndex + 1}`
+                                      : `Expand row ${rowIndex + 1}`
+                                  }
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    toggleRowExpanded(rowIndex);
+                                  }}
+                                >
+                                  {expanded ? (
+                                    <ChevronDown size={13} />
+                                  ) : (
+                                    <ChevronRight size={13} />
+                                  )}
+                                </button>
+                                <span>{rowIndex + 1}</span>
+                              </span>
+                            ) : (
+                              renderResultValue(row[column.key])
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                     {expanded ? (
                       <tr
@@ -601,10 +678,14 @@ function ResultRowDetails({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   function copyValue(columnKey: string, value: DatabaseQueryValue): void {
-    void navigator.clipboard?.writeText(formatPlainResultValue(value))
+    void navigator.clipboard
+      ?.writeText(formatPlainResultValue(value))
       .then(() => {
         setCopiedKey(columnKey);
-        setTimeout(() => setCopiedKey((k) => (k === columnKey ? null : k)), 1500);
+        setTimeout(
+          () => setCopiedKey((k) => (k === columnKey ? null : k)),
+          1500,
+        );
       })
       .catch(() => undefined);
   }

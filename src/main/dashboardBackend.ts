@@ -211,6 +211,11 @@ export class DashboardBackend {
   private readonly tailStates = new Map<string, TailState>();
   private readonly statusTimers = new Map<string, NodeJS.Timeout>();
   private readonly logBuffer = new Map<string, LogLine[]>();
+  private readonly estimatedRowCountOverrides = new Map<string, number>();
+  private readonly estimatedRowCountSnapshots = new Map<
+    string,
+    number | null
+  >();
   private logFlushTimer: NodeJS.Timeout | null = null;
 
   constructor(userDataPath: string, repoRoot: string) {
@@ -294,6 +299,40 @@ export class DashboardBackend {
       );
 
     return saved;
+  }
+
+  updateDatabaseConnectionSettings(
+    connectionId: string,
+    updates: Partial<
+      Pick<
+        DatabaseConnection,
+        "autoConnect" | "status" | "latency" | "uptime" | "activeSessions"
+      >
+    >,
+  ): DatabaseConnection {
+    const row = this.db
+      .prepare(
+        `SELECT id, name, connection_json, created_at, updated_at
+         FROM database_connections
+         WHERE id = ?`,
+      )
+      .get(connectionId) as DatabaseConnectionRow | undefined;
+    if (!row) {
+      throw new Error("Database connection not found.");
+    }
+
+    const current = this.mapDatabaseConnection(row);
+    const next = normalizeDatabaseConnection({ ...current, ...updates });
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `UPDATE database_connections
+         SET connection_json = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(JSON.stringify(next), now, next.id);
+
+    return next;
   }
 
   deleteDatabaseConnection(connectionId: string): void {
@@ -519,6 +558,16 @@ export class DashboardBackend {
          ORDER BY TABLE_SCHEMA, TABLE_NAME`,
         relevantSchemas,
       );
+      const [tableCountRows] = await mysqlConnection.query<RowDataPacket[]>(
+        `SELECT TABLE_SCHEMA AS tableSchema,
+                TABLE_NAME AS tableName,
+                TABLE_ROWS AS row_count
+         FROM INFORMATION_SCHEMA.TABLES
+         WHERE TABLE_SCHEMA IN (${schemaPlaceholders})
+           AND TABLE_TYPE = 'BASE TABLE'
+         ORDER BY TABLE_SCHEMA, TABLE_NAME`,
+        relevantSchemas,
+      );
       const [viewRows] = await mysqlConnection.query<RowDataPacket[]>(
         `SELECT TABLE_SCHEMA AS tableSchema, TABLE_NAME AS tableName
          FROM INFORMATION_SCHEMA.VIEWS
@@ -602,6 +651,44 @@ export class DashboardBackend {
         string,
         DatabaseMetadata["tables"][number]["partitions"]
       >();
+      const estimatedRowCountsByTableKey = new Map<string, number | null>();
+
+      for (const row of tableCountRows) {
+        const tableSchema = String(row.tableSchema);
+        const tableName = String(row.tableName);
+        const tableKey = `${tableSchema}.${tableName}`;
+        const rowCount = row.row_count;
+        const informationSchemaCount =
+          rowCount === null || rowCount === undefined ? null : Number(rowCount);
+        const cacheKey = createEstimatedRowCountCacheKey(
+          connection,
+          tableSchema,
+          tableName,
+        );
+        const estimatedRowCount =
+          this.estimatedRowCountOverrides.get(cacheKey) ??
+          informationSchemaCount;
+        estimatedRowCountsByTableKey.set(tableKey, estimatedRowCount);
+        this.estimatedRowCountSnapshots.set(cacheKey, estimatedRowCount);
+      }
+
+      for (const row of tableRows) {
+        const tableSchema = String(row.tableSchema);
+        const tableName = String(row.tableName);
+        const tableKey = `${tableSchema}.${tableName}`;
+        if (estimatedRowCountsByTableKey.has(tableKey)) {
+          continue;
+        }
+        const cacheKey = createEstimatedRowCountCacheKey(
+          connection,
+          tableSchema,
+          tableName,
+        );
+        const estimatedRowCount =
+          this.estimatedRowCountOverrides.get(cacheKey) ?? null;
+        estimatedRowCountsByTableKey.set(tableKey, estimatedRowCount);
+        this.estimatedRowCountSnapshots.set(cacheKey, estimatedRowCount);
+      }
 
       for (const row of columnRows) {
         const tableKey = `${row.tableSchema}.${row.tableName}`;
@@ -661,6 +748,9 @@ export class DashboardBackend {
         tables: tableRows.map((row) => ({
           schema: String(row.tableSchema),
           name: String(row.tableName),
+          estimatedRowCount: estimatedRowCountsByTableKey.get(
+            `${row.tableSchema}.${row.tableName}`,
+          ),
           columns:
             columnsByTable.get(`${row.tableSchema}.${row.tableName}`) ?? [],
           indexes: Array.from(
@@ -737,6 +827,13 @@ export class DashboardBackend {
             rowsFetched: normalizedRows.length,
             rowsAffected: resultHeader?.affectedRows,
           };
+          if (resultHeader?.affectedRows !== undefined) {
+            this.updateEstimatedRowCountOverride(
+              connection,
+              trimmedStatement,
+              resultHeader.affectedRows,
+            );
+          }
           this.recordDatabaseExecution(connection, result);
           results.push(result);
         } catch (error) {
@@ -760,6 +857,49 @@ export class DashboardBackend {
     }
 
     return { results };
+  }
+
+  private updateEstimatedRowCountOverride(
+    connection: DatabaseConnection,
+    statement: string,
+    affectedRows: number,
+  ): void {
+    const mutation = parseRowCountMutation(statement);
+    if (!mutation) {
+      return;
+    }
+
+    const tableSchema =
+      mutation.schema ??
+      connection.database?.trim() ??
+      connection.schema?.trim() ??
+      "";
+    if (!tableSchema || !mutation.table) {
+      return;
+    }
+
+    const cacheKey = createEstimatedRowCountCacheKey(
+      connection,
+      tableSchema,
+      mutation.table,
+    );
+    const currentCount =
+      this.estimatedRowCountOverrides.get(cacheKey) ??
+      this.estimatedRowCountSnapshots.get(cacheKey);
+
+    if (mutation.kind === "truncate") {
+      this.estimatedRowCountOverrides.set(cacheKey, 0);
+      this.estimatedRowCountSnapshots.set(cacheKey, 0);
+      return;
+    }
+
+    if (currentCount === null || currentCount === undefined) {
+      return;
+    }
+
+    const nextCount = Math.max(0, currentCount + affectedRows * mutation.delta);
+    this.estimatedRowCountOverrides.set(cacheKey, nextCount);
+    this.estimatedRowCountSnapshots.set(cacheKey, nextCount);
   }
 
   exportDatabaseResult(
@@ -3168,6 +3308,7 @@ function normalizeDatabaseConnection(
     schema,
     password: connection.password,
     savePassword: connection.savePassword ?? true,
+    autoConnect: connection.autoConnect ?? false,
     connectionTimeoutMs: connection.connectionTimeoutMs ?? 10000,
     database,
     sslMode: connection.sslMode ?? "disabled",
@@ -3181,6 +3322,108 @@ function normalizeDatabaseConnection(
     uptime: connection.uptime || "Not connected",
     activeSessions: connection.activeSessions ?? 0,
   };
+}
+
+function createEstimatedRowCountCacheKey(
+  connection: DatabaseConnection,
+  schema: string,
+  table: string,
+): string {
+  return [connection.id, schema, table]
+    .map((part) => part.trim().toLowerCase())
+    .join(":");
+}
+
+type RowCountMutation = {
+  kind: "insert" | "delete" | "truncate" | "load";
+  delta: number;
+  schema?: string;
+  table: string;
+};
+
+function parseRowCountMutation(statement: string): RowCountMutation | null {
+  const targetPattern =
+    '((?:`[^`]+`|\\"[^\\"]+\\"|[A-Za-z0-9_$]+)(?:\\s*\\.\\s*(?:`[^`]+`|\\"[^\\"]+\\"|[A-Za-z0-9_$]+))?)';
+  const patterns: Array<{
+    kind: RowCountMutation["kind"];
+    delta: number;
+    regex: RegExp;
+  }> = [
+    {
+      kind: "insert",
+      delta: 1,
+      regex: new RegExp(
+        `^\\s*insert\\s+(?:ignore\\s+)?(?:into\\s+)?${targetPattern}`,
+        "i",
+      ),
+    },
+    {
+      kind: "delete",
+      delta: -1,
+      regex: new RegExp(`^\\s*delete\\s+from\\s+${targetPattern}`, "i"),
+    },
+    {
+      kind: "truncate",
+      delta: 0,
+      regex: new RegExp(`^\\s*truncate(?:\\s+table)?\\s+${targetPattern}`, "i"),
+    },
+    {
+      kind: "load",
+      delta: 1,
+      regex: new RegExp(
+        `^\\s*load\\s+data[\\s\\S]*?\\s+into\\s+table\\s+${targetPattern}`,
+        "i",
+      ),
+    },
+  ];
+
+  for (const pattern of patterns) {
+    const match = statement.match(pattern.regex);
+    if (!match?.[1]) {
+      continue;
+    }
+
+    const qualifiedName = parseQualifiedTableName(match[1]);
+    if (!qualifiedName) {
+      return null;
+    }
+
+    return { kind: pattern.kind, delta: pattern.delta, ...qualifiedName };
+  }
+
+  return null;
+}
+
+function parseQualifiedTableName(
+  value: string,
+): { schema?: string; table: string } | null {
+  const parts = value
+    .split(/\s*\.\s*/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map(unquoteSqlIdentifier);
+
+  if (parts.length === 1) {
+    return { table: parts[0] };
+  }
+
+  if (parts.length === 2) {
+    return { schema: parts[0], table: parts[1] };
+  }
+
+  return null;
+}
+
+function unquoteSqlIdentifier(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith("`") && trimmed.endsWith("`")) ||
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+
+  return trimmed;
 }
 
 function toMysqlConnectionOptions(connection: DatabaseConnection): {

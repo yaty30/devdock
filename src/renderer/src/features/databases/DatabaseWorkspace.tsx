@@ -86,11 +86,13 @@ import type {
   DatabaseConnectionType,
   DatabaseColumn,
   DatabaseExecutionRecord,
+  DatabaseIndex,
   DatabaseMetadata,
   DatabaseQueryValue,
   DatabaseSslMode,
   DatabaseStatementExecutionResult,
   DatabaseTable,
+  DatabaseTrigger,
   DatabaseWorksheet,
   DatabaseWorksheetState,
   DatabaseWorkspaceTab,
@@ -101,7 +103,11 @@ import { DatabaseMonitor, StatusPill } from "./DatabaseMonitor";
 import { ResultTabsPanel } from "./DatabaseResults";
 import { formatCompactTime, formatSqlForDisplay } from "./databaseFormatters";
 import { MessageLog } from "./MessageLog";
-import { ObjectTreeGroup, TableTreeItem } from "./ObjectExplorerTree";
+import {
+  ObjectTreeGroup,
+  TableTreeItem,
+  createObjectKey,
+} from "./ObjectExplorerTree";
 import { ResultExportMenu } from "./ResultExportMenu";
 import { SheetContextMenuView } from "./SheetContextMenuView";
 import {
@@ -127,7 +133,9 @@ import {
   fetchDatabaseMetadata,
   formatDurationMs,
   formatObjectName,
+  hasSuccessfulRowCountChange,
   hasSuccessfulSchemaChange,
+  isPersistableSheet,
   markWorksheetStateSnapshotSaved,
   nextHistorySheetName,
   nextUntitledName,
@@ -138,6 +146,14 @@ import {
   splitSqlStatements,
   worksheetStateNeedsPersist,
 } from "./databaseWorkspaceUtils";
+
+export type DatabaseObjectType =
+  | "table"
+  | "view"
+  | "procedure"
+  | "function"
+  | "trigger"
+  | "index";
 
 export type QuerySheet = {
   id: string;
@@ -150,9 +166,11 @@ export type QuerySheet = {
   sheetMode?: "normal" | "object-backed" | "transient-preview";
   objectBinding?: {
     connectionId: string;
-    objectType: "view" | "procedure" | "function";
+    objectType: DatabaseObjectType;
     schema: string;
     name: string;
+    tableName?: string;
+    isNew?: boolean;
   };
 };
 
@@ -179,7 +197,8 @@ export type SheetContextMenu =
   | { kind: "table"; table: DatabaseTable; x: number; y: number }
   | {
       kind: "object-group";
-      objectType: "view" | "procedure" | "function" | "trigger" | "index";
+      objectType: DatabaseObjectType;
+      table?: DatabaseTable;
       x: number;
       y: number;
     };
@@ -326,6 +345,267 @@ export function DatabaseWorkspaceTabs({
   );
 }
 
+type ObjectBinding = NonNullable<QuerySheet["objectBinding"]>;
+
+function parseDatabaseObjectName(
+  value: string,
+  fallbackSchema: string,
+): { schema: string; name: string } {
+  const parts = splitQualifiedName(value.trim());
+  if (parts.length >= 2) {
+    return {
+      schema: normalizeIdentifier(parts[parts.length - 2]),
+      name: normalizeIdentifier(parts[parts.length - 1]),
+    };
+  }
+
+  return {
+    schema: normalizeIdentifier(fallbackSchema),
+    name: normalizeIdentifier(parts[0] ?? ""),
+  };
+}
+
+function splitQualifiedName(value: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inBacktick = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === "`") {
+      inBacktick = !inBacktick;
+      current += char;
+      continue;
+    }
+    if (char === "." && !inBacktick) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  if (current || parts.length > 0) {
+    parts.push(current);
+  }
+  return parts.filter((part) => part.trim().length > 0);
+}
+
+function normalizeIdentifier(value: string): string {
+  const trimmed = value.trim().replace(/;$/, "");
+  if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
+    return trimmed.slice(1, -1).replace(/``/g, "`");
+  }
+  return trimmed;
+}
+
+function quoteSqlIdentifier(value: string): string {
+  return `\`${value.replace(/`/g, "``")}\``;
+}
+
+function formatQualifiedIdentifier(schema: string, name: string): string {
+  return schema
+    ? `${quoteSqlIdentifier(schema)}.${quoteSqlIdentifier(name)}`
+    : quoteSqlIdentifier(name);
+}
+
+function formatObjectEditorName(
+  objectType: DatabaseObjectType,
+  schema: string,
+  name: string,
+  tableName?: string,
+  isNew = false,
+): string {
+  if (isNew || !name) {
+    return tableName
+      ? `New ${objectType} on ${tableName}`
+      : `New ${objectType}`;
+  }
+
+  if (objectType === "index" && tableName) {
+    return schema ? `${schema}.${tableName}.${name}` : `${tableName}.${name}`;
+  }
+
+  return schema ? `${schema}.${name}` : name;
+}
+
+function createObjectTemplate(
+  objectType: DatabaseObjectType,
+  table?: DatabaseTable,
+): string {
+  const tableName = table
+    ? formatQualifiedIdentifier(table.schema, table.name)
+    : "table_name";
+  const templates: Record<DatabaseObjectType, string> = {
+    table: `SELECT *\nFROM ${tableName}\nLIMIT 100;`,
+    view: "CREATE OR REPLACE VIEW __object_name__\nAS\nSELECT *\nFROM table_name;",
+    procedure:
+      "DELIMITER //\n\nCREATE PROCEDURE __object_name__()\nBEGIN\n\nEND //\n\nDELIMITER ;",
+    function:
+      "DELIMITER //\n\nCREATE FUNCTION __object_name__() RETURNS int\nREADS SQL DATA\nBEGIN\n  RETURN 0;\nEND //\n\nDELIMITER ;",
+    trigger: `DELIMITER //\n\nCREATE TRIGGER __object_name__\nBEFORE INSERT ON ${tableName}\nFOR EACH ROW\nBEGIN\n\nEND //\n\nDELIMITER ;`,
+    index: `ALTER TABLE ${tableName} ADD INDEX __object_name__ (column_name);`,
+  };
+  return templates[objectType];
+}
+
+function findCreateStatement(
+  row: Record<string, unknown> | undefined,
+  objectType: DatabaseObjectType,
+): string {
+  if (!row) {
+    return "";
+  }
+
+  const preferredKeys: Record<DatabaseObjectType, string[]> = {
+    table: [],
+    index: [],
+    view: ["Create View"],
+    procedure: ["Create Procedure"],
+    function: ["Create Function"],
+    trigger: ["SQL Original Statement", "Create Trigger"],
+  };
+  const entries = Object.entries(row);
+  for (const preferredKey of preferredKeys[objectType]) {
+    const match = entries.find(
+      ([key]) => key.toLowerCase() === preferredKey.toLowerCase(),
+    );
+    if (match?.[1]) {
+      return String(match[1]);
+    }
+  }
+
+  const fallback = entries.find(([key]) => /create|statement/i.test(key));
+  return fallback?.[1] ? String(fallback[1]) : "";
+}
+
+function formatLoadedObjectSql(
+  objectType: DatabaseObjectType,
+  createSql: string,
+): string {
+  if (objectType === "view") {
+    return createSql.replace(/^CREATE\s+VIEW/i, "CREATE OR REPLACE VIEW");
+  }
+
+  if (
+    objectType === "procedure" ||
+    objectType === "function" ||
+    objectType === "trigger"
+  ) {
+    return `DELIMITER //\n\n${createSql} //\n\nDELIMITER ;`;
+  }
+
+  return createSql;
+}
+
+function applyObjectNameToTemplate(
+  sql: string,
+  objectType: DatabaseObjectType,
+  schema: string,
+  name: string,
+): string {
+  const qualifiedName = formatQualifiedIdentifier(schema, name);
+  const localName = quoteSqlIdentifier(name);
+  const replacement = objectType === "index" ? localName : qualifiedName;
+  const placeholderPatterns: Record<DatabaseObjectType, RegExp[]> = {
+    table: [],
+    view: [/__object_name__/g, /\bview_name\b/g],
+    procedure: [/__object_name__/g, /\bproc_name\b/g],
+    function: [/__object_name__/g, /\bfun_name\b/g],
+    trigger: [/__object_name__/g, /\btrigger_name\b/g],
+    index: [/__object_name__/g, /\bindex_name\b/g],
+  };
+
+  return placeholderPatterns[objectType].reduce(
+    (nextSql, pattern) => nextSql.replace(pattern, replacement),
+    sql,
+  );
+}
+
+function createObjectSaveSql(
+  binding: ObjectBinding,
+  sql: string,
+  isNew: boolean,
+): string {
+  if (isNew || binding.objectType === "view") {
+    return sql;
+  }
+
+  const qualifiedName = formatQualifiedIdentifier(binding.schema, binding.name);
+  if (binding.objectType === "procedure" || binding.objectType === "function") {
+    return `DROP ${binding.objectType.toUpperCase()} IF EXISTS ${qualifiedName};\n${sql}`;
+  }
+  if (binding.objectType === "trigger") {
+    return `DROP TRIGGER IF EXISTS ${qualifiedName};\n${sql}`;
+  }
+  if (binding.objectType === "index" && binding.tableName) {
+    const qualifiedTable = formatQualifiedIdentifier(
+      binding.schema,
+      binding.tableName,
+    );
+    if (binding.name.toUpperCase() === "PRIMARY") {
+      return `ALTER TABLE ${qualifiedTable} DROP PRIMARY KEY;\n${sql}`;
+    }
+    return `ALTER TABLE ${qualifiedTable} DROP INDEX ${quoteSqlIdentifier(
+      binding.name,
+    )};\n${sql}`;
+  }
+
+  return sql;
+}
+
+function createIndexDefinitionSql(
+  table: DatabaseTable,
+  index: DatabaseIndex,
+): string {
+  const qualifiedTable = formatQualifiedIdentifier(table.schema, table.name);
+  const columns = index.columns.length
+    ? index.columns.map(quoteSqlIdentifier).join(", ")
+    : "column_name";
+  if (index.name.toUpperCase() === "PRIMARY") {
+    return `ALTER TABLE ${qualifiedTable} ADD PRIMARY KEY (${columns});`;
+  }
+
+  return `ALTER TABLE ${qualifiedTable} ADD INDEX ${quoteSqlIdentifier(
+    index.name,
+  )} (${columns});`;
+}
+
+function splitSqlStatementsWithDelimiters(sqlText: string): string[] {
+  if (!/^\s*DELIMITER\s+/im.test(sqlText)) {
+    return splitSqlStatements(sqlText);
+  }
+
+  const statements: string[] = [];
+  const lines = sqlText.split(/\r?\n/);
+  let delimiter = ";";
+  let buffer = "";
+
+  for (const line of lines) {
+    const delimiterMatch = line.match(/^\s*DELIMITER\s+(.+)\s*$/i);
+    if (delimiterMatch) {
+      delimiter = delimiterMatch[1].trim();
+      continue;
+    }
+
+    buffer = buffer ? `${buffer}\n${line}` : line;
+    const trimmedBuffer = buffer.trimEnd();
+    if (trimmedBuffer.endsWith(delimiter)) {
+      const statement = trimmedBuffer.slice(0, -delimiter.length).trim();
+      if (statement) {
+        statements.push(statement);
+      }
+      buffer = "";
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail) {
+    statements.push(tail);
+  }
+  return statements;
+}
+
 export function DatabaseWorkspace({
   connection,
   databaseStatus,
@@ -421,6 +701,7 @@ function ConnectionActionWorkspace({
 }): JSX.Element {
   const initialSheet = useMemo(() => createQuerySheet("Untitled-1"), []);
   const gridRef = useRef<HTMLDivElement>(null);
+  const objectTreeRef = useRef<HTMLDivElement>(null);
   const queryPanelRef = useRef<HTMLElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const executingRef = useRef(false);
@@ -668,6 +949,23 @@ function ConnectionActionWorkspace({
   }, [connection.id, databaseStatus, effectiveConnection, selectedSchema]);
 
   useEffect(() => {
+    if (databaseStatus === "connected" || databaseStatus === "reconnecting") {
+      return;
+    }
+
+    setMetadataStateByConnection((current) => ({
+      ...current,
+      [connection.id]: createIdleMetadataState(),
+    }));
+
+    for (const key of Array.from(metadataLoadStartedRef.current)) {
+      if (key.startsWith(`${connection.id}:`)) {
+        metadataLoadStartedRef.current.delete(key);
+      }
+    }
+  }, [connection.id, databaseStatus]);
+
+  useEffect(() => {
     if (!contextMenu) {
       return undefined;
     }
@@ -696,6 +994,7 @@ function ConnectionActionWorkspace({
     openSheetIds: [],
   };
   const sheets = sheetState.sheets;
+  const visibleSheetList = sheets.filter(isPersistableSheet);
   const openSheets = sheetState.openSheetIds
     .map((sheetId) => sheets.find((sheet) => sheet.id === sheetId))
     .filter((sheet): sheet is QuerySheet => Boolean(sheet));
@@ -703,6 +1002,14 @@ function ConnectionActionWorkspace({
     openSheets.find((sheet) => sheet.id === sheetState.activeSheetId) ??
     openSheets[0] ??
     null;
+  const activeObjectKey = activeSheet?.objectBinding
+    ? createObjectKey(
+        activeSheet.objectBinding.objectType,
+        activeSheet.objectBinding.schema,
+        activeSheet.objectBinding.name,
+        activeSheet.objectBinding.tableName,
+      )
+    : null;
   const activeOutput = activeSheet?.output ?? createEmptySheetOutput();
   const activeResultTab =
     activeOutput.resultTabs.find(
@@ -770,6 +1077,19 @@ function ConnectionActionWorkspace({
     const timer = window.setTimeout(() => setAutoSaveError(null), 4200);
     return () => window.clearTimeout(timer);
   }, [autoSaveError]);
+
+  useEffect(() => {
+    if (!activeObjectKey || !objectTreeRef.current) {
+      return;
+    }
+
+    const target = Array.from(
+      objectTreeRef.current.querySelectorAll<HTMLElement>(
+        "[data-database-object-key]",
+      ),
+    ).find((element) => element.dataset.databaseObjectKey === activeObjectKey);
+    target?.scrollIntoView({ block: "nearest" });
+  }, [activeObjectKey]);
 
   useEffect(() => {
     if (!loadedWorksheetConnectionIds.has(connection.id)) {
@@ -877,7 +1197,7 @@ function ConnectionActionWorkspace({
         ...current,
         [connection.id]: {
           status: "error",
-          metadata: current[connection.id]?.metadata ?? createEmptyMetadata(),
+          metadata: createEmptyMetadata(),
           errorMessage:
             "Connect to the database before refreshing Object Explorer.",
         },
@@ -948,10 +1268,7 @@ function ConnectionActionWorkspace({
   }
 
   async function executeRawSql(sqlText: string): Promise<void> {
-    const sanitizedSql = sqlText
-      .replace(/^\s*DELIMITER\s+.*$/gim, "")
-      .replace(/\/\/\s*$/gm, ";");
-    const statements = splitSqlStatements(sanitizedSql);
+    const statements = splitSqlStatementsWithDelimiters(sqlText);
     const result = await window.ivsDashboard.executeDatabaseStatements(
       effectiveConnection,
       statements,
@@ -963,71 +1280,141 @@ function ConnectionActionWorkspace({
   }
 
   async function openObjectSheet(
-    objectType: "view" | "procedure" | "function",
+    objectType: DatabaseObjectType,
     objectName: string,
+    options: {
+      table?: DatabaseTable;
+      index?: DatabaseIndex;
+      trigger?: DatabaseTrigger;
+      isNew?: boolean;
+    } = {},
   ): Promise<void> {
-    const sheetName = objectName;
+    const parsedObject = parseDatabaseObjectName(
+      objectName,
+      options.table?.schema ?? selectedSchema,
+    );
+    const tableName = options.table?.name;
+    const sheetName = formatObjectEditorName(
+      objectType,
+      parsedObject.schema,
+      parsedObject.name,
+      tableName,
+      options.isNew,
+    );
     const existing = sheetState.sheets.find(
       (sheet) =>
         sheet.objectBinding?.connectionId === connection.id &&
         sheet.objectBinding.objectType === objectType &&
-        sheet.objectBinding.schema === selectedSchema &&
-        sheet.objectBinding.name === objectName,
+        sheet.objectBinding.schema === parsedObject.schema &&
+        sheet.objectBinding.name === parsedObject.name &&
+        (sheet.objectBinding.tableName ?? "") === (tableName ?? "") &&
+        !options.isNew,
     );
     if (existing) {
       selectSheet(existing.id);
       return;
     }
-    const created = createQuerySheet(sheetName, `-- Loading ${objectType} definition...`);
+    const initialSql = options.isNew
+      ? createObjectTemplate(objectType, options.table)
+      : `-- Loading ${objectType} definition...`;
+    const created = createQuerySheet(sheetName, initialSql);
     created.sheetMode = "object-backed";
     created.objectBinding = {
       connectionId: connection.id,
       objectType,
-      schema: selectedSchema,
-      name: objectName,
+      schema: parsedObject.schema,
+      name: options.isNew ? "" : parsedObject.name,
+      tableName,
+      isNew: options.isNew,
     };
     updateCurrentConnectionState((state) => ({
       sheets: [...state.sheets, created],
       activeSheetId: created.id,
       openSheetIds: [...state.openSheetIds, created.id],
     }));
+    if (options.isNew) {
+      setContextMenu(null);
+      return;
+    }
     try {
-      const showTarget = `${selectedSchema}.${objectName}`;
-      const statement =
-        objectType === "view"
-          ? `SHOW CREATE VIEW ${showTarget};`
-          : objectType === "procedure"
-            ? `SHOW CREATE PROCEDURE ${showTarget};`
-            : `SHOW CREATE FUNCTION ${showTarget};`;
-      const batch = await window.ivsDashboard.executeDatabaseStatements(
-        effectiveConnection,
-        [statement],
+      const nextSql = await loadObjectDefinition(
+        objectType,
+        parsedObject.schema,
+        parsedObject.name,
+        options.table,
+        options.index,
       );
-      const row = batch.results[0]?.rows?.[0] as Record<string, unknown> | undefined;
-      const createSql = String(
-        row?.["Create View"] ??
-          row?.["Create Procedure"] ??
-          row?.["Create Function"] ??
-          "",
-      );
-      let nextSql = createSql || `-- Failed to load ${objectType} definition`;
-      if (objectType === "view" && createSql) {
-        nextSql = createSql.replace(/^CREATE\s+VIEW/i, "CREATE OR REPLACE VIEW");
-      }
-      if (objectType !== "view" && createSql) {
-        nextSql = `DELIMITER //\n\n${createSql} //\n\nDELIMITER ;`;
-      }
       updateCurrentConnectionState((state) => ({
         ...state,
         sheets: state.sheets.map((s) =>
-          s.id === created.id ? { ...s, sql: nextSql, savedSql: nextSql } : s,
+          s.id === created.id
+            ? { ...s, sql: nextSql, savedSql: nextSql, savedName: sheetName }
+            : s,
         ),
       }));
+      if (objectType === "table") {
+        void runSqlInSheet(created.id, nextSql);
+      }
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : `Could not load ${objectType} definition.`;
+        error instanceof Error
+          ? error.message
+          : `Could not load ${objectType} definition.`;
       addMessage("error", message, created.id);
     }
+  }
+
+  async function loadObjectDefinition(
+    objectType: DatabaseObjectType,
+    schema: string,
+    name: string,
+    table?: DatabaseTable,
+    index?: DatabaseIndex,
+  ): Promise<string> {
+    if (objectType === "table") {
+      const tableSql = createSelectTemplate(
+        table ?? {
+          schema,
+          name,
+          columns: [],
+          indexes: [],
+          triggers: [],
+          partitions: [],
+        },
+      );
+      return `${tableSql.replace(/;\s*$/, "")}\nLIMIT 100;`;
+    }
+
+    if (objectType === "index" && table && index) {
+      return createIndexDefinitionSql(table, index);
+    }
+
+    const target = formatQualifiedIdentifier(schema, name);
+    const statement =
+      objectType === "view"
+        ? `SHOW CREATE VIEW ${target};`
+        : objectType === "procedure"
+          ? `SHOW CREATE PROCEDURE ${target};`
+          : objectType === "function"
+            ? `SHOW CREATE FUNCTION ${target};`
+            : objectType === "trigger"
+              ? `SHOW CREATE TRIGGER ${target};`
+              : "";
+    if (!statement) {
+      return `-- Failed to load ${objectType} definition`;
+    }
+
+    const batch = await window.ivsDashboard.executeDatabaseStatements(
+      effectiveConnection,
+      [statement],
+    );
+    const row = batch.results[0]?.rows?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    const createSql = findCreateStatement(row, objectType);
+    return createSql
+      ? formatLoadedObjectSql(objectType, createSql)
+      : `-- Failed to load ${objectType} definition`;
   }
 
   function selectSheet(sheetId: string): void {
@@ -1192,26 +1579,78 @@ function ConnectionActionWorkspace({
       addMessage("error", "This table preview sheet is not savable.");
       return;
     }
-    if (activeSheet.sheetMode === "object-backed" && activeSheet.objectBinding) {
+    if (
+      activeSheet.sheetMode === "object-backed" &&
+      activeSheet.objectBinding
+    ) {
       const binding = activeSheet.objectBinding;
       void (async () => {
         try {
-          if (binding.objectType === "view") {
-            await executeRawSql(activeSheet.sql);
-          } else {
-            const qualifiedName = `${binding.schema}.${binding.name}`;
-            await executeRawSql(
-              `DROP ${binding.objectType.toUpperCase()} IF EXISTS ${qualifiedName};\n${activeSheet.sql}`,
-            );
+          if (binding.objectType === "table") {
+            addMessage("error", "Table preview editors are not savable.");
+            return;
           }
+
+          const objectName =
+            binding.isNew || !binding.name
+              ? window.prompt(
+                  `Name for new ${binding.objectType}:`,
+                  binding.name || "",
+                )
+              : binding.name;
+          if (objectName === null) {
+            return;
+          }
+          if (!objectName.trim()) {
+            addMessage("error", "Object name is required.");
+            return;
+          }
+
+          const parsedObject = parseDatabaseObjectName(
+            objectName,
+            binding.schema || selectedSchema,
+          );
+          const nextBinding = {
+            ...binding,
+            schema: parsedObject.schema,
+            name: parsedObject.name,
+            isNew: false,
+          };
+          const nextSql = applyObjectNameToTemplate(
+            activeSheet.sql,
+            nextBinding.objectType,
+            parsedObject.schema,
+            parsedObject.name,
+          );
+          await executeRawSql(
+            createObjectSaveSql(nextBinding, nextSql, binding.isNew === true),
+          );
           refreshMetadata();
-          addMessage("success", `Updated ${binding.objectType} ${binding.name}.`);
+          addMessage(
+            "success",
+            `${binding.isNew ? "Created" : "Updated"} ${nextBinding.objectType} ${nextBinding.name}.`,
+          );
           const savedAt = new Date().toISOString();
+          const savedName = formatObjectEditorName(
+            nextBinding.objectType,
+            nextBinding.schema,
+            nextBinding.name,
+            nextBinding.tableName,
+            false,
+          );
           updateCurrentConnectionState((state) => ({
             ...state,
             sheets: state.sheets.map((sheet) =>
               sheet.id === activeSheet.id
-                ? { ...sheet, savedSql: sheet.sql, savedName: sheet.name, savedAt }
+                ? {
+                    ...sheet,
+                    name: savedName,
+                    sql: nextSql,
+                    savedSql: nextSql,
+                    savedName,
+                    savedAt,
+                    objectBinding: nextBinding,
+                  }
                 : sheet,
             ),
           }));
@@ -1364,7 +1803,10 @@ function ConnectionActionWorkspace({
         });
       });
 
-      if (hasSuccessfulSchemaChange(batch.results)) {
+      if (
+        hasSuccessfulSchemaChange(batch.results) ||
+        hasSuccessfulRowCountChange(batch.results)
+      ) {
         refreshMetadata();
       }
     } catch (error) {
@@ -1514,40 +1956,25 @@ function ConnectionActionWorkspace({
 
   function openObjectGroupContextMenu(
     event: React.MouseEvent,
-    objectType: "view" | "procedure" | "function" | "trigger" | "index",
+    objectType: DatabaseObjectType,
+    table?: DatabaseTable,
   ): void {
     event.preventDefault();
     event.stopPropagation();
-    setContextMenu({ kind: "object-group", objectType, x: event.clientX, y: event.clientY });
+    setContextMenu({
+      kind: "object-group",
+      objectType,
+      table,
+      x: event.clientX,
+      y: event.clientY,
+    });
   }
 
   function createTemplateSheet(
-    objectType: "view" | "procedure" | "function" | "trigger" | "index",
+    objectType: DatabaseObjectType,
+    table?: DatabaseTable,
   ): void {
-    const templates: Record<typeof objectType, string> = {
-      view: "CREATE VIEW view_name\nAS\nSELECT * FROM",
-      procedure: "CREATE PROCEDURE proc_name()\nBEGIN\n\nEND;",
-      function:
-        "CREATE FUNCTION fun_name() RETURNS int\nREADS SQL DATA\nBEGIN\n\n    RETURN 0;\nEND;",
-      trigger:
-        "CREATE TRIGGER trigger_name\n[BEFORE/AFTER] INSERT ON [table_name]\nFOR EACH ROW BEGIN\n\nEND;",
-      index: "ALTER TABLE [table_name] ADD KEY (``);",
-    };
-    const baseName = `create-${objectType}-template`;
-    const existing = new Set(sheetState.sheets.map((sheet) => sheet.name));
-    let nextName = baseName;
-    let counter = 2;
-    while (existing.has(nextName)) {
-      nextName = `${baseName} (${counter})`;
-      counter += 1;
-    }
-    const sheet = createQuerySheet(nextName, templates[objectType]);
-    updateCurrentConnectionState((state) => ({
-      sheets: [...state.sheets, sheet],
-      activeSheetId: sheet.id,
-      openSheetIds: [...state.openSheetIds, sheet.id],
-    }));
-    setContextMenu(null);
+    void openObjectSheet(objectType, "", { table, isNew: true });
   }
 
   function insertTableTemplate(table: DatabaseTable): void {
@@ -1591,7 +2018,11 @@ function ConnectionActionWorkspace({
   }
 
   async function runSqlInSheet(sheetId: string, sql: string): Promise<void> {
-    await runDatabaseQuery({ sql, from: 0, to: sql.length }, sheetId, "execute");
+    await runDatabaseQuery(
+      { sql, from: 0, to: sql.length },
+      sheetId,
+      "execute",
+    );
   }
 
   function appendTableSelectTemplate(table: DatabaseTable): void {
@@ -1599,7 +2030,10 @@ function ConnectionActionWorkspace({
     const view = editorViewRef.current;
 
     if (!activeSheet) {
-      const sheet = createQuerySheet(nextUntitledName(sheetState.sheets), template);
+      const sheet = createQuerySheet(
+        nextUntitledName(sheetState.sheets),
+        template,
+      );
       updateCurrentConnectionState((state) => ({
         sheets: [...state.sheets, sheet],
         activeSheetId: sheet.id,
@@ -1627,29 +2061,7 @@ function ConnectionActionWorkspace({
   }
 
   function openTableInNewTab(table: DatabaseTable): void {
-    const tableSheetName = table.schema ? `${table.schema}.${table.name}` : table.name;
-    const existingSheet = sheetState.sheets.find((sheet) => sheet.name === tableSheetName);
-    const template = createSelectTemplate(table);
-    if (existingSheet) {
-      updateCurrentConnectionState((state) => ({
-        ...state,
-        activeSheetId: existingSheet.id,
-        openSheetIds: state.openSheetIds.includes(existingSheet.id)
-          ? state.openSheetIds
-          : [...state.openSheetIds, existingSheet.id],
-      }));
-      void runSqlInSheet(existingSheet.id, existingSheet.sql || template);
-      setContextMenu(null);
-      return;
-    }
-    const sheet = createQuerySheet(tableSheetName, template);
-    sheet.sheetMode = "transient-preview";
-    updateCurrentConnectionState((state) => ({
-      sheets: [...state.sheets, sheet],
-      activeSheetId: sheet.id,
-      openSheetIds: [...state.openSheetIds, sheet.id],
-    }));
-    void runSqlInSheet(sheet.id, template);
+    void openObjectSheet("table", table.name, { table });
     setContextMenu(null);
   }
 
@@ -1807,7 +2219,7 @@ function ConnectionActionWorkspace({
           />
         </label> */}
 
-        <div className="database-object-tree">
+        <div className="database-object-tree" ref={objectTreeRef}>
           {metadataLoading ? (
             <div className="database-object-state">
               <LoaderCircle className="button-spinner" size={18} />
@@ -1859,13 +2271,15 @@ function ConnectionActionWorkspace({
             title={
               <>
                 <span>Sheets</span>
-                <span className="database-tree-count">{sheets.length}</span>
+                <span className="database-tree-count">
+                  {visibleSheetList.length}
+                </span>
               </>
             }
             defaultOpen
             onContextMenu={openSheetsContextMenu}
           >
-            {sheets.map((sheet) => {
+            {visibleSheetList.map((sheet) => {
               const unsaved =
                 sheet.name !== sheet.savedName || sheet.sql !== sheet.savedSql;
               return (
@@ -1919,13 +2333,38 @@ function ConnectionActionWorkspace({
               </>
             }
             defaultOpen
+            forceOpen={
+              activeSheet?.objectBinding?.objectType === "table" ||
+              activeSheet?.objectBinding?.objectType === "index" ||
+              activeSheet?.objectBinding?.objectType === "trigger"
+            }
           >
             {filteredTables.length > 0 ? (
               filteredTables.map((table) => (
                 <TableTreeItem
                   table={table}
                   key={`${table.schema}.${table.name}`}
+                  activeObjectKey={activeObjectKey}
+                  onOpenTable={openTableInNewTab}
+                  onOpenIndex={(tableItem, index) =>
+                    void openObjectSheet("index", index.name, {
+                      table: tableItem,
+                      index,
+                    })
+                  }
+                  onOpenTrigger={(tableItem, trigger) =>
+                    void openObjectSheet("trigger", trigger.name, {
+                      table: tableItem,
+                      trigger,
+                    })
+                  }
                   onContextMenu={(event) => openTableContextMenu(event, table)}
+                  onIndexGroupContextMenu={(event, tableItem) =>
+                    openObjectGroupContextMenu(event, "index", tableItem)
+                  }
+                  onTriggerGroupContextMenu={(event, tableItem) =>
+                    openObjectGroupContextMenu(event, "trigger", tableItem)
+                  }
                 />
               ))
             ) : (
@@ -1942,14 +2381,33 @@ function ConnectionActionWorkspace({
               </>
             }
             onContextMenu={(event) => openObjectGroupContextMenu(event, "view")}
+            forceOpen={activeSheet?.objectBinding?.objectType === "view"}
           >
             {metadata.views.length > 0 ? (
-              metadata.views.map((viewName) => (
-                <div className="database-tree-item view-item" key={viewName} onClick={() => void openObjectSheet("view", viewName)}>
-                  <View size={15} />
-                  <span>{viewName}</span>
-                </div>
-              ))
+              metadata.views.map((viewName) => {
+                const parsed = parseDatabaseObjectName(
+                  viewName,
+                  selectedSchema,
+                );
+                const objectKey = createObjectKey(
+                  "view",
+                  parsed.schema,
+                  parsed.name,
+                );
+                return (
+                  <div
+                    className={`database-tree-item view-item${
+                      activeObjectKey === objectKey ? " active" : ""
+                    }`}
+                    key={viewName}
+                    onClick={() => void openObjectSheet("view", viewName)}
+                    data-database-object-key={objectKey}
+                  >
+                    <View size={15} />
+                    <span>{viewName}</span>
+                  </div>
+                );
+              })
             ) : (
               <div className="database-tree-empty">No views loaded.</div>
             )}
@@ -1966,18 +2424,33 @@ function ConnectionActionWorkspace({
             onContextMenu={(event) =>
               openObjectGroupContextMenu(event, "procedure")
             }
+            forceOpen={activeSheet?.objectBinding?.objectType === "procedure"}
           >
             {metadata.procedures.length > 0 ? (
-              metadata.procedures.map((procedure) => (
-                <div
-                  className="database-tree-item procedure-item"
-                  key={procedure}
-                  onClick={() => void openObjectSheet("procedure", procedure)}
-                >
-                  <Microchip size={15} />
-                  <span>{procedure}</span>
-                </div>
-              ))
+              metadata.procedures.map((procedure) => {
+                const parsed = parseDatabaseObjectName(
+                  procedure,
+                  selectedSchema,
+                );
+                const objectKey = createObjectKey(
+                  "procedure",
+                  parsed.schema,
+                  parsed.name,
+                );
+                return (
+                  <div
+                    className={`database-tree-item procedure-item${
+                      activeObjectKey === objectKey ? " active" : ""
+                    }`}
+                    key={procedure}
+                    onClick={() => void openObjectSheet("procedure", procedure)}
+                    data-database-object-key={objectKey}
+                  >
+                    <Microchip size={15} />
+                    <span>{procedure}</span>
+                  </div>
+                );
+              })
             ) : (
               <div className="database-tree-empty">No procedures loaded.</div>
             )}
@@ -1994,20 +2467,35 @@ function ConnectionActionWorkspace({
             onContextMenu={(event) =>
               openObjectGroupContextMenu(event, "function")
             }
+            forceOpen={activeSheet?.objectBinding?.objectType === "function"}
           >
             {metadata.functions.length > 0 ? (
-              metadata.functions.map((routineFunction) => (
-                <div
-                  className="database-tree-item function-item"
-                  key={routineFunction}
-                  onClick={() =>
-                    void openObjectSheet("function", routineFunction)
-                  }
-                >
-                  <SquareFunction size={15} />
-                  <span>{routineFunction}</span>
-                </div>
-              ))
+              metadata.functions.map((routineFunction) => {
+                const parsed = parseDatabaseObjectName(
+                  routineFunction,
+                  selectedSchema,
+                );
+                const objectKey = createObjectKey(
+                  "function",
+                  parsed.schema,
+                  parsed.name,
+                );
+                return (
+                  <div
+                    className={`database-tree-item function-item${
+                      activeObjectKey === objectKey ? " active" : ""
+                    }`}
+                    key={routineFunction}
+                    onClick={() =>
+                      void openObjectSheet("function", routineFunction)
+                    }
+                    data-database-object-key={objectKey}
+                  >
+                    <SquareFunction size={15} />
+                    <span>{routineFunction}</span>
+                  </div>
+                );
+              })
             ) : (
               <div className="database-tree-empty">No functions loaded.</div>
             )}
@@ -2040,6 +2528,13 @@ function ConnectionActionWorkspace({
           ) {
             event.preventDefault();
             saveActiveSheet();
+          }
+          if (
+            (event.ctrlKey || event.metaKey) &&
+            event.key.toLowerCase() === "n"
+          ) {
+            event.preventDefault();
+            createNewSheet();
           }
         }}
       >
@@ -2103,6 +2598,7 @@ function ConnectionActionWorkspace({
           onChange={updateActiveSheetSql}
           onExecute={executeFromEditorView}
           onSave={saveActiveSheet}
+          onNewSheet={createNewSheet}
           onViewReady={(view) => {
             editorViewRef.current = view;
           }}
@@ -2213,16 +2709,16 @@ function ConnectionActionWorkspace({
       </section>
 
       {contextMenu ? (
-          <SheetContextMenuView
+        <SheetContextMenuView
           menu={contextMenu}
           onNewSheet={createNewSheet}
           onRename={startRename}
           onDelete={requestDeleteSheet}
-            onSelectTable={appendTableSelectTemplate}
-            onInsertTableTemplate={insertTableTemplate}
-            onOpenTableInNewTab={openTableInNewTab}
-            onCreateTemplateSheet={createTemplateSheet}
-          />
+          onSelectTable={appendTableSelectTemplate}
+          onInsertTableTemplate={insertTableTemplate}
+          onOpenTableInNewTab={openTableInNewTab}
+          onCreateTemplateSheet={createTemplateSheet}
+        />
       ) : null}
       {deleteRequest ? (
         <ConfirmDialog

@@ -109,6 +109,7 @@ export function SqlEditor({
   onChange,
   onExecute,
   onSave,
+  onNewSheet,
   onViewReady,
   completionData,
 }: {
@@ -117,6 +118,7 @@ export function SqlEditor({
   onChange: (value: string) => void;
   onExecute: (view: EditorView) => void;
   onSave: () => void;
+  onNewSheet: () => void;
   onViewReady: (view: EditorView) => void;
   completionData: DatabaseCompletionData;
 }): JSX.Element {
@@ -125,6 +127,7 @@ export function SqlEditor({
   const onChangeRef = useRef(onChange);
   const onExecuteRef = useRef(onExecute);
   const onSaveRef = useRef(onSave);
+  const onNewSheetRef = useRef(onNewSheet);
   const completionDataRef = useRef(completionData);
   const activeSheetIdRef = useRef(sheetId);
 
@@ -132,8 +135,9 @@ export function SqlEditor({
     onChangeRef.current = onChange;
     onExecuteRef.current = onExecute;
     onSaveRef.current = onSave;
+    onNewSheetRef.current = onNewSheet;
     completionDataRef.current = completionData;
-  }, [completionData, onChange, onExecute, onSave]);
+  }, [completionData, onChange, onExecute, onNewSheet, onSave]);
 
   useEffect(() => {
     const host = editorHostRef.current;
@@ -152,6 +156,7 @@ export function SqlEditor({
           },
           (view) => onExecuteRef.current(view),
           () => onSaveRef.current(),
+          () => onNewSheetRef.current(),
         ),
       }),
     });
@@ -198,6 +203,7 @@ function createSqlEditorExtensions(
   onChange: (value: string) => void,
   onExecute: (view: EditorView) => void,
   onSave: () => void,
+  onNewSheet: () => void,
 ): Extension[] {
   return [
     basicSetup,
@@ -236,6 +242,20 @@ function createSqlEditorExtensions(
           key: "Ctrl-s",
           run() {
             onSave();
+            return true;
+          },
+        },
+        {
+          key: "Mod-n",
+          run() {
+            onNewSheet();
+            return true;
+          },
+        },
+        {
+          key: "Ctrl-n",
+          run() {
+            onNewSheet();
             return true;
           },
         },

@@ -259,6 +259,7 @@ export type DatabasePartition = {
 export type DatabaseTable = {
   schema: string;
   name: string;
+  estimatedRowCount?: number | null;
   columns: DatabaseColumn[];
   indexes: DatabaseIndex[];
   triggers: DatabaseTrigger[];
@@ -319,9 +320,17 @@ export type DatabaseWorksheet = {
   sheetMode?: "normal" | "object-backed" | "transient-preview";
   objectBinding?: {
     connectionId: string;
-    objectType: "view" | "procedure" | "function";
+    objectType:
+      | "table"
+      | "view"
+      | "procedure"
+      | "function"
+      | "trigger"
+      | "index";
     schema: string;
     name: string;
+    tableName?: string;
+    isNew?: boolean;
   };
 };
 
@@ -390,6 +399,15 @@ export type DashboardApi = {
   getDatabaseConnections: () => Promise<DatabaseConnection[]>;
   saveDatabaseConnection: (
     connection: DatabaseConnection,
+  ) => Promise<DatabaseConnection>;
+  updateDatabaseConnectionSettings: (
+    connectionId: string,
+    updates: Partial<
+      Pick<
+        DatabaseConnection,
+        "autoConnect" | "status" | "latency" | "uptime" | "activeSessions"
+      >
+    >,
   ) => Promise<DatabaseConnection>;
   deleteDatabaseConnection: (connectionId: string) => Promise<void>;
   testDatabaseConnection: (

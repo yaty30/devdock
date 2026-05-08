@@ -153,6 +153,18 @@ function App(): JSX.Element {
       return;
     }
 
+    const selectedConnection = databaseConnections.find(
+      (connection) => connection.id === selectedDatabaseConnectionId,
+    );
+    if (selectedConnection?.status === "disconnected") {
+      if (databaseSleepTimerRef.current !== null) {
+        window.clearTimeout(databaseSleepTimerRef.current);
+        databaseSleepTimerRef.current = null;
+      }
+      setDatabaseRuntimeStatus("disconnected");
+      return;
+    }
+
     if (activeSection === "database") {
       if (databaseSleepTimerRef.current !== null) {
         window.clearTimeout(databaseSleepTimerRef.current);
@@ -184,7 +196,7 @@ function App(): JSX.Element {
       databaseSleepTimerRef.current = null;
       setDatabaseRuntimeStatus("disconnected");
     }, DATABASE_IDLE_DISCONNECT_MS);
-  }, [activeSection, selectedDatabaseConnectionId]);
+  }, [activeSection, selectedDatabaseConnectionId, databaseConnections]);
 
   useEffect(() => {
     if (
@@ -220,10 +232,21 @@ function App(): JSX.Element {
       if (cancelled) {
         return;
       }
+      const hydratedConnections: DatabaseConnection[] = connections.map(
+        (connection) => ({
+          ...connection,
+          status: connection.autoConnect ? "connected" : "disconnected",
+        }),
+      );
+      const autoConnectConnection = hydratedConnections.find(
+        (connection) => connection.autoConnect,
+      );
       setProjects(snapshot.projects);
-      setDatabaseConnections(connections);
+      setDatabaseConnections(hydratedConnections);
       setDatabaseExecutionHistory(executionHistory);
-      setSelectedDatabaseConnectionId(connections[0]?.id ?? null);
+      setSelectedDatabaseConnectionId(
+        autoConnectConnection?.id ?? hydratedConnections[0]?.id ?? null,
+      );
       void refreshDashboardOverview();
       const active =
         snapshot.projects.find(
@@ -489,6 +512,11 @@ function App(): JSX.Element {
   function switchDatabaseConnection(connection: DatabaseConnection): void {
     const doSwitch = (): void => {
       setSelectedDatabaseConnectionId(connection.id);
+      setDatabaseConnections((current) =>
+        current.map((item) =>
+          item.id === connection.id ? { ...item, status: "connected" } : item,
+        ),
+      );
       setActiveDatabaseTab("connection");
       setSettingsOpen(false);
       setSettingsDirty(false);
@@ -501,6 +529,69 @@ function App(): JSX.Element {
     }
 
     doSwitch();
+  }
+
+  function connectDatabaseConnection(connection: DatabaseConnection): void {
+    if (databaseSleepTimerRef.current !== null) {
+      window.clearTimeout(databaseSleepTimerRef.current);
+      databaseSleepTimerRef.current = null;
+    }
+    hadDatabaseConnectionRef.current = true;
+    setDatabaseConnections((current) =>
+      current.map((item) =>
+        item.id === connection.id ? { ...item, status: "connected" } : item,
+      ),
+    );
+    setSelectedDatabaseConnectionId(connection.id);
+    setActiveDatabaseTab("connection");
+    setActiveSection("database");
+    setDatabaseRuntimeStatus("connected");
+    showSnackbar(`${connection.name} connected.`, "valid");
+    void window.ivsDashboard
+      .updateDatabaseConnectionSettings(connection.id, {
+        autoConnect: true,
+        status: "connected",
+      })
+      .then((saved) => {
+        setDatabaseConnections((current) =>
+          current.map((item) => (item.id === saved.id ? saved : item)),
+        );
+      })
+      .catch((error) => {
+        console.error(error);
+        showSnackbar("Connection setting could not be saved.", "invalid");
+      });
+  }
+
+  function disconnectDatabaseConnection(connection: DatabaseConnection): void {
+    if (databaseSleepTimerRef.current !== null) {
+      window.clearTimeout(databaseSleepTimerRef.current);
+      databaseSleepTimerRef.current = null;
+    }
+    if (selectedDatabaseConnectionId === connection.id) {
+      hadDatabaseConnectionRef.current = false;
+      setDatabaseRuntimeStatus("disconnected");
+    }
+    setDatabaseConnections((current) =>
+      current.map((item) =>
+        item.id === connection.id ? { ...item, status: "disconnected" } : item,
+      ),
+    );
+    showSnackbar(`${connection.name} disconnected.`, "warning");
+    void window.ivsDashboard
+      .updateDatabaseConnectionSettings(connection.id, {
+        autoConnect: false,
+        status: "disconnected",
+      })
+      .then((saved) => {
+        setDatabaseConnections((current) =>
+          current.map((item) => (item.id === saved.id ? saved : item)),
+        );
+      })
+      .catch((error) => {
+        console.error(error);
+        showSnackbar("Connection setting could not be saved.", "invalid");
+      });
   }
 
   function handleSectionChange(section: AppSection): void {
@@ -847,6 +938,8 @@ function App(): JSX.Element {
           collapsed={sidebarCollapsed}
           onProjectChange={switchProject}
           onDatabaseConnectionChange={switchDatabaseConnection}
+          onDatabaseConnect={connectDatabaseConnection}
+          onDatabaseDisconnect={disconnectDatabaseConnection}
           onSectionChange={handleSectionChange}
           onAddProject={openAddProjectDialog}
           onAddDatabaseConnection={handleAddDatabaseConnection}
@@ -953,6 +1046,8 @@ function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onProjectChange={switchProject}
         onDatabaseConnectionChange={switchDatabaseConnection}
+        onDatabaseConnect={connectDatabaseConnection}
+        onDatabaseDisconnect={disconnectDatabaseConnection}
         onSectionChange={handleSectionChange}
         onAddProject={openAddProjectDialog}
         onAddDatabaseConnection={handleAddDatabaseConnection}

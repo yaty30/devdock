@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Box,
   Carrot,
@@ -14,20 +14,33 @@ import {
   Table2,
   Zap,
 } from "lucide-react";
-import type { DatabaseColumn, DatabaseTable } from "../../types";
+import type {
+  DatabaseColumn,
+  DatabaseIndex,
+  DatabaseTable,
+  DatabaseTrigger,
+} from "../../types";
 
 export function ObjectTreeGroup({
   title,
   defaultOpen = false,
+  forceOpen = false,
   onContextMenu,
   children,
 }: {
   title: string | JSX.Element;
   defaultOpen?: boolean;
+  forceOpen?: boolean;
   onContextMenu?: (event: React.MouseEvent) => void;
   children: ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(defaultOpen);
+
+  useEffect(() => {
+    if (forceOpen) {
+      setOpen(true);
+    }
+  }, [forceOpen]);
 
   return (
     <div className="database-tree-group">
@@ -46,25 +59,68 @@ export function ObjectTreeGroup({
 
 export function TableTreeItem({
   table,
+  activeObjectKey,
+  onOpenTable,
+  onOpenIndex,
+  onOpenTrigger,
   onContextMenu,
+  onIndexGroupContextMenu,
+  onTriggerGroupContextMenu,
 }: {
   table: DatabaseTable;
+  activeObjectKey: string | null;
+  onOpenTable: (table: DatabaseTable) => void;
+  onOpenIndex: (table: DatabaseTable, index: DatabaseIndex) => void;
+  onOpenTrigger: (table: DatabaseTable, trigger: DatabaseTrigger) => void;
   onContextMenu: (event: React.MouseEvent) => void;
+  onIndexGroupContextMenu: (
+    event: React.MouseEvent,
+    table: DatabaseTable,
+  ) => void;
+  onTriggerGroupContextMenu: (
+    event: React.MouseEvent,
+    table: DatabaseTable,
+  ) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(false);
+  const tableObjectKey = createObjectKey("table", table.schema, table.name);
+  const hasActiveChild =
+    activeObjectKey === tableObjectKey ||
+    table.indexes.some(
+      (index) =>
+        activeObjectKey ===
+        createObjectKey("index", table.schema, index.name, table.name),
+    ) ||
+    table.triggers.some(
+      (trigger) =>
+        activeObjectKey ===
+        createObjectKey("trigger", table.schema, trigger.name, table.name),
+    );
+  const [open, setOpen] = useState(hasActiveChild);
+
+  useEffect(() => {
+    if (hasActiveChild) {
+      setOpen(true);
+    }
+  }, [hasActiveChild]);
 
   return (
     <div className="database-table-tree-item">
       <button
-        className="database-tree-item database-tree-button database-object-row"
+        className={`database-tree-item database-tree-button database-object-row${
+          activeObjectKey === tableObjectKey ? " active" : ""
+        }`}
         type="button"
         onClick={() => setOpen((current) => !current)}
+        onDoubleClick={() => onOpenTable(table)}
         onContextMenu={onContextMenu}
+        data-database-object-key={tableObjectKey}
       >
         <ChevronDown size={14} className={open ? "open" : undefined} />
         <Table2 size={15} />
         <span className="database-object-label">{`${formatObjectName(table)}`}</span>
-        <span className="database-object-count">{table.columns.length}</span>
+        {/* <span className="database-object-count" title="Estimated rows">
+          {formatEstimatedRowCount(table.estimatedRowCount)}
+        </span> */}
       </button>
       {open ? (
         <div className="database-table-object-groups">
@@ -86,18 +142,37 @@ export function TableTreeItem({
             count={table.indexes.length}
             icon={<Carrot size={13} className="database-indexes" />}
             defaultOpen
+            onContextMenu={(event) => onIndexGroupContextMenu(event, table)}
           >
             {table.indexes.length > 0 ? (
               table.indexes.map((index) => (
-                <div
-                  className="database-tree-item database-object-row database-leaf-row"
+                <button
+                  type="button"
+                  className={`database-tree-item database-object-row database-leaf-row${
+                    activeObjectKey ===
+                    createObjectKey(
+                      "index",
+                      table.schema,
+                      index.name,
+                      table.name,
+                    )
+                      ? " active"
+                      : ""
+                  }`}
                   key={index.name}
+                  onClick={() => onOpenIndex(table, index)}
+                  data-database-object-key={createObjectKey(
+                    "index",
+                    table.schema,
+                    index.name,
+                    table.name,
+                  )}
                 >
                   <Leaf size={13} className="database-index" />
                   <span className="database-object-label">
                     {formatIndexLabel(index)}
                   </span>
-                </div>
+                </button>
               ))
             ) : (
               <div className="database-tree-empty">No indexes found</div>
@@ -108,18 +183,37 @@ export function TableTreeItem({
             count={table.triggers.length}
             icon={<Sigma size={13} className="database-index-triggers" />}
             defaultOpen
+            onContextMenu={(event) => onTriggerGroupContextMenu(event, table)}
           >
             {table.triggers.length > 0 ? (
               table.triggers.map((trigger) => (
-                <div
-                  className="database-tree-item database-object-row database-leaf-row"
+                <button
+                  type="button"
+                  className={`database-tree-item database-object-row database-leaf-row${
+                    activeObjectKey ===
+                    createObjectKey(
+                      "trigger",
+                      table.schema,
+                      trigger.name,
+                      table.name,
+                    )
+                      ? " active"
+                      : ""
+                  }`}
                   key={trigger.name}
+                  onClick={() => onOpenTrigger(table, trigger)}
+                  data-database-object-key={createObjectKey(
+                    "trigger",
+                    table.schema,
+                    trigger.name,
+                    table.name,
+                  )}
                 >
                   <Zap size={13} className="database-index-trigger" />
                   <span className="database-object-label">
                     {formatTriggerLabel(trigger)}
                   </span>
-                </div>
+                </button>
               ))
             ) : (
               <div className="database-tree-empty">No triggers found</div>
@@ -158,12 +252,14 @@ function TableObjectGroup({
   count,
   icon,
   defaultOpen = false,
+  onContextMenu,
   children,
 }: {
   title: string;
   count: number;
   icon: ReactNode;
   defaultOpen?: boolean;
+  onContextMenu?: (event: React.MouseEvent) => void;
   children: ReactNode;
 }): JSX.Element {
   const [open, setOpen] = useState(defaultOpen);
@@ -174,6 +270,7 @@ function TableObjectGroup({
         className="database-tree-item database-table-object-group-button database-object-row"
         type="button"
         onClick={() => setOpen((current) => !current)}
+        onContextMenu={onContextMenu}
       >
         <ChevronDown size={13} className={open ? "open" : undefined} />
         {icon}
@@ -183,6 +280,23 @@ function TableObjectGroup({
       {open ? <div className="database-nested-children">{children}</div> : null}
     </div>
   );
+}
+
+export function createObjectKey(
+  objectType: string,
+  schema: string,
+  name: string,
+  tableName = "",
+): string {
+  return [objectType, schema, tableName, name].join(":").toLowerCase();
+}
+
+function formatEstimatedRowCount(count: number | null | undefined): string {
+  if (count === null || count === undefined || !Number.isFinite(count)) {
+    return "?";
+  }
+
+  return `${Intl.NumberFormat(undefined, { notation: "compact" }).format(count)}`;
 }
 
 function ColumnTreeItem({ column }: { column: DatabaseColumn }): JSX.Element {

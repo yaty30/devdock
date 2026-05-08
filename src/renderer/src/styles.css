@@ -3723,7 +3723,9 @@ body {
   border-radius: 6px;
   cursor: pointer;
   user-select: none;
-  transition: background-color 100ms ease, border-color 100ms ease;
+  transition:
+    background-color 100ms ease,
+    border-color 100ms ease;
 }
 
 .custom-select-option:hover,
@@ -5976,7 +5978,13 @@ button.database-tree-item {
 }
 
 .database-result-row {
-  cursor: pointer;
+  cursor: default;
+}
+
+.database-result-value-cell.selected,
+[data-theme="dark"] .database-result-value-cell.selected {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface));
+  color: var(--accent);
 }
 
 .database-result-seq-cell {
@@ -5997,6 +6005,11 @@ button.database-tree-item {
   background: transparent;
   border: 0;
   border-radius: 4px;
+  transform: translateX(-10px);
+  transition: none;
+}
+
+.database-row-expand-button:active {
   transform: translateX(-10px);
 }
 
@@ -6037,24 +6050,24 @@ button.database-tree-item {
 }
 
 .database-result-row-details-table {
-  width: 100%;
-  min-width: 680px;
-  table-layout: auto;
+  width: 1000px;
+  min-width: 560px;
+  table-layout: fixed;
   border-collapse: collapse;
   color: var(--nav-text);
   font-size: 12px;
 }
 
 .database-detail-column-col {
-  width: 1%;
+  max-width: 20%;
 }
 
 .database-detail-value-col {
-  width: auto;
+  max-width: 40%;
 }
 
 .database-detail-meta-col {
-  width: 1%;
+  width: 12%;
 }
 
 .database-result-row-details-table th,
@@ -6081,16 +6094,16 @@ button.database-tree-item {
 
 .database-result-row-details-table th:nth-child(1),
 .database-result-row-details-table td:nth-child(1) {
-  width: 1%;
+  width: 220px;
   max-width: 100%;
-  padding-right: 80px;
+  padding-right: 16px;
   font-weight: 800;
 }
 
 .database-result-row-details-table th:nth-child(2),
 .database-result-row-details-table td:nth-child(2) {
-  width: auto;
-  min-width: 180px;
+  width: 400px;
+  min-width: 0;
 }
 
 .database-result-row-details-table th:nth-child(3),
@@ -6099,8 +6112,8 @@ button.database-tree-item {
 .database-result-row-details-table td:nth-child(4),
 .database-result-row-details-table th:nth-child(5),
 .database-result-row-details-table td:nth-child(5) {
-  width: 1%;
-  max-width: 180px;
+  width: clamp(82px, 10%, 136px);
+  max-width: 136px;
 }
 
 .database-result-row-details-table td:nth-child(2) {
@@ -6126,15 +6139,16 @@ button.database-tree-item {
 .database-detail-value-text {
   flex: 1;
   min-width: 0;
-  max-width: min(72vw, 960px);
+  max-width: 100%;
   max-height: 120px;
   overflow-y: auto;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: break-all;
   white-space: pre-wrap;
 }
 
 .database-detail-copy-button {
-  display: none;
+  display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
@@ -6146,10 +6160,16 @@ button.database-tree-item {
   border: none;
   border-radius: 4px;
   cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
-.database-result-row-details-table tbody tr:hover .database-detail-copy-button {
-  display: flex;
+.database-result-row-details-table tbody tr:hover .database-detail-copy-button,
+.database-detail-copy-button.copied {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .database-detail-copy-button:hover {
@@ -6158,7 +6178,6 @@ button.database-tree-item {
 }
 
 .database-detail-copy-button.copied {
-  display: flex;
   color: var(--valid, #22c55e);
 }
 
@@ -6478,6 +6497,7 @@ button.database-tree-item {
     minmax(160px, 1fr);
 }
 
+.database-tree-item.active,
 .database-sheet-tree-item.active,
 .database-tree-item.schema-item.active {
   color: var(--accent);
@@ -6494,7 +6514,7 @@ button.database-tree-item {
 .database-tree-item.view-item,
 .database-tree-item.procedure-item,
 .database-tree-item.function-item {
-  cursor: default;
+  cursor: pointer;
 }
 
 .database-unsaved-dot {
@@ -6560,6 +6580,10 @@ button.database-tree-item {
 .database-context-menu button svg {
   flex: 0 0 auto;
   color: var(--icon-muted);
+}
+
+.sidebar-database-context-menu {
+  min-width: 150px;
 }
 
 .database-result-context-menu {
@@ -6862,6 +6886,7 @@ button.database-tree-item {
 }
 
 .database-connection-actions {
+  width: 100%;
   justify-content: space-between;
   align-items: center;
   padding-top: 2px;
@@ -6869,7 +6894,9 @@ button.database-tree-item {
 
 .database-connection-actions-left {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
   flex-wrap: wrap;
 }
@@ -6881,6 +6908,7 @@ button.database-tree-item {
 }
 
 .database-delete-connection-button {
+  order: -1;
   height: var(--control-md);
 }
 
