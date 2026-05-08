@@ -870,6 +870,21 @@ function ConnectionActionWorkspace({
   }
 
   function refreshMetadata(): void {
+    const canLoadMetadata =
+      databaseStatus === "connected" || databaseStatus === "reconnecting";
+    if (!canLoadMetadata) {
+      setMetadataStateByConnection((current) => ({
+        ...current,
+        [connection.id]: {
+          status: "error",
+          metadata: current[connection.id]?.metadata ?? createEmptyMetadata(),
+          errorMessage:
+            "Connect to the database before refreshing Object Explorer.",
+        },
+      }));
+      return;
+    }
+
     const metadataLoadKey = `${connection.id}:${selectedSchema}`;
     metadataLoadStartedRef.current.add(metadataLoadKey);
     setMetadataStateByConnection((current) => ({
@@ -903,6 +918,9 @@ function ConnectionActionWorkspace({
   }
 
   function changeSchema(schema: string): void {
+    const canLoadMetadata =
+      databaseStatus === "connected" || databaseStatus === "reconnecting";
+
     setSelectedSchemaByConnection((current) => ({
       ...current,
       [connection.id]: schema,
@@ -910,9 +928,9 @@ function ConnectionActionWorkspace({
     setFilter("");
     setMetadataStateByConnection((current) => ({
       ...current,
-      [connection.id]: createLoadingMetadataState(
-        current[connection.id]?.metadata,
-      ),
+      [connection.id]: canLoadMetadata
+        ? createLoadingMetadataState(current[connection.id]?.metadata)
+        : createIdleMetadataState(),
     }));
     metadataLoadStartedRef.current.delete(`${connection.id}:${schema}`);
   }
