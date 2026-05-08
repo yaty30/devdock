@@ -296,39 +296,16 @@ function BuildActionsDropdown({
   }, [latestBuildRunning]);
 
   useEffect(() => {
-    let awaitingProfileDigit = false;
-    let sequenceTimer: number | null = null;
-
-    function clearSequence(): void {
-      awaitingProfileDigit = false;
-      if (sequenceTimer !== null) {
-        window.clearTimeout(sequenceTimer);
-        sequenceTimer = null;
-      }
-    }
-
     function handleBuildHotkey(event: KeyboardEvent): void {
       if (
         buildDisabled ||
         buildRunning ||
         isEditableHotkeyTarget(event.target)
       ) {
-        clearSequence();
         return;
       }
 
-      const key = event.key.toLowerCase();
-      if ((event.ctrlKey || event.metaKey) && key === "b") {
-        event.preventDefault();
-        awaitingProfileDigit = true;
-        if (sequenceTimer !== null) {
-          window.clearTimeout(sequenceTimer);
-        }
-        sequenceTimer = window.setTimeout(clearSequence, 1200);
-        return;
-      }
-
-      if (!awaitingProfileDigit || !(event.ctrlKey || event.metaKey)) {
+      if (!(event.ctrlKey || event.metaKey)) {
         return;
       }
 
@@ -339,14 +316,12 @@ function BuildActionsDropdown({
         profileIndex < settings.buildProfiles.length
       ) {
         event.preventDefault();
-        clearSequence();
         triggerBuild(settings.buildProfiles[profileIndex]);
       }
     }
 
     window.addEventListener("keydown", handleBuildHotkey);
     return () => {
-      clearSequence();
       window.removeEventListener("keydown", handleBuildHotkey);
     };
   }, [
@@ -511,7 +486,7 @@ function BuildActionsDropdown({
                     ? "Running..."
                     : truncateBuildProfileLabel(profile.buttonName)}
                 </span>
-                <kbd>Ctrl+B+{index + 1}</kbd>
+                <kbd>Ctrl+{index + 1}</kbd>
               </button>
             ))}
           </div>

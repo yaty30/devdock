@@ -47,6 +47,8 @@ export function createQuerySheetFromPersisted(
     savedName: sheet.sheetName,
     savedSql: sheet.sql,
     savedAt: sheet.savedAt,
+    sheetMode: sheet.sheetMode,
+    objectBinding: sheet.objectBinding,
     output: createEmptySheetOutput(),
   };
 }
@@ -86,6 +88,8 @@ export function serializePersistedWorksheetState(
     sql: sheet.sql,
     savedAt: new Date().toISOString(),
     isOpen: state.openSheetIds.includes(sheet.id),
+    sheetMode: sheet.sheetMode,
+    objectBinding: sheet.objectBinding,
   }));
   const activeSheetId = persistedSheets.some(
     (sheet) => sheet.sheetId === state.activeSheetId,

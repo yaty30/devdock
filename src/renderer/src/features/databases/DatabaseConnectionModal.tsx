@@ -24,6 +24,7 @@ type DatabaseConnectionDraft = {
   user: string;
   password: string;
   savePassword: boolean;
+  autoConnect: boolean;
   connectionTimeoutSeconds: string;
   database: string;
   sslMode: DatabaseSslMode;
@@ -351,6 +352,16 @@ export function DatabaseConnectionModal({
               />
               <span>Save password</span>
             </label>
+            <label className="database-connection-checkbox">
+              <input
+                type="checkbox"
+                checked={draft.autoConnect}
+                onChange={(event) =>
+                  updateDraft("autoConnect", event.target.checked)
+                }
+              />
+              <span>Auto-connect on app start</span>
+            </label>
           </div>
         </section>
 
@@ -550,6 +561,7 @@ function createConnectionDraft(
       user: connection.user,
       password: connection.password ?? "",
       savePassword: connection.savePassword ?? true,
+      autoConnect: connection.autoConnect ?? false,
       connectionTimeoutSeconds: String(
         Math.round((connection.connectionTimeoutMs ?? 10000) / 1000),
       ),
@@ -572,6 +584,7 @@ function createConnectionDraft(
     user: "",
     password: "",
     savePassword: true,
+    autoConnect: false,
     connectionTimeoutSeconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
     database: "",
     sslMode: "disabled",
@@ -596,6 +609,7 @@ function areConnectionDraftsEqual(
     "user",
     "password",
     "savePassword",
+    "autoConnect",
     "connectionTimeoutSeconds",
     "database",
     "sslMode",
@@ -705,6 +719,7 @@ function createConnectionFromDraft(
     user: draft.user.trim(),
     password: draft.password,
     savePassword: draft.savePassword,
+    autoConnect: draft.autoConnect,
     connectionTimeoutMs: timeoutSeconds * 1000,
     database: draft.database.trim(),
     schema,
