@@ -10,6 +10,7 @@ export function SheetContextMenuView({
   onSelectTable,
   onInsertTableTemplate,
   onOpenTableInNewTab,
+  onCreateTemplateSheet,
 }: {
   menu: SheetContextMenu;
   onNewSheet: () => void;
@@ -18,6 +19,9 @@ export function SheetContextMenuView({
   onSelectTable: (table: DatabaseTable) => void;
   onInsertTableTemplate: (table: DatabaseTable) => void;
   onOpenTableInNewTab: (table: DatabaseTable) => void;
+  onCreateTemplateSheet: (
+    objectType: "view" | "procedure" | "function" | "trigger" | "index",
+  ) => void;
 }): JSX.Element {
   return (
     <div
@@ -56,6 +60,10 @@ export function SheetContextMenuView({
             Open in new tab
           </button>
         </>
+      ) : menu.kind === "object-group" ? (
+        <button type="button" role="menuitem" onClick={() => onCreateTemplateSheet(menu.objectType)}>
+          Add new {menu.objectType}
+        </button>
       ) : (
         <>
           <button
