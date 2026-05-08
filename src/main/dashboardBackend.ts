@@ -139,6 +139,8 @@ type SheetRow = {
   created_at: string;
   updated_at: string;
   auto_save_enabled: number;
+  pinned: number;
+  pinned_at: string | null;
 };
 
 type DatabaseConnectionRow = {
@@ -1092,10 +1094,13 @@ export class DashboardBackend {
     const rows = this.db
       .prepare(
         `SELECT id, project_id, title, content_json, created_at, updated_at,
-                auto_save_enabled
+                auto_save_enabled, pinned, pinned_at
          FROM sheets
          WHERE project_id = ?
-         ORDER BY updated_at DESC, created_at DESC`,
+         ORDER BY pinned DESC,
+                  datetime(COALESCE(pinned_at, '')) DESC,
+                  datetime(updated_at) DESC,
+                  datetime(created_at) DESC`,
       )
       .all(projectId) as SheetRow[];
 
@@ -1116,14 +1121,16 @@ export class DashboardBackend {
       createdAt: now,
       updatedAt: now,
       autoSaveEnabled: true,
+      pinned: false,
+      pinnedAt: null,
     };
 
     this.db
       .prepare(
         `INSERT INTO sheets (
           id, project_id, title, content_json, created_at, updated_at,
-          auto_save_enabled
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          auto_save_enabled, pinned, pinned_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         sheet.id,
@@ -1133,6 +1140,8 @@ export class DashboardBackend {
         sheet.createdAt,
         sheet.updatedAt,
         sheet.autoSaveEnabled ? 1 : 0,
+        0,
+        null,
       );
 
     return sheet;
@@ -1155,15 +1164,52 @@ export class DashboardBackend {
         : updates.autoSaveEnabled
           ? 1
           : 0;
-    const updatedAt = new Date().toISOString();
+    const nextPinned =
+      updates.pinned === undefined ? existing.pinned : updates.pinned ? 1 : 0;
+    const nextPinnedAt =
+      updates.pinnedAt === undefined
+        ? nextPinned === 1
+          ? existing.pinned_at
+          : null
+        : updates.pinnedAt;
+
+    if (existing.pinned === 0 && nextPinned === 1) {
+      const pinnedCount = this.db
+        .prepare(
+          `SELECT COUNT(*) AS count
+           FROM sheets
+           WHERE project_id = ? AND pinned = 1 AND id <> ?`,
+        )
+        .get(projectId, sheetId) as { count: number };
+      if (pinnedCount.count >= 3) {
+        throw new Error(
+          "You can pin up to 3 notes. Unpin one note before pinning another.",
+        );
+      }
+    }
+
+    const updatesContentOrAutosave =
+      updates.contentJson !== undefined ||
+      updates.autoSaveEnabled !== undefined;
+    const updatedAt = updatesContentOrAutosave
+      ? new Date().toISOString()
+      : existing.updated_at;
 
     this.db
       .prepare(
         `UPDATE sheets
-         SET content_json = ?, auto_save_enabled = ?, updated_at = ?
+         SET content_json = ?, auto_save_enabled = ?, pinned = ?, pinned_at = ?, updated_at = ?
          WHERE project_id = ? AND id = ?`,
       )
-      .run(nextContentJson, nextAutoSaveEnabled, updatedAt, projectId, sheetId);
+      .run(
+        nextContentJson,
+        nextAutoSaveEnabled,
+        nextPinned,
+        nextPinned === 1 ? nextPinnedAt : null,
+        updatedAt,
+        projectId,
+        sheetId,
+      );
 
     const updated = this.getSheetRow(projectId, sheetId);
     if (!updated) {
@@ -1693,6 +1739,8 @@ export class DashboardBackend {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         auto_save_enabled INTEGER NOT NULL DEFAULT 1,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        pinned_at TEXT,
         FOREIGN KEY(project_id) REFERENCES projects(id)
       );
 
@@ -1754,6 +1802,23 @@ export class DashboardBackend {
     this.ensureBuildRunCleanlinessColumn();
     this.ensureDatabaseExecutionMessageColumn();
     this.pruneDatabaseExecutionHistory();
+    this.ensureSheetPinColumns();
+  }
+
+  private ensureSheetPinColumns(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(sheets)")
+      .all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "pinned")) {
+      this.db.exec(
+        "ALTER TABLE sheets ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+      );
+    }
+    if (!columns.some((column) => column.name === "pinned_at")) {
+      this.db.exec("ALTER TABLE sheets ADD COLUMN pinned_at TEXT");
+    }
   }
 
   private ensureBuildRunCleanlinessColumn(): void {
@@ -1843,7 +1908,7 @@ export class DashboardBackend {
     return this.db
       .prepare(
         `SELECT id, project_id, title, content_json, created_at, updated_at,
-                auto_save_enabled
+          auto_save_enabled, pinned, pinned_at
          FROM sheets
          WHERE project_id = ? AND id = ?`,
       )
@@ -1859,6 +1924,8 @@ export class DashboardBackend {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       autoSaveEnabled: row.auto_save_enabled === 1,
+      pinned: row.pinned === 1,
+      pinnedAt: row.pinned_at,
     };
   }
 

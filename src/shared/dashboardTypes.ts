@@ -1,3 +1,5 @@
+import type { ChatNativeNotification, ChatServiceConfig } from "./chatTypes";
+
 export type ServiceName = "frontend" | "wildfly";
 export type ServiceAction = "start" | "stop" | "restart";
 export type ServiceState =
@@ -40,10 +42,12 @@ export type Sheet = {
   createdAt: string;
   updatedAt: string;
   autoSaveEnabled: boolean;
+  pinned: boolean;
+  pinnedAt: string | null;
 };
 
 export type SheetUpdate = Partial<
-  Pick<Sheet, "contentJson" | "autoSaveEnabled">
+  Pick<Sheet, "contentJson" | "autoSaveEnabled" | "pinned" | "pinnedAt">
 >;
 
 export type ProjectRecord = {
@@ -470,6 +474,9 @@ export type DashboardApi = {
   deleteSheet: (projectId: string, sheetId: string) => Promise<void>;
   browsePath: (options: BrowsePathOptions) => Promise<string | null>;
   openPath: (path: string) => Promise<string>;
+  openExternalUrl: (url: string) => Promise<void>;
+  getChatConfig: () => Promise<ChatServiceConfig>;
+  notifyChatMessage: (notification: ChatNativeNotification) => Promise<void>;
   openLog: (projectId: string, channel: LogChannel) => Promise<string>;
   deleteProject: (projectId: string) => Promise<void>;
   createProject: (name: string, code: string) => Promise<ProjectRecord>;
@@ -513,4 +520,5 @@ export type DashboardApi = {
   onShutdownServiceStopped: (
     listener: (projectId: string, service: ServiceName) => void,
   ) => () => void;
+  onChatOpenRequest: (listener: (conversationId: string) => void) => () => void;
 };

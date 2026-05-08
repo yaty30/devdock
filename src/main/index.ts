@@ -1,8 +1,19 @@
 import started from "electron-squirrel-startup";
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Notification,
+  dialog,
+  ipcMain,
+  shell,
+} from "electron";
 import type { OpenDialogOptions, SaveDialogOptions } from "electron";
-import { extname, join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { hostname, userInfo } from "node:os";
+import { dirname, extname, join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { DashboardBackend } from "./dashboardBackend";
+import { ChatService } from "./chatService";
 import type {
   BuildQueryOptions,
   DatabaseConnection,
@@ -14,6 +25,11 @@ import type {
   LogChannel,
   SheetUpdate,
 } from "../shared/dashboardTypes";
+import type {
+  ChatNativeNotification,
+  ChatServiceConfig,
+  ChatUserProfile,
+} from "../shared/chatTypes";
 
 if (started) {
   app.quit();
@@ -21,10 +37,19 @@ if (started) {
 }
 
 let backend: DashboardBackend | null = null;
+let chatService: ChatService | null = null;
+let chatConfig: ChatServiceConfig | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
 const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
+const DEFAULT_CHAT_HOST = process.env.IVS_DASHBOARD_CHAT_HOST ?? "127.0.0.1";
+const DEFAULT_CHAT_PORT = Number(
+  process.env.IVS_DASHBOARD_CHAT_PORT ?? "43781",
+);
+const DEFAULT_CHAT_ROOT =
+  process.env.IVS_DASHBOARD_CHAT_ROOT ??
+  "L:\\ABS\\James Yip\\Host\\Helper\\IVS-Dashboard\\chat";
 
 function getBackend(): DashboardBackend {
   if (!backend) {
@@ -264,6 +289,30 @@ function registerIpc(): void {
   ipcMain.handle("dashboard:openPath", (_event, path: string) =>
     withLoggedErrors("dashboard:openPath", () => shell.openPath(path)),
   );
+  ipcMain.handle("dashboard:openExternalUrl", (_event, url: string) =>
+    withLoggedErrors("dashboard:openExternalUrl", async () => {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        throw new Error("Only HTTP and HTTPS links can be opened.");
+      }
+      await shell.openExternal(parsed.toString());
+    }),
+  );
+  ipcMain.handle("chat:getConfig", () =>
+    withLoggedErrors("chat:getConfig", () => {
+      if (!chatConfig) {
+        throw new Error("Chat has not been initialized.");
+      }
+      return chatConfig;
+    }),
+  );
+  ipcMain.handle(
+    "chat:notifyMessage",
+    (_event, notification: ChatNativeNotification) =>
+      withLoggedErrors("chat:notifyMessage", () => {
+        showChatNotification(notification);
+      }),
+  );
   ipcMain.handle(
     "dashboard:openLog",
     (_event, projectId: string, channel: LogChannel) =>
@@ -387,6 +436,122 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function initializeChat(userDataPath: string): ChatServiceConfig {
+  const httpUrl = normalizeHttpUrl(
+    process.env.IVS_DASHBOARD_CHAT_URL ??
+      `http://${DEFAULT_CHAT_HOST}:${DEFAULT_CHAT_PORT}`,
+  );
+  const profile = readChatProfile(userDataPath);
+  const shouldStartEmbedded =
+    process.env.IVS_DASHBOARD_CHAT_SERVICE !== "0" &&
+    process.env.IVS_DASHBOARD_CHAT_URL === undefined;
+
+  if (shouldStartEmbedded) {
+    const paths = resolveChatStoragePaths(userDataPath);
+    chatService = new ChatService({
+      host: DEFAULT_CHAT_HOST,
+      port: DEFAULT_CHAT_PORT,
+      databasePath: paths.databasePath,
+      uploadsPath: paths.uploadsPath,
+      publicHttpUrl: httpUrl,
+    });
+    void chatService.start().catch((error) => {
+      console.error("[chat:start] Chat service unavailable", error);
+      chatService = null;
+    });
+  }
+
+  return {
+    httpUrl,
+    wsUrl: httpUrl.replace(/^http:/, "ws:").replace(/^https:/, "wss:") + "/ws",
+    profile,
+  };
+}
+
+function normalizeHttpUrl(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function resolveChatStoragePaths(userDataPath: string): {
+  databasePath: string;
+  uploadsPath: string;
+} {
+  try {
+    mkdirSync(DEFAULT_CHAT_ROOT, { recursive: true });
+    return {
+      databasePath: join(DEFAULT_CHAT_ROOT, "chat.sqlite"),
+      uploadsPath: join(DEFAULT_CHAT_ROOT, "uploads"),
+    };
+  } catch (error) {
+    console.error("[chat:storage] Falling back to local chat storage", error);
+    const fallbackRoot = join(userDataPath, "chat");
+    mkdirSync(fallbackRoot, { recursive: true });
+    return {
+      databasePath: join(fallbackRoot, "chat.sqlite"),
+      uploadsPath: join(fallbackRoot, "uploads"),
+    };
+  }
+}
+
+function readChatProfile(userDataPath: string): ChatUserProfile {
+  const profilePath = join(userDataPath, "chat-profile.json");
+  if (existsSync(profilePath)) {
+    try {
+      const parsed = JSON.parse(
+        readFileSync(profilePath, "utf8"),
+      ) as ChatUserProfile;
+      if (parsed.userId && parsed.displayName) {
+        return parsed;
+      }
+    } catch (error) {
+      console.error("[chat:profile] Failed to read chat profile", error);
+    }
+  }
+
+  const profile: ChatUserProfile = {
+    userId: randomUUID(),
+    displayName:
+      process.env.IVS_DASHBOARD_CHAT_NAME?.trim() ||
+      userInfo().username ||
+      "IVS user",
+    machineName: hostname(),
+  };
+  mkdirSync(dirname(profilePath), { recursive: true });
+  writeFileSync(profilePath, `${JSON.stringify(profile, null, 2)}\n`, "utf8");
+  return profile;
+}
+
+function showChatNotification(notification: ChatNativeNotification): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || window.isFocused()) {
+    return;
+  }
+
+  window.flashFrame(true);
+  if (!Notification.isSupported()) {
+    return;
+  }
+
+  const nativeNotification = new Notification({
+    title: notification.title,
+    body: notification.body,
+    silent: false,
+  });
+  nativeNotification.on("click", () => {
+    if (window.isMinimized()) {
+      window.restore();
+    }
+    window.show();
+    window.focus();
+    window.flashFrame(false);
+    window.webContents.send(
+      "chat:open-conversation",
+      notification.conversationId,
+    );
+  });
+  nativeNotification.show();
+}
+
 const createWindow = (): void => {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -421,6 +586,7 @@ const createWindow = (): void => {
     const entries = be.getShutdownEntries();
     if (entries.length === 0) {
       be.shutdown();
+      chatService?.stop();
       win.destroy();
       app.exit(0);
       return;
@@ -441,9 +607,14 @@ const createWindow = (): void => {
       })
       .then(async () => {
         await delay(EXIT_AFTER_SHUTDOWN_DELAY_MS);
+        chatService?.stop();
         win.destroy();
         app.exit(0);
       });
+  });
+
+  mainWindow.on("focus", () => {
+    mainWindow?.flashFrame(false);
   });
 
   mainWindow.once("ready-to-show", () => {
@@ -468,7 +639,9 @@ const createWindow = (): void => {
 
 app.whenReady().then(() => {
   try {
-    backend = new DashboardBackend(app.getPath("userData"), app.getAppPath());
+    const userDataPath = app.getPath("userData");
+    chatConfig = initializeChat(userDataPath);
+    backend = new DashboardBackend(userDataPath, app.getAppPath());
     registerIpc();
     createWindow();
     void backend.autoStartServices().catch((error) => {
@@ -496,6 +669,7 @@ app.on("before-quit", (event) => {
   }
 
   backend?.shutdown();
+  chatService?.stop();
 });
 
 app.on("window-all-closed", () => {

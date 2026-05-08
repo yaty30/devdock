@@ -47,6 +47,17 @@ export type {
   ShutdownEntry,
   OracleConnectionMode,
 } from "../../shared/dashboardTypes";
+export type {
+  ChatAttachment,
+  ChatConversation,
+  ChatEvent,
+  ChatMessage,
+  ChatMessagePage,
+  ChatNativeNotification,
+  ChatServiceConfig,
+  ChatUser,
+  ChatUserProfile,
+} from "../../shared/chatTypes";
 
 export type AppSection = "dashboard" | "project" | "database";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal" | "notes";

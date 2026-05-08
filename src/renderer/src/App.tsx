@@ -22,6 +22,7 @@ import { GitTerminalTab } from "./features/git/GitTerminalTab";
 import { MonitorTab } from "./features/monitor/MonitorTab";
 import { NotesTab } from "./features/notes/NotesTab";
 import { SettingsContent } from "./features/settings/SettingsContent";
+import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import closeMouthLogo from "./assets/close-mouth-logo.png";
 import openMouthLogo from "./assets/open-mouth-logo.png";
@@ -911,6 +912,9 @@ function App(): JSX.Element {
               <h1>IVS Dashboard</h1>
               <p>Loading project configuration.</p>
             </div>
+            <div className="main-header-actions">
+              <ChatFeature onToast={showSnackbar} />
+            </div>
           </header>
         </main>
         {splashOverlay}
@@ -969,15 +973,18 @@ function App(): JSX.Element {
                 <p>All project server status and last build results.</p>
               </div>
             )}
-            {activeSection === "database" && selectedDatabaseConnection ? (
-              <DatabaseHeaderActions
-                connection={selectedDatabaseConnection}
-                databaseStatus={databaseRuntimeStatus}
-                fontSizeMode={fontSizeMode}
-                onFontSizeChange={setFontSizeMode}
-                onSettingsClick={openDatabaseConnectionSettings}
-              />
-            ) : null}
+            <div className="main-header-actions">
+              {activeSection === "database" && selectedDatabaseConnection ? (
+                <DatabaseHeaderActions
+                  connection={selectedDatabaseConnection}
+                  databaseStatus={databaseRuntimeStatus}
+                  fontSizeMode={fontSizeMode}
+                  onFontSizeChange={setFontSizeMode}
+                  onSettingsClick={openDatabaseConnectionSettings}
+                />
+              ) : null}
+              <ChatFeature onToast={showSnackbar} />
+            </div>
           </header>
 
           {activeSection === "database" ? (
@@ -1086,29 +1093,41 @@ function App(): JSX.Element {
             <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
           )}
           {activeSection === "project" ? (
-            activeProjectState ? (
-              <HeaderActions
-                disabled={projectLoading}
-                projectId={selectedProject.id}
-                settings={activeProjectState.settings}
-                statuses={activeProjectState.statuses}
-                recentBuilds={activeProjectState.recentBuilds}
-                gitStatus={activeProjectState.gitStatus}
+            <div className="main-header-actions">
+              {activeProjectState ? (
+                <HeaderActions
+                  disabled={projectLoading}
+                  projectId={selectedProject.id}
+                  settings={activeProjectState.settings}
+                  statuses={activeProjectState.statuses}
+                  recentBuilds={activeProjectState.recentBuilds}
+                  gitStatus={activeProjectState.gitStatus}
+                  fontSizeMode={fontSizeMode}
+                  onFontSizeChange={setFontSizeMode}
+                  onSettingsClick={() => setSettingsOpen(true)}
+                  onServiceWarning={(message) =>
+                    showSnackbar(message, "invalid")
+                  }
+                />
+              ) : null}
+              <ChatFeature onToast={showSnackbar} />
+            </div>
+          ) : activeSection === "database" && selectedDatabaseConnection ? (
+            <div className="main-header-actions">
+              <DatabaseHeaderActions
+                connection={selectedDatabaseConnection}
+                databaseStatus={databaseRuntimeStatus}
                 fontSizeMode={fontSizeMode}
                 onFontSizeChange={setFontSizeMode}
-                onSettingsClick={() => setSettingsOpen(true)}
-                onServiceWarning={(message) => showSnackbar(message, "invalid")}
+                onSettingsClick={openDatabaseConnectionSettings}
               />
-            ) : null
-          ) : activeSection === "database" && selectedDatabaseConnection ? (
-            <DatabaseHeaderActions
-              connection={selectedDatabaseConnection}
-              databaseStatus={databaseRuntimeStatus}
-              fontSizeMode={fontSizeMode}
-              onFontSizeChange={setFontSizeMode}
-              onSettingsClick={openDatabaseConnectionSettings}
-            />
-          ) : null}
+              <ChatFeature onToast={showSnackbar} />
+            </div>
+          ) : (
+            <div className="main-header-actions">
+              <ChatFeature onToast={showSnackbar} />
+            </div>
+          )}
         </header>
 
         {activeSection === "dashboard" ? (
@@ -1166,7 +1185,10 @@ function App(): JSX.Element {
               )
             ) : null}
             {activeTab === "notes" ? (
-              <NotesTab projectId={selectedProject.id} />
+              <NotesTab
+                projectId={selectedProject.id}
+                onFeedback={(message) => showSnackbar(message, "invalid")}
+              />
             ) : null}
           </>
         ) : null}

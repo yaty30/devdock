@@ -11,9 +11,11 @@ declare module "better-sqlite3" {
   };
 
   export type Database = {
+    close: () => void;
     exec: (source: string) => void;
     prepare: (source: string) => Statement;
     pragma: (source: string) => unknown;
+    transaction: <T extends (...args: never[]) => unknown>(fn: T) => T;
   };
 
   const DatabaseConstructor: {

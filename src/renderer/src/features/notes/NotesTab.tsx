@@ -59,6 +59,9 @@ type StaticRenderContext = {
 };
 
 const AUTO_SAVE_DELAY_MS = 750;
+const PIN_LIMIT = 3;
+const PIN_LIMIT_MESSAGE =
+  "You can pin up to 3 notes. Unpin one note before pinning another.";
 const INITIAL_VISIBLE_NOTES = 18;
 const VISIBLE_NOTE_INCREMENT = 12;
 const DEFAULT_TEXT_COLOR = "#f9fafb";
@@ -113,7 +116,13 @@ const NoteFindHighlight = Extension.create({
   },
 });
 
-export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
+export function NotesTab({
+  projectId,
+  onFeedback,
+}: {
+  projectId: string;
+  onFeedback?: (message: string) => void;
+}): JSX.Element {
   const [sheets, setSheets] = useState<Sheet[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -327,6 +336,26 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
     }
   }
 
+  async function handleTogglePin(sheet: Sheet): Promise<void> {
+    const nextPinned = !sheet.pinned;
+    if (
+      nextPinned &&
+      sheets.filter((item) => item.pinned && item.id !== sheet.id).length >=
+        PIN_LIMIT
+    ) {
+      onFeedback?.(PIN_LIMIT_MESSAGE);
+      return;
+    }
+
+    const saved = await saveSheet(sheet.id, {
+      pinned: nextPinned,
+      pinnedAt: nextPinned ? new Date().toISOString() : null,
+    });
+    if (!saved?.pinned && nextPinned) {
+      onFeedback?.(PIN_LIMIT_MESSAGE);
+    }
+  }
+
   async function handleCreateNote(title: string): Promise<boolean> {
     try {
       const created = await window.ivsDashboard.createSheet(projectId, title);
@@ -457,6 +486,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
                 sheet={sheet}
                 contentJson={previewContent(sheet)}
                 onOpen={() => openNote(sheet.id)}
+                onTogglePin={() => void handleTogglePin(sheet)}
                 onDelete={() => setDeleteTarget(sheet)}
               />
             ))}
@@ -469,6 +499,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
           saveStatuses={saveStatuses}
           getContent={previewContent}
           onOpen={(sheet) => openNote(sheet.id)}
+          onTogglePin={(sheet) => void handleTogglePin(sheet)}
           onDelete={setDeleteTarget}
         />
       )}
@@ -498,6 +529,7 @@ export function NotesTab({ projectId }: { projectId: string }): JSX.Element {
               editEnabled={expandedEditEnabled}
               onToggleAutoSave={() => void handleToggleAutoSave(expandedSheet)}
               onToggleEdit={() => setExpandedEditEnabled((current) => !current)}
+              onTogglePin={() => void handleTogglePin(expandedSheet)}
               onDelete={() => setDeleteTarget(expandedSheet)}
             />
           ) : null
@@ -552,11 +584,13 @@ function NotePreviewCard({
   sheet,
   contentJson,
   onOpen,
+  onTogglePin,
   onDelete,
 }: {
   sheet: Sheet;
   contentJson: SheetContentJson;
   onOpen: () => void;
+  onTogglePin: () => void;
   onDelete: () => void;
 }): JSX.Element {
   function handleKeyDown(event: KeyboardEvent<HTMLElement>): void {
@@ -577,18 +611,21 @@ function NotePreviewCard({
     >
       <header className="note-preview-header">
         <h2>{sheet.title}</h2>
-        <button
-          className="sheet-icon-button danger"
-          type="button"
-          aria-label={`Delete ${sheet.title}`}
-          title="Delete Note"
-          onClick={(event) => {
-            event.stopPropagation();
-            onDelete();
-          }}
-        >
-          <Trash2 size={15} />
-        </button>
+        <div className="note-preview-actions">
+          <PinButton pinned={sheet.pinned} onClick={onTogglePin} />
+          <button
+            className="sheet-icon-button danger"
+            type="button"
+            aria-label={`Delete ${sheet.title}`}
+            title="Delete Note"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete();
+            }}
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
       </header>
       <StaticNoteContent
         className="note-preview-content"
@@ -604,12 +641,14 @@ function ExpandedNoteHeaderActions({
   editEnabled,
   onToggleAutoSave,
   onToggleEdit,
+  onTogglePin,
   onDelete,
 }: {
   sheet: Sheet;
   editEnabled: boolean;
   onToggleAutoSave: () => void;
   onToggleEdit: () => void;
+  onTogglePin: () => void;
   onDelete: () => void;
 }): JSX.Element {
   return (
@@ -637,6 +676,7 @@ function ExpandedNoteHeaderActions({
       >
         <EditIcon size={18} />
       </button>
+      <PinButton pinned={sheet.pinned} onClick={onTogglePin} />
       <button
         className="sheet-icon-button danger"
         type="button"
@@ -1190,6 +1230,7 @@ function NoteListView({
   saveStatuses,
   getContent,
   onOpen,
+  onTogglePin,
   onDelete,
 }: {
   sheets: Sheet[];
@@ -1197,6 +1238,7 @@ function NoteListView({
   saveStatuses: Record<string, SaveStatus>;
   getContent: (sheet: Sheet) => SheetContentJson;
   onOpen: (sheet: Sheet) => void;
+  onTogglePin: (sheet: Sheet) => void;
   onDelete: (sheet: Sheet) => void;
 }): JSX.Element {
   return (
@@ -1230,7 +1272,14 @@ function NoteListView({
                 }}
               >
                 <td>
-                  <strong>{sheet.title}</strong>
+                  <div className="notes-list-title-row">
+                    {sheet.pinned ? (
+                      <span className="notes-list-pin" title="Pinned note">
+                        <PinIcon size={14} filled />
+                      </span>
+                    ) : null}
+                    <strong>{sheet.title}</strong>
+                  </div>
                   <span className={`sheet-save-status ${status}`}>
                     {saveStatusLabel(status)}
                   </span>
@@ -1240,6 +1289,10 @@ function NoteListView({
                 <td>{textFromContentJson(contentJson).length}</td>
                 <td>
                   <div className="notes-list-actions">
+                    <PinButton
+                      pinned={sheet.pinned}
+                      onClick={() => onTogglePin(sheet)}
+                    />
                     <button
                       type="button"
                       className="danger"
@@ -1454,11 +1507,72 @@ function noteTitleValidation(
 
 function sortSheets(items: Sheet[]): Sheet[] {
   return [...items].sort((left, right) => {
+    if (left.pinned !== right.pinned) {
+      return left.pinned ? -1 : 1;
+    }
+    if (left.pinned && right.pinned) {
+      const pinnedDiff =
+        new Date(right.pinnedAt ?? right.updatedAt).getTime() -
+        new Date(left.pinnedAt ?? left.updatedAt).getTime();
+      if (pinnedDiff !== 0) return pinnedDiff;
+    }
     const updatedDiff =
       new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
     if (updatedDiff !== 0) return updatedDiff;
     return left.title.localeCompare(right.title);
   });
+}
+
+function PinButton({
+  pinned,
+  onClick,
+}: {
+  pinned: boolean;
+  onClick: () => void;
+}): JSX.Element {
+  const label = pinned ? "Unpin note" : "Pin note";
+  return (
+    <button
+      className={`sheet-icon-button note-pin-button${pinned ? " active" : ""}`}
+      type="button"
+      aria-label={label}
+      title={label}
+      aria-pressed={pinned}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+    >
+      <PinIcon size={18} filled={pinned} />
+    </button>
+  );
+}
+
+function PinIcon({
+  size = 20,
+  filled = false,
+}: {
+  size?: number;
+  filled?: boolean;
+}): JSX.Element {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      focusable="false"
+      fill={filled ? "currentColor" : "none"}
+      style={{ transform: "scaleX(-1)" }}
+    >
+      <path
+        d="M14.579 14.579L11.6316 17.5264L10.7683 16.6631C10.3775 16.2723 10.1579 15.7422 10.1579 15.1894V13.1053L7.21052 10.158L5 9.42111L9.42111 5L10.158 7.21052L13.1053 10.1579L15.1894 10.1579C15.7422 10.1579 16.2722 10.3775 16.6631 10.7683L17.5264 11.6316L14.579 14.579ZM14.579 14.579L19 19"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 function countMatches(text: string, query: string): number {

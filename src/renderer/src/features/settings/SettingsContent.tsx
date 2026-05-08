@@ -5,8 +5,7 @@ import {
   useState,
   type ComponentProps,
 } from "react";
-import { createPortal } from "react-dom";
-import { Check, ChevronDown, GripVertical, Plus, Trash2 } from "lucide-react";
+import { GripVertical, Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {

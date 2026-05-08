@@ -10,6 +10,7 @@ import type {
   ShutdownEntry,
   BrowsePathOptions,
 } from "../shared/dashboardTypes";
+import type { ChatNativeNotification } from "../shared/chatTypes";
 
 const api: DashboardApi = {
   getSnapshot: () => ipcRenderer.invoke("dashboard:getSnapshot"),
@@ -75,6 +76,11 @@ const api: DashboardApi = {
   browsePath: (options: BrowsePathOptions) =>
     ipcRenderer.invoke("dashboard:browsePath", options),
   openPath: (path) => ipcRenderer.invoke("dashboard:openPath", path),
+  openExternalUrl: (url) =>
+    ipcRenderer.invoke("dashboard:openExternalUrl", url),
+  getChatConfig: () => ipcRenderer.invoke("chat:getConfig"),
+  notifyChatMessage: (notification: ChatNativeNotification) =>
+    ipcRenderer.invoke("chat:notifyMessage", notification),
   openLog: (projectId, channel) =>
     ipcRenderer.invoke("dashboard:openLog", projectId, channel),
   deleteProject: (projectId) =>
@@ -134,6 +140,14 @@ const api: DashboardApi = {
     ) => listener(projectId, service);
     ipcRenderer.on("dashboard:shutdown-service-stopped", handler);
     return () => ipcRenderer.off("dashboard:shutdown-service-stopped", handler);
+  },
+  onChatOpenRequest: (listener: (conversationId: string) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      conversationId: string,
+    ) => listener(conversationId);
+    ipcRenderer.on("chat:open-conversation", handler);
+    return () => ipcRenderer.off("chat:open-conversation", handler);
   },
 };
 
