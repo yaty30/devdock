@@ -8,13 +8,8 @@ import {
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, GripVertical, Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
-import {
-  AppSelect,
-  type AppSelectOption,
-} from "../../components/common/AppSelect";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {
-  BuildOutcomeType,
   BuildProfileRecord,
   ConfirmDialogState,
   Project,
@@ -57,40 +52,12 @@ function FieldRow({
   );
 }
 
-const OUTCOME_OPTIONS: Array<AppSelectOption<BuildOutcomeType>> = [
-  { value: "build-only", label: "Build only", dotColor: "var(--accent)" },
-  {
-    value: "build-and-deploy",
-    label: "Build + deploy",
-    dotColor: "var(--success)",
-  },
-];
-
 const PROFILE_ROW_EXIT_MS = 180;
 
 type BuildProfileField = "buttonName" | "profileName" | "goals";
 type BuildProfileFieldErrors = Partial<
   Record<string, Partial<Record<BuildProfileField, boolean>>>
 >;
-
-function OutcomeSelect({
-  value,
-  onChange,
-}: {
-  value: BuildOutcomeType;
-  onChange: (value: BuildOutcomeType) => void;
-}): JSX.Element {
-  return (
-    <AppSelect
-      className="build-outcome-select"
-      value={value}
-      options={OUTCOME_OPTIONS}
-      onChange={onChange}
-      ariaLabel="Build outcome"
-      minDropdownWidth={168}
-    />
-  );
-}
 
 export function SettingsContent({
   selectedProject,
@@ -1027,7 +994,6 @@ export function SettingsContent({
                       <th>Name</th>
                       <th>Profile</th>
                       <th>Goal</th>
-                      <th>Outcome</th>
                       <th>Confirm</th>
                       <th></th>
                     </tr>
@@ -1138,16 +1104,6 @@ export function SettingsContent({
                             onChange={(event) =>
                               updateProfile(profile.id, {
                                 goals: event.target.value,
-                              })
-                            }
-                          />
-                        </td>
-                        <td>
-                          <OutcomeSelect
-                            value={profile.outcomeType}
-                            onChange={(outcomeType) =>
-                              updateProfile(profile.id, {
-                                outcomeType,
                               })
                             }
                           />

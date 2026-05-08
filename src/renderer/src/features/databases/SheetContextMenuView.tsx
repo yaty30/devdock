@@ -9,6 +9,7 @@ export function SheetContextMenuView({
   onDelete,
   onSelectTable,
   onInsertTableTemplate,
+  onOpenTableInNewTab,
 }: {
   menu: SheetContextMenu;
   onNewSheet: () => void;
@@ -16,6 +17,7 @@ export function SheetContextMenuView({
   onDelete: (sheetId: string) => void;
   onSelectTable: (table: DatabaseTable) => void;
   onInsertTableTemplate: (table: DatabaseTable) => void;
+  onOpenTableInNewTab: (table: DatabaseTable) => void;
 }): JSX.Element {
   return (
     <div
@@ -45,6 +47,13 @@ export function SheetContextMenuView({
           >
             <BetweenHorizonalStart size={13} />
             INSERT INTO {formatQualifiedObjectName(menu.table)}
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => onOpenTableInNewTab(menu.table)}
+          >
+            Open in new tab
           </button>
         </>
       ) : (

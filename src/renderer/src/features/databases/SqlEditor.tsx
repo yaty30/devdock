@@ -8,7 +8,7 @@ import {
   type CompletionContext,
   type CompletionResult,
 } from "@codemirror/autocomplete";
-import { defaultKeymap } from "@codemirror/commands";
+import { defaultKeymap, indentLess, indentMore } from "@codemirror/commands";
 import { sql } from "@codemirror/lang-sql";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import {
@@ -259,13 +259,13 @@ function createSqlEditorExtensions(
             if (completionStatus(view.state) === "active") {
               return acceptCompletion(view);
             }
-
-            const word = view.state.wordAt(view.state.selection.main.head);
-            if (!word || word.to - word.from < 2) {
-              return false;
-            }
-
-            return startCompletion(view);
+            return indentMore(view);
+          },
+        },
+        {
+          key: "Shift-Tab",
+          run(view) {
+            return indentLess(view);
           },
         },
         ...defaultKeymap,

@@ -147,6 +147,7 @@ export type QuerySheet = {
   savedSql: string;
   savedAt: string | null;
   output: SheetOutputState;
+  sheetMode?: "normal" | "transient-preview";
 };
 
 export type SheetOutputTab = "results" | "messages";
@@ -1074,6 +1075,10 @@ function ConnectionActionWorkspace({
     if (!activeSheet) {
       return;
     }
+    if (activeSheet.sheetMode === "transient-preview") {
+      addMessage("error", "This table preview sheet is not savable.");
+      return;
+    }
 
     const savedAt = new Date().toISOString();
     const snapshot = sheetState;
@@ -1402,20 +1407,22 @@ function ConnectionActionWorkspace({
     setContextMenu(null);
   }
 
+  async function runSqlInSheet(sheetId: string, sql: string): Promise<void> {
+    await runDatabaseQuery({ sql, from: 0, to: sql.length }, sheetId, "execute");
+  }
+
   function appendTableSelectTemplate(table: DatabaseTable): void {
     const template = createSelectTemplate(table);
     const view = editorViewRef.current;
 
     if (!activeSheet) {
-      const sheet = createQuerySheet(
-        nextUntitledName(sheetState.sheets),
-        template,
-      );
+      const sheet = createQuerySheet(nextUntitledName(sheetState.sheets), template);
       updateCurrentConnectionState((state) => ({
         sheets: [...state.sheets, sheet],
         activeSheetId: sheet.id,
         openSheetIds: [...state.openSheetIds, sheet.id],
       }));
+      void runSqlInSheet(sheet.id, template);
       setContextMenu(null);
       return;
     }
@@ -1432,6 +1439,34 @@ function ConnectionActionWorkspace({
     } else {
       updateActiveSheetSql(nextSql);
     }
+    void runSqlInSheet(activeSheet.id, nextSql);
+    setContextMenu(null);
+  }
+
+  function openTableInNewTab(table: DatabaseTable): void {
+    const tableSheetName = table.schema ? `${table.schema}.${table.name}` : table.name;
+    const existingSheet = sheetState.sheets.find((sheet) => sheet.name === tableSheetName);
+    const template = createSelectTemplate(table);
+    if (existingSheet) {
+      updateCurrentConnectionState((state) => ({
+        ...state,
+        activeSheetId: existingSheet.id,
+        openSheetIds: state.openSheetIds.includes(existingSheet.id)
+          ? state.openSheetIds
+          : [...state.openSheetIds, existingSheet.id],
+      }));
+      void runSqlInSheet(existingSheet.id, existingSheet.sql || template);
+      setContextMenu(null);
+      return;
+    }
+    const sheet = createQuerySheet(tableSheetName, template);
+    sheet.sheetMode = "transient-preview";
+    updateCurrentConnectionState((state) => ({
+      sheets: [...state.sheets, sheet],
+      activeSheetId: sheet.id,
+      openSheetIds: [...state.openSheetIds, sheet.id],
+    }));
+    void runSqlInSheet(sheet.id, template);
     setContextMenu(null);
   }
 
@@ -1979,14 +2014,15 @@ function ConnectionActionWorkspace({
       </section>
 
       {contextMenu ? (
-        <SheetContextMenuView
+          <SheetContextMenuView
           menu={contextMenu}
           onNewSheet={createNewSheet}
           onRename={startRename}
           onDelete={requestDeleteSheet}
-          onSelectTable={appendTableSelectTemplate}
-          onInsertTableTemplate={insertTableTemplate}
-        />
+            onSelectTable={appendTableSelectTemplate}
+            onInsertTableTemplate={insertTableTemplate}
+            onOpenTableInNewTab={openTableInNewTab}
+          />
       ) : null}
       {deleteRequest ? (
         <ConfirmDialog
