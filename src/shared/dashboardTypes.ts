@@ -315,6 +315,13 @@ export type DatabaseWorksheet = {
   sql: string;
   savedAt: string;
   isOpen: boolean;
+  sheetMode?: "normal" | "object-backed" | "transient-preview";
+  objectBinding?: {
+    connectionId: string;
+    objectType: "view" | "procedure" | "function";
+    schema: string;
+    name: string;
+  };
 };
 
 export type DatabaseWorksheetState = {
