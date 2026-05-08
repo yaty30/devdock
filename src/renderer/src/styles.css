@@ -5182,7 +5182,7 @@ select option {
 
 .build-profiles-table td:nth-child(3),
 .build-profiles-table th:nth-child(3) {
-  width: 220px;
+  width: 320px;
 }
 
 .build-profiles-table td:nth-child(4),
@@ -5192,18 +5192,12 @@ select option {
 
 .build-profiles-table td:nth-child(5),
 .build-profiles-table th:nth-child(5) {
-  width: 140px;
+  width: 88px;
   text-align: center;
 }
 
 .build-profiles-table td:nth-child(6),
 .build-profiles-table th:nth-child(6) {
-  width: 88px;
-  text-align: center;
-}
-
-.build-profiles-table td:nth-child(7),
-.build-profiles-table th:nth-child(7) {
   width: 54px;
   text-align: center;
 }
@@ -6132,10 +6126,10 @@ button.database-tree-item {
 .database-detail-value-text {
   flex: 1;
   min-width: 0;
+  max-width: min(72vw, 960px);
   max-height: 120px;
   overflow-y: auto;
-  overflow-wrap: break-word;
-  word-break: break-all;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
