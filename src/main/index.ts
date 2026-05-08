@@ -9,7 +9,7 @@ import {
 } from "electron";
 import type { OpenDialogOptions, SaveDialogOptions } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { hostname, userInfo } from "node:os";
+import { hostname } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DashboardBackend } from "./dashboardBackend";
@@ -49,7 +49,7 @@ const DEFAULT_CHAT_PORT = Number(
 );
 const DEFAULT_CHAT_ROOT =
   process.env.IVS_DASHBOARD_CHAT_ROOT ??
-  "L:\\ABS\\James Yip\\Host\\Helper\\IVS-Dashboard\\chat";
+  "L:\\ABS\\JamesYip\\Host\\Helper\\IVS-Dashboard\\chat";
 
 function getBackend(): DashboardBackend {
   if (!backend) {
@@ -306,6 +306,11 @@ function registerIpc(): void {
       return chatConfig;
     }),
   );
+  ipcMain.handle("chat:saveProfile", (_event, profile: ChatUserProfile) =>
+    withLoggedErrors("chat:saveProfile", () =>
+      saveChatProfile(app.getPath("userData"), profile),
+    ),
+  );
   ipcMain.handle(
     "chat:notifyMessage",
     (_event, notification: ChatNativeNotification) =>
@@ -455,6 +460,12 @@ function initializeChat(userDataPath: string): ChatServiceConfig {
       uploadsPath: paths.uploadsPath,
       publicHttpUrl: httpUrl,
     });
+    if (
+      profile.displayName &&
+      process.env.IVS_DASHBOARD_CHAT_DEBUG_SEED !== "0"
+    ) {
+      chatService.ensureDebugData(profile);
+    }
     void chatService.start().catch((error) => {
       console.error("[chat:start] Chat service unavailable", error);
       chatService = null;
@@ -500,8 +511,12 @@ function readChatProfile(userDataPath: string): ChatUserProfile {
       const parsed = JSON.parse(
         readFileSync(profilePath, "utf8"),
       ) as ChatUserProfile;
-      if (parsed.userId && parsed.displayName) {
-        return parsed;
+      if (parsed.userId) {
+        return {
+          userId: parsed.userId,
+          displayName: parsed.displayName?.trim() || null,
+          machineName: parsed.machineName || hostname(),
+        };
       }
     } catch (error) {
       console.error("[chat:profile] Failed to read chat profile", error);
@@ -510,15 +525,52 @@ function readChatProfile(userDataPath: string): ChatUserProfile {
 
   const profile: ChatUserProfile = {
     userId: randomUUID(),
-    displayName:
-      process.env.IVS_DASHBOARD_CHAT_NAME?.trim() ||
-      userInfo().username ||
-      "IVS user",
+    displayName: process.env.IVS_DASHBOARD_CHAT_NAME?.trim() || null,
     machineName: hostname(),
   };
+  return writeChatProfile(profilePath, profile);
+}
+
+function saveChatProfile(
+  userDataPath: string,
+  profile: ChatUserProfile,
+): ChatServiceConfig {
+  const displayName = profile.displayName?.trim() || null;
+  const nextProfile = writeChatProfile(
+    join(userDataPath, "chat-profile.json"),
+    {
+      userId: profile.userId || chatConfig?.profile.userId || randomUUID(),
+      displayName,
+      machineName:
+        profile.machineName || chatConfig?.profile.machineName || hostname(),
+    },
+  );
+  if (!chatConfig) {
+    throw new Error("Chat has not been initialized.");
+  }
+  chatConfig = { ...chatConfig, profile: nextProfile };
+  if (displayName && chatService) {
+    chatService.ensureDebugData(nextProfile);
+  }
+  return chatConfig;
+}
+
+function writeChatProfile(
+  profilePath: string,
+  profile: ChatUserProfile,
+): ChatUserProfile {
+  const normalized: ChatUserProfile = {
+    userId: profile.userId,
+    displayName: profile.displayName?.trim() || null,
+    machineName: profile.machineName || hostname(),
+  };
   mkdirSync(dirname(profilePath), { recursive: true });
-  writeFileSync(profilePath, `${JSON.stringify(profile, null, 2)}\n`, "utf8");
-  return profile;
+  writeFileSync(
+    profilePath,
+    `${JSON.stringify(normalized, null, 2)}\n`,
+    "utf8",
+  );
+  return normalized;
 }
 
 function showChatNotification(notification: ChatNativeNotification): void {

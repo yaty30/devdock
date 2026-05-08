@@ -3,7 +3,7 @@ export type ChatMessageType = "text" | "image" | "system";
 
 export type ChatUserProfile = {
   userId: string;
-  displayName: string;
+  displayName: string | null;
   machineName?: string;
 };
 
@@ -11,6 +11,7 @@ export type ChatUser = {
   id: string;
   displayName: string;
   machineName: string | null;
+  online: boolean;
   createdAt: string;
   lastSeenAt: string;
 };

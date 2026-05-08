@@ -5,6 +5,7 @@ import {
   useState,
   type ChangeEvent,
   type FormEvent,
+  type KeyboardEvent,
   type UIEvent,
 } from "react";
 import {
@@ -14,10 +15,15 @@ import {
   Plus,
   Search,
   Send,
+  Settings,
   Users,
   WifiOff,
   X,
 } from "lucide-react";
+import {
+  AppSelect,
+  type AppSelectOption,
+} from "../../components/common/AppSelect";
 import { Modal } from "../../components/dialogs/Modal";
 import type {
   ChatConversation,
@@ -26,9 +32,10 @@ import type {
   ChatMessagePage,
   ChatServiceConfig,
   ChatUser,
+  ChatUserProfile,
 } from "../../types";
 
-type ConnectionState = "connecting" | "online" | "offline";
+type ConnectionState = "setup" | "connecting" | "online" | "offline";
 type ToastTone = "valid" | "invalid";
 
 const MESSAGE_PAGE_SIZE = 50;
@@ -45,6 +52,7 @@ export function ChatFeature({
   const [connectionState, setConnectionState] =
     useState<ConnectionState>("connecting");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [profileSettingsOpen, setProfileSettingsOpen] = useState(false);
   const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [imagePreview, setImagePreview] = useState<ChatMessage | null>(null);
   const [users, setUsers] = useState<ChatUser[]>([]);
@@ -73,6 +81,8 @@ export function ChatFeature({
   const drawerOpenRef = useRef(false);
   const configRef = useRef<ChatServiceConfig | null>(null);
   const conversationsRef = useRef<ChatConversation[]>([]);
+  const chatButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
@@ -119,7 +129,11 @@ export function ChatFeature({
       if (cancelled) return;
       setConfig(nextConfig);
       configRef.current = nextConfig;
-      await reconnectChat(nextConfig);
+      if (hasChatProfileName(nextConfig.profile)) {
+        await reconnectChat(nextConfig);
+      } else {
+        setConnectionState("setup");
+      }
     }
 
     void bootChat().catch((error) => {
@@ -134,9 +148,11 @@ export function ChatFeature({
         setDrawerOpen(true);
         setActiveConversationId(conversationId);
         const currentConfig = configRef.current;
-        if (currentConfig) {
+        if (currentConfig && hasChatProfileName(currentConfig.profile)) {
           void loadMessages(currentConfig, conversationId);
           void markRead(currentConfig, conversationId);
+        } else {
+          setProfileSettingsOpen(true);
         }
       },
     );
@@ -153,11 +169,18 @@ export function ChatFeature({
 
   useEffect(() => {
     if (!drawerOpen || !activeConversationId || !config) return;
+    if (!hasChatProfileName(config.profile)) return;
     if (!messagesByConversation[activeConversationId]) {
       void loadMessages(config, activeConversationId, undefined, true);
     }
     void markRead(config, activeConversationId);
   }, [drawerOpen, activeConversationId, config]);
+
+  useEffect(() => {
+    if (drawerOpen && config && !hasChatProfileName(config.profile)) {
+      setProfileSettingsOpen(true);
+    }
+  }, [config, drawerOpen]);
 
   useEffect(() => {
     if (!drawerOpen || !activeConversationId) return;
@@ -169,7 +192,40 @@ export function ChatFeature({
     });
   }, [drawerOpen, activeConversationId]);
 
+  useEffect(() => {
+    if (
+      !drawerOpen ||
+      profileSettingsOpen ||
+      newConversationOpen ||
+      imagePreview
+    ) {
+      return undefined;
+    }
+
+    function closeOnOutsidePointer(event: PointerEvent): void {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (
+        drawerRef.current?.contains(target) ||
+        chatButtonRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setDrawerOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+    };
+  }, [drawerOpen, imagePreview, newConversationOpen, profileSettingsOpen]);
+
   async function registerUser(nextConfig: ChatServiceConfig): Promise<void> {
+    if (!hasChatProfileName(nextConfig.profile)) {
+      throw new Error("Choose a chat username first.");
+    }
     await chatJson<ChatUser>(nextConfig, "/users", {
       method: "POST",
       body: JSON.stringify(nextConfig.profile),
@@ -195,6 +251,11 @@ export function ChatFeature({
   }
 
   async function reconnectChat(nextConfig: ChatServiceConfig): Promise<void> {
+    if (!hasChatProfileName(nextConfig.profile)) {
+      setConnectionState("setup");
+      setProfileSettingsOpen(true);
+      return;
+    }
     setConnectionState("connecting");
     try {
       await registerUser(nextConfig);
@@ -424,7 +485,12 @@ export function ChatFeature({
 
   async function sendMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
+    await submitActiveMessage();
+  }
+
+  async function submitActiveMessage(): Promise<void> {
     if (!config || !activeConversationId || sending) return;
+    if (!requireChatProfile()) return;
     const body = (messageDrafts[activeConversationId] ?? "").trim();
     if (!body && !selectedImage) return;
     setSending(true);
@@ -478,6 +544,21 @@ export function ChatFeature({
     }
   }
 
+  function handleComposeKeyDown(
+    event: KeyboardEvent<HTMLTextAreaElement>,
+  ): void {
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    void submitActiveMessage();
+  }
+
   function handleMessageScroll(event: UIEvent<HTMLDivElement>): void {
     if (event.currentTarget.scrollTop < 80) {
       void loadOlderMessages();
@@ -486,6 +567,10 @@ export function ChatFeature({
 
   function handleImageChange(event: ChangeEvent<HTMLInputElement>): void {
     setSendError(null);
+    if (!requireChatProfile()) {
+      event.target.value = "";
+      return;
+    }
     const file = event.target.files?.[0] ?? null;
     if (!file) return;
     if (!isAllowedImage(file)) {
@@ -503,11 +588,40 @@ export function ChatFeature({
   }
 
   function openConversation(conversationId: string): void {
+    if (!requireChatProfile()) return;
     setActiveConversationId(conversationId);
     if (config) {
       void loadMessages(config, conversationId, undefined, true);
       void markRead(config, conversationId);
     }
+  }
+
+  function openChatDrawer(): void {
+    setDrawerOpen((current) => {
+      const nextOpen = !current;
+      if (nextOpen && config && !hasChatProfileName(config.profile)) {
+        setProfileSettingsOpen(true);
+      }
+      return nextOpen;
+    });
+  }
+
+  function requireChatProfile(): boolean {
+    if (hasChatProfileName(config?.profile ?? null)) {
+      return true;
+    }
+    setProfileSettingsOpen(true);
+    onToast("Choose a chat username first.", "invalid");
+    return false;
+  }
+
+  async function saveProfile(profile: ChatUserProfile): Promise<void> {
+    const nextConfig = await window.ivsDashboard.saveChatProfile(profile);
+    setConfig(nextConfig);
+    configRef.current = nextConfig;
+    setProfileSettingsOpen(false);
+    await reconnectChat(nextConfig);
+    onToast("Chat username saved", "valid");
   }
 
   const activeDraft = activeConversationId
@@ -519,9 +633,10 @@ export function ChatFeature({
       <button
         className="icon-button secondary header-settings-button chat-header-button"
         type="button"
+        ref={chatButtonRef}
         aria-label="Open chat"
         title="Chat"
-        onClick={() => setDrawerOpen(true)}
+        onClick={openChatDrawer}
       >
         <MessageCircle size={18} />
         {unreadTotal > 0 ? (
@@ -529,8 +644,18 @@ export function ChatFeature({
         ) : null}
       </button>
 
+      {drawerOpen ? (
+        <button
+          className="chat-backdrop"
+          type="button"
+          aria-label="Close chat"
+          onClick={() => setDrawerOpen(false)}
+        />
+      ) : null}
+
       <aside
         className={`chat-drawer${drawerOpen ? " open" : ""}`}
+        ref={drawerRef}
         aria-hidden={!drawerOpen}
       >
         <header className="chat-drawer-header">
@@ -541,16 +666,31 @@ export function ChatFeature({
                 ? "Online"
                 : connectionState === "connecting"
                   ? "Connecting"
-                  : "Offline"}
+                  : connectionState === "setup"
+                    ? "Set username"
+                    : "Offline"}
             </span>
           </div>
           <div className="chat-drawer-actions">
             <button
               className="icon-button secondary"
               type="button"
+              aria-label="Chat settings"
+              title="Chat settings"
+              onClick={() => setProfileSettingsOpen(true)}
+            >
+              <Settings size={17} />
+            </button>
+            <button
+              className="icon-button secondary"
+              type="button"
               aria-label="New conversation"
               title="New conversation"
-              onClick={() => setNewConversationOpen(true)}
+              onClick={() => {
+                if (requireChatProfile()) {
+                  setNewConversationOpen(true);
+                }
+              }}
               disabled={!config || connectionState === "offline"}
             >
               <Plus size={17} />
@@ -576,6 +716,16 @@ export function ChatFeature({
                 Retry
               </button>
             ) : null}
+          </div>
+        ) : null}
+
+        {connectionState === "setup" ? (
+          <div className="chat-setup-banner" role="status">
+            <Settings size={15} />
+            <span>Choose a username to start chatting.</span>
+            <button type="button" onClick={() => setProfileSettingsOpen(true)}>
+              Set username
+            </button>
           </div>
         ) : null}
 
@@ -689,6 +839,7 @@ export function ChatFeature({
                       value={activeDraft}
                       rows={1}
                       placeholder="Message"
+                      onKeyDown={handleComposeKeyDown}
                       onChange={(event) =>
                         setMessageDrafts((current) => ({
                           ...current,
@@ -741,6 +892,14 @@ export function ChatFeature({
         />
       ) : null}
 
+      {profileSettingsOpen && config ? (
+        <ChatProfileSettingsModal
+          profile={config.profile}
+          onClose={() => setProfileSettingsOpen(false)}
+          onSave={saveProfile}
+        />
+      ) : null}
+
       <Modal
         open={imagePreview !== null}
         title="Image Preview"
@@ -757,6 +916,94 @@ export function ChatFeature({
         ) : null}
       </Modal>
     </>
+  );
+}
+
+function ChatProfileSettingsModal({
+  profile,
+  onSave,
+  onClose,
+}: {
+  profile: ChatUserProfile;
+  onSave: (profile: ChatUserProfile) => Promise<void>;
+  onClose: () => void;
+}): JSX.Element {
+  const [displayName, setDisplayName] = useState(profile.displayName ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit(event: FormEvent): Promise<void> {
+    event.preventDefault();
+    const nextDisplayName = displayName.trim();
+    if (!nextDisplayName) {
+      setError("Username is required.");
+      return;
+    }
+    if (nextDisplayName.length > 80) {
+      setError("Username must be 80 characters or fewer.");
+      return;
+    }
+
+    setError(null);
+    setSubmitting(true);
+    try {
+      await onSave({ ...profile, displayName: nextDisplayName });
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Username could not be saved.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Modal
+      open
+      title="Chat Settings"
+      subtitle="Choose the name shown in chat"
+      size="sm"
+      className="chat-profile-modal"
+      contentClassName="chat-profile-modal-content"
+      closeLabel="Close chat settings"
+      onClose={onClose}
+    >
+      <form className="chat-profile-form" onSubmit={submit}>
+        <label className="chat-create-field">
+          <span>Username</span>
+          <input
+            autoFocus
+            type="text"
+            value={displayName}
+            maxLength={80}
+            onChange={(event) => setDisplayName(event.target.value)}
+          />
+        </label>
+        {profile.machineName ? (
+          <div className="chat-profile-device">
+            <span>Device</span>
+            <strong>{profile.machineName}</strong>
+          </div>
+        ) : null}
+        {error ? <p className="form-error">{error}</p> : null}
+        <footer className="settings-footer-row">
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            className="button primary compact"
+            type="submit"
+            disabled={submitting}
+          >
+            {submitting ? "Saving" : "Save"}
+          </button>
+        </footer>
+      </form>
+    </Modal>
   );
 }
 
@@ -809,6 +1056,16 @@ function NewConversationModal({
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const userOptions = useMemo<Array<AppSelectOption<string>>>(
+    () => [
+      { value: "", label: "Select user" },
+      ...users.map((user) => ({
+        value: user.id,
+        label: formatUserOptionLabel(user),
+      })),
+    ],
+    [users],
+  );
 
   async function submit(event: FormEvent): Promise<void> {
     event.preventDefault();
@@ -865,6 +1122,7 @@ function NewConversationModal({
       subtitle="Start a direct chat or group chat"
       size="md"
       className="chat-create-modal"
+      contentClassName="chat-create-modal-content"
       closeLabel="Close new conversation"
       onClose={onClose}
     >
@@ -892,18 +1150,15 @@ function NewConversationModal({
         {mode === "direct" ? (
           <label className="chat-create-field">
             <span>User</span>
-            <select
+            <AppSelect
+              className="chat-user-select"
               value={selectedUserId}
-              onChange={(event) => setSelectedUserId(event.target.value)}
-            >
-              <option value="">Select user</option>
-              {users.map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.displayName}
-                  {user.machineName ? ` (${user.machineName})` : ""}
-                </option>
-              ))}
-            </select>
+              options={userOptions}
+              onChange={setSelectedUserId}
+              ariaLabel="Select user"
+              minDropdownWidth={260}
+              showDots={false}
+            />
           </label>
         ) : (
           <>
@@ -930,7 +1185,15 @@ function NewConversationModal({
                       });
                     }}
                   />
-                  <span>{user.displayName}</span>
+                  <span className="chat-member-label">
+                    <span
+                      className={`chat-user-presence${user.online ? " online" : ""}`}
+                    />
+                    <span>{user.displayName}</span>
+                    {user.machineName ? (
+                      <small>{user.machineName}</small>
+                    ) : null}
+                  </span>
                 </label>
               ))}
             </div>
@@ -1069,6 +1332,17 @@ function sortUsers(items: ChatUser[]): ChatUser[] {
 
 function conversationLabel(conversation: ChatConversation): string {
   return conversation.title || conversation.memberNames.join(", ");
+}
+
+function hasChatProfileName(profile: ChatUserProfile | null): boolean {
+  return Boolean(profile?.displayName?.trim());
+}
+
+function formatUserOptionLabel(user: ChatUser): string {
+  const status = user.online ? "online" : "offline";
+  return user.machineName
+    ? `${user.displayName} (${status}, ${user.machineName})`
+    : `${user.displayName} (${status})`;
 }
 
 function messagePreview(message: ChatMessage | null): string {

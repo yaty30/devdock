@@ -79,6 +79,7 @@ const api: DashboardApi = {
   openExternalUrl: (url) =>
     ipcRenderer.invoke("dashboard:openExternalUrl", url),
   getChatConfig: () => ipcRenderer.invoke("chat:getConfig"),
+  saveChatProfile: (profile) => ipcRenderer.invoke("chat:saveProfile", profile),
   notifyChatMessage: (notification: ChatNativeNotification) =>
     ipcRenderer.invoke("chat:notifyMessage", notification),
   openLog: (projectId, channel) =>

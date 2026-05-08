@@ -1,4 +1,8 @@
-import type { ChatNativeNotification, ChatServiceConfig } from "./chatTypes";
+import type {
+  ChatNativeNotification,
+  ChatServiceConfig,
+  ChatUserProfile,
+} from "./chatTypes";
 
 export type ServiceName = "frontend" | "wildfly";
 export type ServiceAction = "start" | "stop" | "restart";
@@ -476,6 +480,7 @@ export type DashboardApi = {
   openPath: (path: string) => Promise<string>;
   openExternalUrl: (url: string) => Promise<void>;
   getChatConfig: () => Promise<ChatServiceConfig>;
+  saveChatProfile: (profile: ChatUserProfile) => Promise<ChatServiceConfig>;
   notifyChatMessage: (notification: ChatNativeNotification) => Promise<void>;
   openLog: (projectId: string, channel: LogChannel) => Promise<string>;
   deleteProject: (projectId: string) => Promise<void>;

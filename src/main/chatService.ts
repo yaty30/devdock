@@ -76,6 +76,24 @@ const ALLOWED_IMAGE_TYPES = new Set([
   "image/webp",
 ]);
 
+const DEBUG_USERS: ChatUserProfile[] = [
+  {
+    userId: "debug-user-alex",
+    displayName: "Alex Debug",
+    machineName: "debug-workstation-a",
+  },
+  {
+    userId: "debug-user-maya",
+    displayName: "Maya Debug",
+    machineName: "debug-workstation-b",
+  },
+  {
+    userId: "debug-user-sam",
+    displayName: "Sam Debug",
+    machineName: "debug-workstation-c",
+  },
+];
+
 export class ChatService {
   private readonly db: Database;
   private readonly server = createServer((request, response) => {
@@ -116,6 +134,54 @@ export class ChatService {
     this.wss.close();
     this.server.close();
     this.db.close();
+  }
+
+  ensureDebugData(currentUser: ChatUserProfile): void {
+    const currentUserId = currentUser.userId?.trim();
+    if (!currentUserId || !currentUser.displayName?.trim()) {
+      return;
+    }
+
+    this.upsertUser(currentUser);
+    DEBUG_USERS.forEach((user) => this.upsertUser(user));
+
+    const directConversationId = "debug-direct-alex";
+    this.ensureDebugConversation(directConversationId, "direct", null, [
+      currentUserId,
+      DEBUG_USERS[0].userId,
+    ]);
+    this.seedDebugMessages(directConversationId, [
+      {
+        senderUserId: DEBUG_USERS[0].userId,
+        body: "Hey, this is a seeded direct chat so you can test message layout.",
+      },
+      {
+        senderUserId: currentUserId,
+        body: "Nice. I can use this to check the drawer, unread state, and bubbles.",
+      },
+    ]);
+
+    const groupConversationId = "debug-group-ui";
+    this.ensureDebugConversation(
+      groupConversationId,
+      "group",
+      "Debug UI Group",
+      [currentUserId, ...DEBUG_USERS.map((user) => user.userId)],
+    );
+    this.seedDebugMessages(groupConversationId, [
+      {
+        senderUserId: DEBUG_USERS[1].userId,
+        body: "Group chat seed: checking names, timestamps, and wrapping for longer messages.",
+      },
+      {
+        senderUserId: DEBUG_USERS[2].userId,
+        body: "Here is a long-ish message to make sure the message column behaves well when content wraps across more than one line in the chat panel.",
+      },
+      {
+        senderUserId: DEBUG_USERS[0].userId,
+        body: "Try creating a new conversation from the modal too. It should sit above the drawer now.",
+      },
+    ]);
   }
 
   private initializeSchema(): void {
@@ -454,9 +520,65 @@ export class ChatService {
       id: row.id,
       displayName: row.display_name,
       machineName: row.machine_name,
+      online: this.sockets.has(row.id),
       createdAt: row.created_at,
       lastSeenAt: row.last_seen_at,
     };
+  }
+
+  private touchUserLastSeen(userId: string): ChatUser | null {
+    const now = new Date().toISOString();
+    this.db
+      .prepare("UPDATE users SET last_seen_at = ? WHERE id = ?")
+      .run(now, userId);
+    const row = this.db
+      .prepare("SELECT * FROM users WHERE id = ?")
+      .get(userId) as ChatUserRow | undefined;
+    return row ? this.mapUser(row) : null;
+  }
+
+  private ensureDebugConversation(
+    conversationId: string,
+    type: "direct" | "group",
+    title: string | null,
+    memberIds: string[],
+  ): void {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO conversations (id, type, title, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(conversationId, type, title, now, now);
+    memberIds.forEach((memberId) =>
+      this.addMember(conversationId, memberId, now),
+    );
+  }
+
+  private seedDebugMessages(
+    conversationId: string,
+    messages: Array<{ senderUserId: string; body: string }>,
+  ): void {
+    const existing = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM messages WHERE conversation_id = ?",
+      )
+      .get(conversationId) as { count: number };
+    if (existing.count > 0) {
+      return;
+    }
+
+    const baseTime = Date.now() - messages.length * 60000;
+    messages.forEach((message, index) => {
+      const createdAt = new Date(baseTime + index * 60000).toISOString();
+      this.db
+        .prepare(
+          `INSERT INTO messages (conversation_id, sender_user_id, type, body, created_at)
+           VALUES (?, ?, 'text', ?, ?)`,
+        )
+        .run(conversationId, message.senderUserId, message.body, createdAt);
+      this.touchConversation(conversationId, createdAt);
+    });
   }
 
   private listConversations(userId: string): ChatConversation[] {
@@ -872,11 +994,19 @@ export class ChatService {
     const sockets = this.sockets.get(userId) ?? new Set<WebSocket>();
     sockets.add(socket);
     this.sockets.set(userId, sockets);
+    const onlineUser = this.touchUserLastSeen(userId);
+    if (onlineUser) {
+      this.broadcast({ type: "user_presence_updated", user: onlineUser });
+    }
     socket.on("close", () => {
       const current = this.sockets.get(userId);
       current?.delete(socket);
       if (current?.size === 0) {
         this.sockets.delete(userId);
+        const offlineUser = this.touchUserLastSeen(userId);
+        if (offlineUser) {
+          this.broadcast({ type: "user_presence_updated", user: offlineUser });
+        }
       }
     });
   }
