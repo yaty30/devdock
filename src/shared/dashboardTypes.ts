@@ -209,6 +209,7 @@ export type DatabaseConnection = {
   schema: string;
   password?: string;
   savePassword?: boolean;
+  autoConnect?: boolean;
   connectionTimeoutMs?: number;
   database?: string;
   sslMode?: DatabaseSslMode;
