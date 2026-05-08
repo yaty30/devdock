@@ -13,8 +13,11 @@ import {
   Braces,
   ChevronDown,
   ChevronRight,
+  Copy,
   GitCompare,
   LoaderCircle,
+  LucideSquircle,
+  SquareDashed,
 } from "lucide-react";
 import { Modal } from "../../components/dialogs/Modal";
 import type { DatabaseQueryValue, DatabaseTable } from "../../types";
@@ -595,6 +598,17 @@ function ResultRowDetails({
   columns: ResultColumn[];
   metadataTables: DatabaseTable[];
 }): JSX.Element {
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  function copyValue(columnKey: string, value: DatabaseQueryValue): void {
+    void navigator.clipboard?.writeText(formatPlainResultValue(value))
+      .then(() => {
+        setCopiedKey(columnKey);
+        setTimeout(() => setCopiedKey((k) => (k === columnKey ? null : k)), 1500);
+      })
+      .catch(() => undefined);
+  }
+
   return (
     <div
       className="database-result-row-details"
@@ -627,7 +641,19 @@ function ResultRowDetails({
               <tr key={column.key}>
                 <td title={column.label}>{column.label}</td>
                 <td title={formatPlainResultValue(row[column.key])}>
-                  {renderResultValue(row[column.key])}
+                  <div className="database-detail-value-cell">
+                    <span className="database-detail-value-text">
+                      {renderResultValue(row[column.key])}
+                    </span>
+                    <button
+                      type="button"
+                      className={`database-detail-copy-button${copiedKey === column.key ? " copied" : ""}`}
+                      onClick={() => copyValue(column.key, row[column.key])}
+                      title="Copy value"
+                    >
+                      <Copy size={12} />
+                    </button>
+                  </div>
                 </td>
                 <td title={metadata.type}>{metadata.type}</td>
                 <td title={metadata.nullability}>{metadata.nullability}</td>
@@ -675,12 +701,16 @@ function ResultRowComparison({
                 {column.label}
               </td>
               <td title={formatPlainResultValue(compare.base.row[column.key])}>
-                {renderResultValue(compare.base.row[column.key])}
+                <div className="database-comparison-value-wrap">
+                  {renderResultValue(compare.base.row[column.key])}
+                </div>
               </td>
               <td
                 title={formatPlainResultValue(compare.target.row[column.key])}
               >
-                {renderResultValue(compare.target.row[column.key])}
+                <div className="database-comparison-value-wrap">
+                  {renderResultValue(compare.target.row[column.key])}
+                </div>
               </td>
             </tr>
           ))}
@@ -712,7 +742,12 @@ function formatResultColumnHeader(column: ResultColumn): JSX.Element {
 
 function renderResultValue(value: DatabaseQueryValue): ReactNode {
   if (value === null) {
-    return <span className="database-null-pill">NULL</span>;
+    return (
+      <div className="database-null-pill">
+        {/* <SquareDashed size={16} /> */}
+        <span>NULL</span>
+      </div>
+    );
   }
   return String(value);
 }
