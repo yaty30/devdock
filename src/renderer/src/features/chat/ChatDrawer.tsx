@@ -42,6 +42,7 @@ const MESSAGE_PAGE_SIZE = 50;
 const RECONNECT_BASE_MS = 900;
 const RECONNECT_MAX_MS = 10000;
 const USER_REFRESH_MS = 5000;
+const HEARTBEAT_MS = 10000;
 const URL_PATTERN = /(https?:\/\/[^\s<]+[^\s<.,;:!?])/gi;
 
 export function ChatFeature({
@@ -187,16 +188,28 @@ export function ChatFeature({
     if (!drawerOpen || !config || !hasChatProfileName(config.profile)) {
       return undefined;
     }
-    if (connectionState === "offline") {
+
+    void refreshChatSnapshot(config).catch((error) => console.error(error));
+    const refreshId = window.setInterval(() => {
+      void refreshChatSnapshot(config).catch((error) => console.error(error));
+    }, USER_REFRESH_MS);
+    return () => window.clearInterval(refreshId);
+  }, [config, drawerOpen]);
+
+  useEffect(() => {
+    if (!config || !hasChatProfileName(config.profile)) {
       return undefined;
     }
 
-    void loadUsers(config).catch((error) => console.error(error));
-    const refreshId = window.setInterval(() => {
-      void loadUsers(config).catch((error) => console.error(error));
-    }, USER_REFRESH_MS);
-    return () => window.clearInterval(refreshId);
-  }, [config, connectionState, drawerOpen]);
+    const heartbeat = (): void => {
+      void registerUser(config)
+        .then(() => loadUsers(config))
+        .catch((error) => console.error(error));
+    };
+    heartbeat();
+    const heartbeatId = window.setInterval(heartbeat, HEARTBEAT_MS);
+    return () => window.clearInterval(heartbeatId);
+  }, [config]);
 
   useEffect(() => {
     if (!drawerOpen || !activeConversationId) return;
@@ -266,6 +279,25 @@ export function ChatFeature({
     }
   }
 
+  async function refreshChatSnapshot(
+    nextConfig: ChatServiceConfig,
+  ): Promise<void> {
+    await Promise.all([loadUsers(nextConfig), loadConversations(nextConfig)]);
+    const activeId = activeConversationRef.current;
+    if (!activeId) return;
+    const shouldStickToBottom = isMessageListNearBottom();
+    await loadMessages(
+      nextConfig,
+      activeId,
+      undefined,
+      shouldStickToBottom,
+      true,
+    );
+    if (drawerOpenRef.current && document.hasFocus()) {
+      await markRead(nextConfig, activeId);
+    }
+  }
+
   async function reconnectChat(nextConfig: ChatServiceConfig): Promise<void> {
     if (!hasChatProfileName(nextConfig.profile)) {
       setConnectionState("setup");
@@ -288,6 +320,7 @@ export function ChatFeature({
     conversationId: string,
     before?: number,
     scrollToBottom = false,
+    mergeWithExisting = false,
   ): Promise<void> {
     const query = new URLSearchParams({
       userId: nextConfig.profile.userId,
@@ -301,7 +334,8 @@ export function ChatFeature({
       `/conversations/${encodeURIComponent(conversationId)}/messages?${query}`,
     );
     setMessagesByConversation((current) => {
-      const existing = before ? (current[conversationId] ?? []) : [];
+      const existing =
+        before || mergeWithExisting ? (current[conversationId] ?? []) : [];
       return {
         ...current,
         [conversationId]: mergeMessages([...page.messages, ...existing]),
@@ -622,6 +656,12 @@ export function ChatFeature({
     });
   }
 
+  function isMessageListNearBottom(): boolean {
+    const list = messageListRef.current;
+    if (!list) return true;
+    return list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  }
+
   async function openNewConversation(): Promise<void> {
     if (!requireChatProfile() || !config) return;
     try {
@@ -714,7 +754,7 @@ export function ChatFeature({
               aria-label="New conversation"
               title="New conversation"
               onClick={() => void openNewConversation()}
-              disabled={!config || connectionState === "offline"}
+              disabled={!config}
             >
               <Plus size={17} />
             </button>
@@ -733,7 +773,7 @@ export function ChatFeature({
         {connectionState === "offline" ? (
           <div className="chat-offline-banner" role="status">
             <WifiOff size={15} />
-            <span>Chat service unavailable. Dashboard remains usable.</span>
+            <span>Live chat updates unavailable. Stored chats can still sync.</span>
             {config ? (
               <button type="button" onClick={() => void reconnectChat(config)}>
                 Retry

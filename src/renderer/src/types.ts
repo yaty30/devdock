@@ -3,6 +3,9 @@ export type {
   ActivityKind,
   ActivityRecord,
   ActivityTone,
+  ApiTesterRequest,
+  ApiTesterResponse,
+  ApiTesterResponseHeader,
   BuildQueryOptions,
   BuildQueryResult,
   BuildQuerySortKey,
@@ -59,7 +62,8 @@ export type {
   ChatUserProfile,
 } from "../../shared/chatTypes";
 
-export type AppSection = "dashboard" | "project" | "database";
+export type AppSection = "dashboard" | "project" | "database" | "tools";
+export type ToolId = "comparing" | "api-tester";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal" | "notes";
 export type DatabaseWorkspaceTab = "connection" | "monitor";
 export type FontSizeMode = "large" | "regular" | "small";

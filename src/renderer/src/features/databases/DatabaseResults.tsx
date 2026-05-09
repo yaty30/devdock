@@ -1,6 +1,6 @@
 import {
-  Fragment,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -35,6 +35,11 @@ type ResultColumnDragState = {
   startX: number;
   startWidth: number;
   nextWidth: number;
+};
+
+type StableResultColumnWidths = {
+  layoutKey: string;
+  widths: Partial<Record<ResultColumnKey, number>>;
 };
 
 type ResultRowContextMenu = {
@@ -147,6 +152,8 @@ function ResultGrid({
   const columnDragRef = useRef<ResultColumnDragState | null>(null);
   const columnResizeFrameRef = useRef<number | null>(null);
   const [panelWidth, setPanelWidth] = useState(0);
+  const [stableColumnWidths, setStableColumnWidths] =
+    useState<StableResultColumnWidths | null>(null);
   const [draftColumnWidths, setDraftColumnWidths] = useState<Partial<
     Record<ResultColumnKey, number>
   > | null>(null);
@@ -168,6 +175,8 @@ function ResultGrid({
     count: rows.length,
     getScrollElement: () => resultScrollRef.current,
     estimateSize: () => RESULT_ROW_ESTIMATED_HEIGHT,
+    measureElement: (element) =>
+      element.getBoundingClientRect().height || RESULT_ROW_ESTIMATED_HEIGHT,
     overscan: RESULT_ROW_OVERSCAN,
   });
   const virtualRows = rowVirtualizer.getVirtualItems();
@@ -178,23 +187,41 @@ function ResultGrid({
         : columns,
     [columns, hasColumns, rows.length],
   );
+  const columnLayoutKey = useMemo(
+    () =>
+      displayColumns
+        .map(
+          (column) =>
+            `${column.key}:${column.kind}:${column.minWidth}:${column.weight}`,
+        )
+        .join("|"),
+    [displayColumns],
+  );
+  const baseColumnWidths =
+    stableColumnWidths?.layoutKey === columnLayoutKey
+      ? stableColumnWidths.widths
+      : null;
   const calculatedColumns = useMemo(
     () =>
-      calculateResultColumnWidths(
-        displayColumns,
+      calculateResultColumnWidths({
+        columns: displayColumns,
         panelWidth,
-        draftColumnWidths ?? columnWidths,
-      ),
-    [displayColumns, panelWidth, columnWidths, draftColumnWidths],
+        stableColumnWidths: baseColumnWidths,
+        userColumnWidths: draftColumnWidths ?? columnWidths,
+      }),
+    [
+      displayColumns,
+      panelWidth,
+      baseColumnWidths,
+      columnWidths,
+      draftColumnWidths,
+    ],
   );
   const totalColumnWidth = calculatedColumns.reduce(
     (total, column) => total + column.width,
     0,
   );
-  const tableWidth =
-    panelWidth > 0 && totalColumnWidth <= panelWidth
-      ? "100%"
-      : `${totalColumnWidth}px`;
+  const tableWidth = `${Math.ceil(totalColumnWidth)}px`;
 
   useEffect(() => {
     const element = resultScrollRef.current;
@@ -214,12 +241,41 @@ function ResultGrid({
   }, []);
 
   useEffect(() => {
+    if (!hasColumns || panelWidth <= 0) {
+      return;
+    }
+
+    setStableColumnWidths((current) => {
+      if (current?.layoutKey === columnLayoutKey) {
+        return current;
+      }
+
+      const initialColumns = calculateResultColumnWidths({
+        columns: displayColumns,
+        panelWidth,
+        stableColumnWidths: null,
+        userColumnWidths: columnWidths,
+      });
+      return {
+        layoutKey: columnLayoutKey,
+        widths: Object.fromEntries(
+          initialColumns.map((column) => [column.key, column.width]),
+        ),
+      };
+    });
+  }, [columnLayoutKey, columnWidths, displayColumns, hasColumns, panelWidth]);
+
+  useEffect(() => {
     return () => {
       if (columnResizeFrameRef.current !== null) {
         window.cancelAnimationFrame(columnResizeFrameRef.current);
       }
     };
   }, []);
+
+  useLayoutEffect(() => {
+    rowVirtualizer.measure();
+  }, [expandedRowIndex, rowVirtualizer]);
 
   useEffect(() => {
     setExpandedRowIndex(null);
@@ -312,7 +368,7 @@ function ResultGrid({
         return;
       }
       setDraftColumnWidths({
-        ...columnWidths,
+        ...(draftColumnWidths ?? columnWidths),
         [latestDrag.key]: latestDrag.nextWidth,
       });
     });
@@ -424,10 +480,7 @@ function ResultGrid({
 
   return (
     <div className="database-result-region">
-      <div
-        className="database-result-scroll"
-        ref={resultScrollRef}
-      >
+      <div className="database-result-scroll" ref={resultScrollRef}>
         {hasColumns ? (
           <table
             className="recent-builds-table database-result-table"
@@ -435,7 +488,12 @@ function ResultGrid({
           >
             <colgroup>
               {calculatedColumns.map((column) => (
-                <col key={column.key} style={{ width: `${column.width}px` }} />
+                <col
+                  key={column.key}
+                  style={{
+                    width: `${column.width}px`,
+                  }}
+                />
               ))}
             </colgroup>
             <thead>
@@ -476,101 +534,108 @@ function ResultGrid({
                 <tr aria-hidden="true">
                   <td
                     colSpan={displayColumns.length}
-                    style={{ height: `${virtualRows[0]?.start ?? 0}px`, padding: 0 }}
+                    style={{
+                      height: `${virtualRows[0]?.start ?? 0}px`,
+                      padding: 0,
+                    }}
                   />
                 </tr>
               ) : null}
-              {virtualRows.map((virtualRow) => {
-                const rowIndex = virtualRow.index;
-                const row = rows[rowIndex];
-                const expanded = expandedRowIndex === rowIndex;
-                return (
-                  <Fragment key={`result-row-${rowIndex}`}>
-                    <tr
-                      className={`database-result-row${
-                        compareBase?.rowIndex === rowIndex
-                          ? " compare-base"
-                          : ""
-                      }`}
-                      key={`row-${rowIndex}`}
-                      onContextMenu={(event) =>
-                        openRowContextMenu(event, row, rowIndex)
-                      }
-                    >
-                      {displayColumns.map((column) => {
-                        const selected =
-                          selectedCell?.rowIndex === rowIndex &&
-                          selectedCell.columnKey === column.key;
-                        return (
-                          <td
-                            className={
-                              column.key !== SEQ_RESULT_COLUMN_KEY
-                                ? `database-result-value-cell${selected ? " selected" : ""}`
-                                : undefined
-                            }
-                            key={`${rowIndex}-${column.key}`}
-                            onClick={
-                              column.key === SEQ_RESULT_COLUMN_KEY
-                                ? undefined
-                                : () =>
-                                    setSelectedCell({
-                                      rowIndex,
-                                      columnKey: column.key,
-                                    })
-                            }
-                          >
-                            {column.key === SEQ_RESULT_COLUMN_KEY ? (
-                              <span className="database-result-seq-cell">
-                                <button
-                                  className="database-row-expand-button"
-                                  type="button"
-                                  aria-label={
-                                    expanded
-                                      ? `Collapse row ${rowIndex + 1}`
-                                      : `Expand row ${rowIndex + 1}`
-                                  }
-                                  title={
-                                    expanded
-                                      ? `Collapse row ${rowIndex + 1}`
-                                      : `Expand row ${rowIndex + 1}`
-                                  }
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    toggleRowExpanded(rowIndex);
-                                  }}
-                                >
-                                  {expanded ? (
-                                    <ChevronDown size={13} />
-                                  ) : (
-                                    <ChevronRight size={13} />
-                                  )}
-                                </button>
-                                <span>{rowIndex + 1}</span>
-                              </span>
-                            ) : (
-                              renderResultValue(row[column.key])
-                            )}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                    {expanded ? (
-                      <tr
-                        className={`database-result-detail-row ${expanded ? "expanded" : ""}`}
-                        key={`detail-${rowIndex}`}
-                      >
-                        <td colSpan={displayColumns.length}>
-                          <ResultRowDetails
-                            row={row}
-                            columns={columns}
-                            metadataTables={metadataTables}
-                          />
+            </tbody>
+            {virtualRows.map((virtualRow) => {
+              const rowIndex = virtualRow.index;
+              const row = rows[rowIndex];
+              const expanded = expandedRowIndex === rowIndex;
+              return (
+                <tbody
+                  data-index={virtualRow.index}
+                  key={`result-row-${rowIndex}`}
+                  ref={rowVirtualizer.measureElement}
+                >
+                  <tr
+                    className={`database-result-row${
+                      compareBase?.rowIndex === rowIndex ? " compare-base" : ""
+                    }`}
+                    key={`row-${rowIndex}`}
+                    onContextMenu={(event) =>
+                      openRowContextMenu(event, row, rowIndex)
+                    }
+                  >
+                    {displayColumns.map((column) => {
+                      const selected =
+                        selectedCell?.rowIndex === rowIndex &&
+                        selectedCell.columnKey === column.key;
+                      return (
+                        <td
+                          className={
+                            column.key !== SEQ_RESULT_COLUMN_KEY
+                              ? `database-result-value-cell${selected ? " selected" : ""}`
+                              : undefined
+                          }
+                          key={`${rowIndex}-${column.key}`}
+                          onClick={
+                            column.key === SEQ_RESULT_COLUMN_KEY
+                              ? undefined
+                              : () =>
+                                  setSelectedCell({
+                                    rowIndex,
+                                    columnKey: column.key,
+                                  })
+                          }
+                        >
+                          {column.key === SEQ_RESULT_COLUMN_KEY ? (
+                            <span className="database-result-seq-cell">
+                              <button
+                                className="database-row-expand-button"
+                                type="button"
+                                aria-label={
+                                  expanded
+                                    ? `Collapse row ${rowIndex + 1}`
+                                    : `Expand row ${rowIndex + 1}`
+                                }
+                                title={
+                                  expanded
+                                    ? `Collapse row ${rowIndex + 1}`
+                                    : `Expand row ${rowIndex + 1}`
+                                }
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  toggleRowExpanded(rowIndex);
+                                }}
+                              >
+                                {expanded ? (
+                                  <ChevronDown size={13} />
+                                ) : (
+                                  <ChevronRight size={13} />
+                                )}
+                              </button>
+                              <span>{rowIndex + 1}</span>
+                            </span>
+                          ) : (
+                            renderResultValue(row[column.key])
+                          )}
                         </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
-                );
-              })}
+                      );
+                    })}
+                  </tr>
+                  {expanded ? (
+                    <tr
+                      className={`database-result-detail-row ${expanded ? "expanded" : ""}`}
+                      key={`detail-${rowIndex}`}
+                    >
+                      <td colSpan={displayColumns.length}>
+                        <ResultRowDetails
+                          row={row}
+                          columns={columns}
+                          metadataTables={metadataTables}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                </tbody>
+              );
+            })}
+            <tbody>
               {rows.length > 0 && virtualRows.length > 0 ? (
                 <tr aria-hidden="true">
                   <td
@@ -866,11 +931,27 @@ function formatResultFooter(meta: ResultMeta): string {
   return `${meta.rows} rows fetched${affected} · ${meta.duration}`;
 }
 
-function calculateResultColumnWidths(
-  columns: ResultColumn[],
-  panelWidth: number,
-  userColumnWidths: Partial<Record<ResultColumnKey, number>>,
-): Array<ResultColumn & { width: number }> {
+function calculateResultColumnWidths({
+  columns,
+  panelWidth,
+  stableColumnWidths,
+  userColumnWidths,
+}: {
+  columns: ResultColumn[];
+  panelWidth: number;
+  stableColumnWidths: Partial<Record<ResultColumnKey, number>> | null;
+  userColumnWidths: Partial<Record<ResultColumnKey, number>>;
+}): Array<ResultColumn & { width: number }> {
+  if (stableColumnWidths) {
+    return columns.map((column) => ({
+      ...column,
+      width: normalizeColumnWidth(
+        column,
+        userColumnWidths[column.key] ?? stableColumnWidths[column.key],
+      ),
+    }));
+  }
+
   const userSizedColumns = columns.filter(
     (column) => userColumnWidths[column.key] !== undefined,
   );
@@ -905,22 +986,32 @@ function calculateResultColumnWidths(
   return columns.map((column) => {
     const userWidth = userColumnWidths[column.key];
     if (userWidth !== undefined) {
-      return { ...column, width: Math.max(column.minWidth, userWidth) };
+      return { ...column, width: normalizeColumnWidth(column, userWidth) };
     }
 
     if (autoColumns.length === 0) {
-      return { ...column, width: column.minWidth };
+      return {
+        ...column,
+        width: normalizeColumnWidth(column, column.minWidth),
+      };
     }
 
     const weight = evenlyDistributeAutoColumns ? 1 : column.weight;
     return {
       ...column,
-      width: Math.max(
-        column.minWidth,
+      width: normalizeColumnWidth(
+        column,
         (autoAvailableWidth * weight) / totalWeight,
       ),
     };
   });
+}
+
+function normalizeColumnWidth(
+  column: ResultColumn,
+  width: number | undefined,
+): number {
+  return Math.max(column.minWidth, Math.round(width ?? column.minWidth));
 }
 
 function pluralize(word: string, count: number): string {

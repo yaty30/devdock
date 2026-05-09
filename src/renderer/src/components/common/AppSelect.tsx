@@ -124,18 +124,33 @@ export function AppSelect<T extends string>({
       const rect = trigger.getBoundingClientRect();
       const gap = 6;
       const rowHeight = 36;
-      const dropdownHeight = options.length * rowHeight + 12;
+      const maxDropdownHeight = Math.min(340, window.innerHeight - 24);
+      const dropdownHeight = Math.min(
+        options.length * rowHeight + 12,
+        maxDropdownHeight,
+      );
       const spaceBelow = window.innerHeight - rect.bottom - gap;
       const spaceAbove = rect.top - gap;
       const openUp = spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
-      const width = Math.max(rect.width, minDropdownWidth);
+      const width = Math.min(
+        Math.max(
+          rect.width,
+          minDropdownWidth,
+          measureDropdownWidth(trigger, options, showDots),
+        ),
+        Math.max(rect.width, window.innerWidth - gap * 2),
+      );
+      const left = Math.min(
+        Math.max(gap, rect.left),
+        Math.max(gap, window.innerWidth - width - gap),
+      );
 
       setDropdownStyle({
         position: "fixed",
         top: openUp
           ? Math.max(gap, rect.top - dropdownHeight - gap)
           : rect.bottom + gap,
-        left: rect.left,
+        left,
         right: "auto",
         width,
         minWidth: width,
@@ -150,7 +165,7 @@ export function AppSelect<T extends string>({
       window.removeEventListener("resize", positionDropdown);
       window.removeEventListener("scroll", positionDropdown, true);
     };
-  }, [minDropdownWidth, open, options.length]);
+  }, [minDropdownWidth, open, options, showDots]);
 
   function selectOption(option: AppSelectOption<T>): void {
     onChange(option.value);
@@ -287,4 +302,44 @@ function wrapOptionIndex(index: number, length: number): number {
   }
 
   return (index + length) % length;
+}
+
+function measureDropdownWidth<T extends string>(
+  trigger: HTMLElement,
+  options: ReadonlyArray<AppSelectOption<T>>,
+  showDots: boolean,
+): number {
+  const style = window.getComputedStyle(trigger);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  const fallbackWidth = Math.max(
+    0,
+    ...options.map((option) => option.label.length),
+  ) * 8;
+
+  const labelWidth = context
+    ? Math.max(
+        0,
+        ...options.map((option) => {
+          context.font = style.font;
+          return context.measureText(option.label).width;
+        }),
+      )
+    : fallbackWidth;
+
+  const dropdownPadding = 12;
+  const optionPadding = 22;
+  const optionGap = showDots ? 20 : 10;
+  const dotWidth = showDots ? 8 : 0;
+  const checkWidth = 18;
+  const borderAllowance = 2;
+  return Math.ceil(
+    labelWidth +
+      dropdownPadding +
+      optionPadding +
+      optionGap +
+      dotWidth +
+      checkWidth +
+      borderAllowance,
+  );
 }

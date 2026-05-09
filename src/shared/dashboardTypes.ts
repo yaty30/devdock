@@ -363,6 +363,30 @@ export type DatabaseExecutionRecord = {
   message?: string;
 };
 
+export type ApiTesterRequest = {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+  timeoutMs?: number;
+};
+
+export type ApiTesterResponseHeader = {
+  name: string;
+  value: string;
+};
+
+export type ApiTesterResponse = {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  url: string;
+  durationMs: number;
+  sizeBytes: number;
+  headers: ApiTesterResponseHeader[];
+  body: string;
+};
+
 export type DashboardEvent =
   | {
       type: "log";
@@ -403,6 +427,10 @@ export type DashboardEvent =
     };
 
 export type DashboardApi = {
+  getFeatureFlags: () => Promise<{ chatEnabled: boolean }>;
+  sendApiTesterRequest: (
+    request: ApiTesterRequest,
+  ) => Promise<ApiTesterResponse>;
   getSnapshot: () => Promise<DashboardSnapshot>;
   getDatabaseConnections: () => Promise<DatabaseConnection[]>;
   saveDatabaseConnection: (

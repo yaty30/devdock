@@ -6,7 +6,7 @@ import {
 } from "node:http";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type {
   ChatAttachment,
@@ -69,6 +69,8 @@ type AttachmentRow = {
 const JSON_LIMIT_BYTES = 1024 * 1024;
 const IMAGE_LIMIT_BYTES = 10 * 1024 * 1024;
 const MESSAGE_LIMIT = 4000;
+const PRESENCE_ACTIVE_MS = 30000;
+const OFFLINE_LAST_SEEN_AT = "1970-01-01T00:00:00.000Z";
 const ALLOWED_IMAGE_TYPES = new Set([
   "image/png",
   "image/jpeg",
@@ -143,9 +145,11 @@ export class ChatService {
     }
 
     this.upsertUser(currentUser);
-    DEBUG_USERS.forEach((user) => this.upsertUser(user));
+    DEBUG_USERS.forEach((user) =>
+      this.upsertUser(user, { touchPresence: false }),
+    );
 
-    const directConversationId = "debug-direct-alex";
+    const directConversationId = `debug-direct-alex-${currentUserId}`;
     this.ensureDebugConversation(directConversationId, "direct", null, [
       currentUserId,
       DEBUG_USERS[0].userId,
@@ -299,10 +303,7 @@ export class ChatService {
           body.currentUserId,
           body.otherUserId,
         );
-        this.sendToMembers(conversation.id, {
-          type: "conversation_updated",
-          conversation,
-        });
+        this.sendConversationUpdate(conversation.id);
         this.writeJson(response, 200, conversation);
         return;
       }
@@ -317,10 +318,7 @@ export class ChatService {
           body.title,
           body.memberIds,
         );
-        this.sendToMembers(conversation.id, {
-          type: "conversation_updated",
-          conversation,
-        });
+        this.sendConversationUpdate(conversation.id);
         this.writeJson(response, 201, conversation);
         return;
       }
@@ -475,13 +473,18 @@ export class ChatService {
     return userId;
   }
 
-  private upsertUser(profile: ChatUserProfile): ChatUser {
+  private upsertUser(
+    profile: ChatUserProfile,
+    options: { touchPresence?: boolean } = {},
+  ): ChatUser {
     const userId = profile.userId?.trim();
     const displayName = profile.displayName?.trim();
     if (!userId || !displayName) {
       throw new Error("User id and display name are required.");
     }
+    const touchPresence = options.touchPresence ?? true;
     const now = new Date().toISOString();
+    const lastSeenAt = touchPresence ? now : OFFLINE_LAST_SEEN_AT;
     this.db
       .prepare(
         `INSERT INTO users (id, display_name, machine_name, created_at, last_seen_at)
@@ -489,9 +492,19 @@ export class ChatService {
          ON CONFLICT(id) DO UPDATE SET
            display_name = excluded.display_name,
            machine_name = excluded.machine_name,
-           last_seen_at = excluded.last_seen_at`,
+           last_seen_at = CASE
+             WHEN ? = 1 THEN excluded.last_seen_at
+             ELSE users.last_seen_at
+           END`,
       )
-      .run(userId, displayName, profile.machineName ?? null, now, now);
+      .run(
+        userId,
+        displayName,
+        profile.machineName ?? null,
+        now,
+        lastSeenAt,
+        touchPresence ? 1 : 0,
+      );
     return this.getUser(userId);
   }
 
@@ -520,7 +533,7 @@ export class ChatService {
       id: row.id,
       displayName: row.display_name,
       machineName: row.machine_name,
-      online: this.sockets.has(row.id),
+      online: this.sockets.has(row.id) || isPresenceRecent(row.last_seen_at),
       createdAt: row.created_at,
       lastSeenAt: row.last_seen_at,
     };
@@ -582,6 +595,7 @@ export class ChatService {
   }
 
   private listConversations(userId: string): ChatConversation[] {
+    this.normalizeDirectConversationsForUser(userId);
     const rows = this.db
       .prepare(
         `SELECT c.*
@@ -603,33 +617,112 @@ export class ChatService {
     }
     this.getUser(currentUserId);
     this.getUser(otherUserId);
-    const existing = this.db
+    const row = this.normalizeDirectConversation([
+      currentUserId,
+      otherUserId,
+    ]);
+    return this.mapConversation(row, currentUserId);
+  }
+
+  private normalizeDirectConversationsForUser(userId: string): void {
+    const rows = this.db
+      .prepare(
+        `SELECT c.id
+         FROM conversations c
+         INNER JOIN conversation_members cm ON cm.conversation_id = c.id
+         WHERE c.type = 'direct' AND cm.user_id = ?`,
+      )
+      .all(userId) as Array<{ id: string }>;
+    const seenPairs = new Set<string>();
+    rows.forEach((row) => {
+      const memberIds = this.getMemberIds(row.id);
+      if (memberIds.length !== 2) return;
+      const key = canonicalDirectMemberIds(memberIds).join("|");
+      if (seenPairs.has(key)) return;
+      seenPairs.add(key);
+      this.normalizeDirectConversation(memberIds);
+    });
+  }
+
+  private normalizeDirectConversation(memberIds: string[]): ChatConversationRow {
+    const normalizedMemberIds = canonicalDirectMemberIds(memberIds);
+    if (normalizedMemberIds.length !== 2) {
+      throw new Error("Direct chat requires exactly two users.");
+    }
+
+    normalizedMemberIds.forEach((id) => this.getUser(id));
+    const id = directConversationId(normalizedMemberIds);
+    const duplicates = this.getExactDirectConversationRows(normalizedMemberIds);
+    const now = new Date().toISOString();
+    const transaction = this.db.transaction(() => {
+      const canonical = this.db
+        .prepare("SELECT * FROM conversations WHERE id = ?")
+        .get(id) as ChatConversationRow | undefined;
+      const createdAt =
+        canonical?.created_at ??
+        oldestTimestamp(duplicates.map((row) => row.created_at)) ??
+        now;
+      const updatedAt =
+        newestTimestamp(duplicates.map((row) => row.updated_at)) ?? now;
+      this.db
+        .prepare(
+          `INSERT INTO conversations (id, type, title, created_at, updated_at)
+           VALUES (?, 'direct', NULL, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             type = 'direct',
+             title = NULL,
+             updated_at = excluded.updated_at`,
+        )
+        .run(id, createdAt, updatedAt);
+      normalizedMemberIds.forEach((memberId) => this.addMember(id, memberId, now));
+      duplicates
+        .filter((row) => row.id !== id)
+        .forEach((row) => {
+          this.db
+            .prepare("UPDATE messages SET conversation_id = ? WHERE conversation_id = ?")
+            .run(id, row.id);
+          this.db
+            .prepare("DELETE FROM conversation_members WHERE conversation_id = ?")
+            .run(row.id);
+          this.db
+            .prepare("DELETE FROM conversations WHERE id = ?")
+            .run(row.id);
+        });
+    });
+    transaction();
+    return this.getConversationRow(id);
+  }
+
+  private getExactDirectConversationRows(memberIds: string[]): ChatConversationRow[] {
+    const [leftUserId, rightUserId] = canonicalDirectMemberIds(memberIds);
+    return this.db
       .prepare(
         `SELECT c.*
          FROM conversations c
          INNER JOIN conversation_members a ON a.conversation_id = c.id AND a.user_id = ?
          INNER JOIN conversation_members b ON b.conversation_id = c.id AND b.user_id = ?
          WHERE c.type = 'direct'
-         LIMIT 1`,
+           AND (
+             SELECT COUNT(*)
+             FROM conversation_members cm
+             WHERE cm.conversation_id = c.id
+           ) = 2
+         ORDER BY datetime(c.updated_at) DESC`,
       )
-      .get(currentUserId, otherUserId) as ChatConversationRow | undefined;
-    if (existing) {
-      return this.mapConversation(existing, currentUserId);
-    }
+      .all(leftUserId, rightUserId) as ChatConversationRow[];
+  }
 
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    const transaction = this.db.transaction(() => {
+  private getMemberIds(conversationId: string): string[] {
+    return (
       this.db
         .prepare(
-          "INSERT INTO conversations (id, type, title, created_at, updated_at) VALUES (?, 'direct', NULL, ?, ?)",
+          `SELECT user_id
+           FROM conversation_members
+           WHERE conversation_id = ?
+           ORDER BY user_id`,
         )
-        .run(id, now, now);
-      this.addMember(id, currentUserId, now);
-      this.addMember(id, otherUserId, now);
-    });
-    transaction();
-    return this.mapConversation(this.getConversationRow(id), currentUserId);
+        .all(conversationId) as Array<{ user_id: string }>
+    ).map((row) => row.user_id);
   }
 
   private createGroupConversation(
@@ -1039,6 +1132,53 @@ function readBuffer(request: IncomingMessage, limit: number): Promise<Buffer> {
     request.on("end", () => resolve(Buffer.concat(chunks)));
     request.on("error", reject);
   });
+}
+
+function isPresenceRecent(value: string): boolean {
+  const lastSeenAt = new Date(value).getTime();
+  return (
+    Number.isFinite(lastSeenAt) && Date.now() - lastSeenAt < PRESENCE_ACTIVE_MS
+  );
+}
+
+function canonicalDirectMemberIds(memberIds: string[]): string[] {
+  return Array.from(new Set(memberIds.map((id) => id.trim()).filter(Boolean)))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function directConversationId(memberIds: string[]): string {
+  const digest = createHash("sha1")
+    .update(canonicalDirectMemberIds(memberIds).join("|"))
+    .digest("hex");
+  return `direct-${digest}`;
+}
+
+function newestTimestamp(values: string[]): string | null {
+  return extremaTimestamp(values, "newest");
+}
+
+function oldestTimestamp(values: string[]): string | null {
+  return extremaTimestamp(values, "oldest");
+}
+
+function extremaTimestamp(
+  values: string[],
+  mode: "newest" | "oldest",
+): string | null {
+  let selectedValue: string | null = null;
+  let selectedTime: number | null = null;
+  for (const value of values) {
+    const time = new Date(value).getTime();
+    if (!Number.isFinite(time)) continue;
+    if (
+      selectedTime === null ||
+      (mode === "newest" ? time > selectedTime : time < selectedTime)
+    ) {
+      selectedValue = value;
+      selectedTime = time;
+    }
+  }
+  return selectedValue;
 }
 
 function sanitizeFileName(fileName: string, mimeType: string): string {

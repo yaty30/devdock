@@ -59,6 +59,7 @@ import {
   Key,
   Leaf,
   LoaderCircle,
+  Maximize2,
   Microchip,
   Play,
   Puzzle,
@@ -734,6 +735,7 @@ function ConnectionActionWorkspace({
   const [explorerWidth, setExplorerWidth] = useState(DEFAULT_EXPLORER_WIDTH);
   const [editorHeight, setEditorHeight] = useState(DEFAULT_EDITOR_HEIGHT);
   const [isExecuting, setIsExecuting] = useState(false);
+  const [resultFullscreenOpen, setResultFullscreenOpen] = useState(false);
   const [metadataStateByConnection, setMetadataStateByConnection] = useState<
     Record<string, DatabaseMetadataState>
   >({});
@@ -1017,6 +1019,13 @@ function ConnectionActionWorkspace({
     ) ??
     activeOutput.resultTabs[0] ??
     null;
+
+  useEffect(() => {
+    if (activeOutput.resultTabs.length === 0 && resultFullscreenOpen) {
+      setResultFullscreenOpen(false);
+    }
+  }, [activeOutput.resultTabs.length, resultFullscreenOpen]);
+
   const metadataState =
     metadataStateByConnection[connection.id] ?? createIdleMetadataState();
   const metadata = metadataState.metadata;
@@ -2675,6 +2684,19 @@ function ConnectionActionWorkspace({
                   >
                     <RefreshCcw size={15} />
                   </button>
+                  <button
+                    className="icon-button secondary database-output-reload"
+                    type="button"
+                    aria-label="Expand results"
+                    title="Expand results"
+                    onClick={() => setResultFullscreenOpen(true)}
+                    disabled={
+                      activeOutput.activeOutputTab !== "results" ||
+                      activeOutput.resultTabs.length === 0
+                    }
+                  >
+                    <Maximize2 size={15} />
+                  </button>
                   <ResultExportMenu
                     resultTab={activeResultTab}
                     connection={connection}
@@ -2720,6 +2742,34 @@ function ConnectionActionWorkspace({
           onCreateTemplateSheet={createTemplateSheet}
         />
       ) : null}
+      <Modal
+        open={resultFullscreenOpen && activeOutput.resultTabs.length > 0}
+        title="Results"
+        subtitle={activeSheet?.name}
+        size="xl"
+        className="database-result-fullscreen-modal"
+        contentClassName="database-result-fullscreen-content"
+        closeLabel="Close expanded results"
+        onClose={() => setResultFullscreenOpen(false)}
+      >
+        <ResultTabsPanel
+          tabs={activeOutput.resultTabs}
+          activeTabId={activeOutput.activeResultTabId}
+          metadataTables={metadata.tables}
+          onTabChange={(activeResultTabId) =>
+            updateActiveSheetOutput((output) => ({
+              ...output,
+              activeResultTabId,
+            }))
+          }
+          onColumnWidthsChange={(columnWidths) =>
+            updateActiveResultTab((tab) => ({
+              ...tab,
+              columnWidths,
+            }))
+          }
+        />
+      </Modal>
       {deleteRequest ? (
         <ConfirmDialog
           title="Delete sheet?"

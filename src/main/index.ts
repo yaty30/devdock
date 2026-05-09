@@ -25,6 +25,8 @@ import type {
   DatabaseWorksheetState,
   LogChannel,
   SheetUpdate,
+  ApiTesterRequest,
+  ApiTesterResponse,
 } from "../shared/dashboardTypes";
 import type {
   ChatNativeNotification,
@@ -37,6 +39,8 @@ if (started) {
   process.exit(0);
 }
 
+loadEnvironmentFile();
+
 let backend: DashboardBackend | null = null;
 let chatService: ChatService | null = null;
 let chatConfig: ChatServiceConfig | null = null;
@@ -44,7 +48,8 @@ let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
 const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
-const DEFAULT_CHAT_HOST = process.env.IVS_DASHBOARD_CHAT_HOST ?? "127.0.0.1";
+const API_TESTER_REQUEST_CHANNEL = "apiTester:sendRequest";
+const CHAT_ENABLED = readBooleanEnvironmentFlag("ENABLE_CHAT", true);
 const DEFAULT_CHAT_PORT = Number(
   process.env.IVS_DASHBOARD_CHAT_PORT ?? "43781",
 );
@@ -58,6 +63,15 @@ const DEFAULT_CHAT_ROOT =
   (os.platform() === "win32"
     ? String.raw`\\DESKTOP-Q97PLV1\chat`
     : "/Volumes/chat");
+const DEFAULT_CHAT_SERVICE_HOST =
+  process.env.IVS_DASHBOARD_CHAT_HOST ??
+  uncHostFromPath(DEFAULT_CHAT_ROOT) ??
+  "127.0.0.1";
+const DEFAULT_CHAT_BIND_HOST =
+  process.env.IVS_DASHBOARD_CHAT_BIND_HOST ??
+  (isLoopbackHost(DEFAULT_CHAT_SERVICE_HOST)
+    ? DEFAULT_CHAT_SERVICE_HOST
+    : "0.0.0.0");
 
 function getBackend(): DashboardBackend {
   if (!backend) {
@@ -69,6 +83,18 @@ function getBackend(): DashboardBackend {
 
 function registerIpc(): void {
   console.info("[main:ipc] registering IPC handlers");
+  ipcMain.handle("dashboard:getFeatureFlags", () =>
+    withLoggedErrors("dashboard:getFeatureFlags", () => ({
+      chatEnabled: CHAT_ENABLED,
+    })),
+  );
+  ipcMain.handle(
+    API_TESTER_REQUEST_CHANNEL,
+    (_event, request: ApiTesterRequest) =>
+      withLoggedErrors(API_TESTER_REQUEST_CHANNEL, () =>
+        sendApiTesterRequest(request),
+      ),
+  );
   ipcMain.handle("dashboard:getSnapshot", () =>
     withLoggedErrors("dashboard:getSnapshot", () => getBackend().getSnapshot()),
   );
@@ -308,6 +334,9 @@ function registerIpc(): void {
   );
   ipcMain.handle("chat:getConfig", () =>
     withLoggedErrors("chat:getConfig", () => {
+      if (!CHAT_ENABLED) {
+        throw new Error("Chat is disabled.");
+      }
       if (!chatConfig) {
         throw new Error("Chat has not been initialized.");
       }
@@ -315,14 +344,20 @@ function registerIpc(): void {
     }),
   );
   ipcMain.handle("chat:saveProfile", (_event, profile: ChatUserProfile) =>
-    withLoggedErrors("chat:saveProfile", () =>
-      saveChatProfile(app.getPath("userData"), profile),
-    ),
+    withLoggedErrors("chat:saveProfile", () => {
+      if (!CHAT_ENABLED) {
+        throw new Error("Chat is disabled.");
+      }
+      return saveChatProfile(app.getPath("userData"), profile);
+    }),
   );
   ipcMain.handle(
     "chat:notifyMessage",
     (_event, notification: ChatNativeNotification) =>
       withLoggedErrors("chat:notifyMessage", () => {
+        if (!CHAT_ENABLED) {
+          return;
+        }
         showChatNotification(notification);
       }),
   );
@@ -419,6 +454,121 @@ async function withLoggedErrors<T>(
   }
 }
 
+async function sendApiTesterRequest(
+  request: ApiTesterRequest,
+): Promise<ApiTesterResponse> {
+  const method = request.method.trim().toUpperCase();
+  if (!method) {
+    throw new Error("Request method is required.");
+  }
+
+  const url = new URL(request.url);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Only HTTP and HTTPS requests are supported.");
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = Math.min(
+    Math.max(request.timeoutMs ?? 60000, 1000),
+    300000,
+  );
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = new Headers();
+  Object.entries(request.headers).forEach(([name, value]) => {
+    const trimmedName = name.trim();
+    if (trimmedName) {
+      headers.set(trimmedName, value);
+    }
+  });
+  const canHaveBody = method !== "GET" && method !== "HEAD";
+  const startedAt = performance.now();
+
+  try {
+    const response = await fetch(url.toString(), {
+      method,
+      headers,
+      body: canHaveBody ? request.body : undefined,
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    const body = await response.text();
+    return {
+      ok: response.ok,
+      status: response.status,
+      statusText: response.statusText,
+      url: response.url,
+      durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+      sizeBytes: Buffer.byteLength(body, "utf8"),
+      headers: Array.from(response.headers.entries()).map(([name, value]) => ({
+        name,
+        value,
+      })),
+      body,
+    };
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Request timed out after ${timeoutMs} ms.`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function loadEnvironmentFile(): void {
+  const candidates = [
+    join(process.cwd(), ".env"),
+    join(__dirname, "../../.env"),
+  ];
+  const loaded = new Set<string>();
+
+  for (const envPath of candidates) {
+    if (loaded.has(envPath) || !existsSync(envPath)) {
+      continue;
+    }
+    loaded.add(envPath);
+
+    for (const line of readFileSync(envPath, "utf8").split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) {
+        continue;
+      }
+
+      const separatorIndex = trimmed.indexOf("=");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+
+      const key = trimmed.slice(0, separatorIndex).trim();
+      const value = trimmed.slice(separatorIndex + 1).trim();
+      if (key && process.env[key] === undefined) {
+        process.env[key] = stripEnvironmentQuotes(value);
+      }
+    }
+  }
+}
+
+function stripEnvironmentQuotes(value: string): string {
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function readBooleanEnvironmentFlag(
+  name: string,
+  defaultValue: boolean,
+): boolean {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) {
+    return defaultValue;
+  }
+  return !["0", "false", "no", "off"].includes(value);
+}
+
 function sanitizeExportFileName(fileName: string): string {
   const trimmed = fileName.trim().replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-");
   const compact = trimmed.replace(/\s+/g, " ").replace(/^-+|-+$/g, "");
@@ -452,17 +602,18 @@ function delay(ms: number): Promise<void> {
 function initializeChat(userDataPath: string): ChatServiceConfig {
   const httpUrl = normalizeHttpUrl(
     process.env.IVS_DASHBOARD_CHAT_URL ??
-      `http://${DEFAULT_CHAT_HOST}:${DEFAULT_CHAT_PORT}`,
+      `http://${formatHostForUrl(DEFAULT_CHAT_SERVICE_HOST)}:${DEFAULT_CHAT_PORT}`,
   );
   const profile = readChatProfile(userDataPath);
   const shouldStartEmbedded =
     process.env.IVS_DASHBOARD_CHAT_SERVICE !== "0" &&
-    process.env.IVS_DASHBOARD_CHAT_URL === undefined;
+    process.env.IVS_DASHBOARD_CHAT_URL === undefined &&
+    isLocalChatHost(DEFAULT_CHAT_SERVICE_HOST);
 
   if (shouldStartEmbedded) {
     const paths = resolveChatStoragePaths(userDataPath);
     chatService = new ChatService({
-      host: DEFAULT_CHAT_HOST,
+      host: DEFAULT_CHAT_BIND_HOST,
       port: DEFAULT_CHAT_PORT,
       databasePath: paths.databasePath,
       uploadsPath: paths.uploadsPath,
@@ -470,7 +621,7 @@ function initializeChat(userDataPath: string): ChatServiceConfig {
     });
     if (
       profile.displayName &&
-      process.env.IVS_DASHBOARD_CHAT_DEBUG_SEED !== "0"
+      process.env.IVS_DASHBOARD_CHAT_DEBUG_SEED === "1"
     ) {
       chatService.ensureDebugData(profile);
     }
@@ -489,6 +640,35 @@ function initializeChat(userDataPath: string): ChatServiceConfig {
 
 function normalizeHttpUrl(url: string): string {
   return url.replace(/\/+$/, "");
+}
+
+function uncHostFromPath(path: string): string | null {
+  return path.match(/^\\\\([^\\]+)\\/)?.[1] ?? null;
+}
+
+function formatHostForUrl(host: string): string {
+  return host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+}
+
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "::1" ||
+    normalized.startsWith("127.")
+  );
+}
+
+function isLocalChatHost(host: string): boolean {
+  const normalized = host.toLowerCase();
+  if (isLoopbackHost(normalized) || normalized === "0.0.0.0") {
+    return true;
+  }
+  const localName = hostname().toLowerCase();
+  return (
+    normalized === localName ||
+    normalized.split(".")[0] === localName.split(".")[0]
+  );
 }
 
 function resolveChatStoragePaths(userDataPath: string): {
@@ -557,7 +737,11 @@ function saveChatProfile(
     throw new Error("Chat has not been initialized.");
   }
   chatConfig = { ...chatConfig, profile: nextProfile };
-  if (displayName && chatService) {
+  if (
+    displayName &&
+    chatService &&
+    process.env.IVS_DASHBOARD_CHAT_DEBUG_SEED === "1"
+  ) {
     chatService.ensureDebugData(nextProfile);
   }
   return chatConfig;
@@ -700,7 +884,9 @@ const createWindow = (): void => {
 app.whenReady().then(() => {
   try {
     const userDataPath = app.getPath("userData");
-    chatConfig = initializeChat(userDataPath);
+    if (CHAT_ENABLED) {
+      chatConfig = initializeChat(userDataPath);
+    }
     backend = new DashboardBackend(userDataPath, app.getAppPath());
     registerIpc();
     createWindow();

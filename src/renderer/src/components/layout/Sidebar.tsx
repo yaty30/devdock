@@ -4,7 +4,9 @@ import {
   Boxes,
   ChevronDown,
   Database,
+  FlaskConical,
   FolderKanban,
+  GitCompare,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -12,6 +14,7 @@ import {
   Plus,
   Sun,
   Unplug,
+  Wrench,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
 import type {
@@ -19,6 +22,7 @@ import type {
   DatabaseConnection,
   Project,
   Theme,
+  ToolId,
 } from "../../types";
 
 export function Sidebar({
@@ -27,6 +31,7 @@ export function Sidebar({
   selectedProjectId,
   selectedDatabaseConnectionId,
   activeSection,
+  activeTool,
   theme,
   collapsed,
   onProjectChange,
@@ -34,6 +39,7 @@ export function Sidebar({
   onDatabaseConnect,
   onDatabaseDisconnect,
   onSectionChange,
+  onToolChange,
   onAddProject,
   onAddDatabaseConnection,
   onCollapseToggle,
@@ -44,6 +50,7 @@ export function Sidebar({
   selectedProjectId: string;
   selectedDatabaseConnectionId: string | null;
   activeSection: AppSection;
+  activeTool: ToolId;
   theme: Theme;
   collapsed: boolean;
   onProjectChange: (project: Project) => void;
@@ -51,6 +58,7 @@ export function Sidebar({
   onDatabaseConnect: (connection: DatabaseConnection) => void;
   onDatabaseDisconnect: (connection: DatabaseConnection) => void;
   onSectionChange: (section: AppSection) => void;
+  onToolChange: (tool: ToolId) => void;
   onAddProject: () => void;
   onAddDatabaseConnection: () => void;
   onCollapseToggle: () => void;
@@ -58,6 +66,7 @@ export function Sidebar({
 }): JSX.Element {
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [databasesOpen, setDatabasesOpen] = useState(true);
+  const [toolsOpen, setToolsOpen] = useState(true);
   const [databaseContextMenu, setDatabaseContextMenu] = useState<{
     connection: DatabaseConnection;
     x: number;
@@ -261,6 +270,93 @@ export function Sidebar({
             >
               <Plus size={18} style={{ color: "var(--accent)" }} />
             </button>
+          ) : null}
+        </div>
+
+        <button
+          className={`nav-item project-toggle${toolsOpen ? " open" : ""}`}
+          type="button"
+          onClick={() => {
+            if (!collapsed) {
+              setToolsOpen((current) => !current);
+            }
+          }}
+          aria-expanded={collapsed ? false : toolsOpen}
+          aria-label="Tools (2)"
+          title="Tools (2)"
+        >
+          <Wrench size={18} />
+          <span className="nav-label project-nav-label">
+            <span>Tools</span>
+            <span className="project-count-badge">2</span>
+          </span>
+          {!collapsed ? <ChevronDown className="chevron" size={16} /> : null}
+        </button>
+
+        <div
+          className={`project-list tools-list${
+            toolsOpen && !collapsed ? " open" : ""
+          }`}
+          aria-hidden={!collapsed && !toolsOpen}
+        >
+          <button
+            className={`project-item tool-item${
+              activeSection === "tools" && activeTool === "comparing"
+                ? " active"
+                : ""
+            }`}
+            type="button"
+            tabIndex={toolsOpen || collapsed ? 0 : -1}
+            onClick={() => onToolChange("comparing")}
+            title="Comparing"
+          >
+            <GitCompare size={16} />
+            <span>Comparing</span>
+          </button>
+          <button
+            className={`project-item tool-item${
+              activeSection === "tools" && activeTool === "api-tester"
+                ? " active"
+                : ""
+            }`}
+            type="button"
+            tabIndex={toolsOpen || collapsed ? 0 : -1}
+            onClick={() => onToolChange("api-tester")}
+            title="API Tester"
+          >
+            <FlaskConical size={16} />
+            <span>API Tester</span>
+          </button>
+
+          {collapsed ? (
+            <>
+              <button
+                className={`nav-item add-project-collapsed-btn${
+                  activeSection === "tools" && activeTool === "comparing"
+                    ? " active"
+                    : ""
+                }`}
+                type="button"
+                onClick={() => onToolChange("comparing")}
+                aria-label="Comparing"
+                title="Comparing"
+              >
+                <GitCompare size={18} />
+              </button>
+              <button
+                className={`nav-item add-project-collapsed-btn${
+                  activeSection === "tools" && activeTool === "api-tester"
+                    ? " active"
+                    : ""
+                }`}
+                type="button"
+                onClick={() => onToolChange("api-tester")}
+                aria-label="API Tester"
+                title="API Tester"
+              >
+                <FlaskConical size={18} />
+              </button>
+            </>
           ) : null}
         </div>
       </nav>

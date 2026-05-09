@@ -1,0 +1,27 @@
+<dependencies>
+  <dependency>
+    <groupId>jakarta.websocket</groupId>
+    <artifactId>jakarta.websocket-api</artifactId>
+    <scope>provided</scope>
+  </dependency>
+  <dependency>
+    <groupId>jakarta.json.bind</groupId>
+    <artifactId>jakarta.json.bind-api</artifactId>
+    <scope>provided</scope>
+  </dependency>
+</dependencies>
+
+
+
+ws://your-wildfly-host:8080/your-app-context/ws/chat/{userId}
+
+
+
+CREATE TABLE log_ws_message (
+    id                  VARCHAR(36)     PRIMARY KEY,
+    conversation_id     VARCHAR(36)     NOT NULL,
+    sender_user_id      VARCHAR(100)    NOT NULL,
+    sender_display_name VARCHAR(100),
+    body                TEXT            NOT NULL,
+    created_at          VARCHAR(30)     NOT NULL
+);

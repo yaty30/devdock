@@ -13,6 +13,9 @@ import type {
 import type { ChatNativeNotification } from "../shared/chatTypes";
 
 const api: DashboardApi = {
+  getFeatureFlags: () => ipcRenderer.invoke("dashboard:getFeatureFlags"),
+  sendApiTesterRequest: (request) =>
+    ipcRenderer.invoke("apiTester:sendRequest", request),
   getSnapshot: () => ipcRenderer.invoke("dashboard:getSnapshot"),
   getDatabaseConnections: () => ipcRenderer.invoke("database:getConnections"),
   saveDatabaseConnection: (connection) =>

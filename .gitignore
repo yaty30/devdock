@@ -8,7 +8,7 @@ dummy/**/node_modules/
 dummy/**/dist/
 dummy/**/logs/
 dummy/**/target/
-tools/
+/tools/
 /dummy/
 /build
 

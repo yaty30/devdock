@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2 } from "lucide-react";
+import { CheckCircle2, Send } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
@@ -22,6 +22,8 @@ import { GitTerminalTab } from "./features/git/GitTerminalTab";
 import { MonitorTab } from "./features/monitor/MonitorTab";
 import { NotesTab } from "./features/notes/NotesTab";
 import { SettingsContent } from "./features/settings/SettingsContent";
+import { ApiTesterMockup } from "./features/tools/ApiTesterMockup";
+import { CompareTool } from "./features/tools/CompareTool";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import closeMouthLogo from "./assets/close-mouth-logo.png";
@@ -40,6 +42,7 @@ import type {
   ProjectRuntimeState,
   ShutdownEntry,
   Theme,
+  ToolId,
 } from "./types";
 
 const SPLASH_READY_FRAME_MS = 800;
@@ -61,10 +64,13 @@ type DatabaseRuntimeStatus =
   | "disconnected"
   | "reconnecting"
   | "error";
+type ApiTesterView = "test" | "history";
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
+  const [activeTool, setActiveTool] = useState<ToolId>("comparing");
+  const [apiTesterView, setApiTesterView] = useState<ApiTesterView>("test");
   const [projects, setProjects] = useState<Project[]>([]);
   const [databaseConnections, setDatabaseConnections] = useState<
     DatabaseConnection[]
@@ -122,6 +128,7 @@ function App(): JSX.Element {
   const [splashPhase, setSplashPhase] = useState<SplashPhase>("visible");
   const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
   const [snackbarClosing, setSnackbarClosing] = useState(false);
+  const [chatEnabled, setChatEnabled] = useState(false);
   const projectLoadingTimerRef = useRef<number | null>(null);
   const projectSwitchStartedAtRef = useRef<number | null>(null);
   const splashSequenceStartedRef = useRef(false);
@@ -133,6 +140,30 @@ function App(): JSX.Element {
   const sidebarTransitionReadyRef = useRef(false);
   const databaseSleepTimerRef = useRef<number | null>(null);
   const hadDatabaseConnectionRef = useRef(false);
+  const selectedDatabaseConnectionIdRef = useRef<string | null>(null);
+  const verifyingDatabaseConnectionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectedDatabaseConnectionIdRef.current = selectedDatabaseConnectionId;
+  }, [selectedDatabaseConnectionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.ivsDashboard
+      .getFeatureFlags()
+      .then((flags) => {
+        if (!cancelled) {
+          setChatEnabled(flags.chatEnabled);
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -157,6 +188,17 @@ function App(): JSX.Element {
     const selectedConnection = databaseConnections.find(
       (connection) => connection.id === selectedDatabaseConnectionId,
     );
+    if (
+      selectedConnection?.status === "error" &&
+      verifyingDatabaseConnectionIdRef.current !== selectedConnection.id
+    ) {
+      if (databaseSleepTimerRef.current !== null) {
+        window.clearTimeout(databaseSleepTimerRef.current);
+        databaseSleepTimerRef.current = null;
+      }
+      setDatabaseRuntimeStatus("error");
+      return;
+    }
     if (selectedConnection?.status === "disconnected") {
       if (databaseSleepTimerRef.current !== null) {
         window.clearTimeout(databaseSleepTimerRef.current);
@@ -512,10 +554,16 @@ function App(): JSX.Element {
 
   function switchDatabaseConnection(connection: DatabaseConnection): void {
     const doSwitch = (): void => {
+      selectedDatabaseConnectionIdRef.current = connection.id;
       setSelectedDatabaseConnectionId(connection.id);
       setDatabaseConnections((current) =>
         current.map((item) =>
-          item.id === connection.id ? { ...item, status: "connected" } : item,
+          item.id === connection.id
+            ? {
+                ...item,
+                status: item.status === "error" ? "error" : "connected",
+              }
+            : item,
         ),
       );
       setActiveDatabaseTab("connection");
@@ -537,31 +585,111 @@ function App(): JSX.Element {
       window.clearTimeout(databaseSleepTimerRef.current);
       databaseSleepTimerRef.current = null;
     }
-    hadDatabaseConnectionRef.current = true;
-    setDatabaseConnections((current) =>
-      current.map((item) =>
-        item.id === connection.id ? { ...item, status: "connected" } : item,
-      ),
-    );
+    selectedDatabaseConnectionIdRef.current = connection.id;
     setSelectedDatabaseConnectionId(connection.id);
     setActiveDatabaseTab("connection");
     setActiveSection("database");
-    setDatabaseRuntimeStatus("connected");
-    showSnackbar(`${connection.name} connected.`, "valid");
-    void window.ivsDashboard
-      .updateDatabaseConnectionSettings(connection.id, {
-        autoConnect: true,
-        status: "connected",
-      })
-      .then((saved) => {
-        setDatabaseConnections((current) =>
-          current.map((item) => (item.id === saved.id ? saved : item)),
+    void verifyDatabaseConnection(connection, {
+      persistAutoConnect: true,
+      showSuccess: true,
+    });
+  }
+
+  async function verifyDatabaseConnection(
+    connection: DatabaseConnection,
+    options: { persistAutoConnect: boolean; showSuccess: boolean },
+  ): Promise<void> {
+    verifyingDatabaseConnectionIdRef.current = connection.id;
+    hadDatabaseConnectionRef.current = true;
+    setDatabaseRuntimeStatus((current) =>
+      current === "connected" || current === "sleeping"
+        ? "reconnecting"
+        : "connecting",
+    );
+
+    try {
+      const result =
+        await window.ivsDashboard.testDatabaseConnection(connection);
+      if (!result.success) {
+        if (verifyingDatabaseConnectionIdRef.current === connection.id) {
+          verifyingDatabaseConnectionIdRef.current = null;
+        }
+        applyDatabaseConnectionStatus(connection, "error");
+        if (selectedDatabaseConnectionIdRef.current === connection.id) {
+          setDatabaseRuntimeStatus("error");
+        }
+        showSnackbar(
+          result.message || "Database connection failed.",
+          "invalid",
         );
-      })
-      .catch((error) => {
-        console.error(error);
-        showSnackbar("Connection setting could not be saved.", "invalid");
-      });
+        if (options.persistAutoConnect) {
+          await saveDatabaseConnectionRuntimeStatus(connection, "error", false);
+        }
+        return;
+      }
+
+      applyDatabaseConnectionStatus(connection, "connected");
+      if (verifyingDatabaseConnectionIdRef.current === connection.id) {
+        verifyingDatabaseConnectionIdRef.current = null;
+      }
+      if (selectedDatabaseConnectionIdRef.current === connection.id) {
+        setDatabaseRuntimeStatus("connected");
+      }
+      if (options.showSuccess) {
+        showSnackbar(`${connection.name} connected.`, "valid");
+      }
+      if (options.persistAutoConnect) {
+        await saveDatabaseConnectionRuntimeStatus(
+          connection,
+          "connected",
+          true,
+        );
+      }
+    } catch (error) {
+      if (verifyingDatabaseConnectionIdRef.current === connection.id) {
+        verifyingDatabaseConnectionIdRef.current = null;
+      }
+      const message =
+        error instanceof Error ? error.message : "Database connection failed.";
+      applyDatabaseConnectionStatus(connection, "error");
+      if (selectedDatabaseConnectionIdRef.current === connection.id) {
+        setDatabaseRuntimeStatus("error");
+      }
+      showSnackbar(message, "invalid");
+      if (options.persistAutoConnect) {
+        await saveDatabaseConnectionRuntimeStatus(connection, "error", false);
+      }
+    }
+  }
+
+  function applyDatabaseConnectionStatus(
+    connection: DatabaseConnection,
+    status: DatabaseConnection["status"],
+  ): void {
+    setDatabaseConnections((current) =>
+      current.map((item) =>
+        item.id === connection.id ? { ...item, status } : item,
+      ),
+    );
+  }
+
+  async function saveDatabaseConnectionRuntimeStatus(
+    connection: DatabaseConnection,
+    status: DatabaseConnection["status"],
+    autoConnect: boolean,
+  ): Promise<void> {
+    try {
+      const saved = await window.ivsDashboard.updateDatabaseConnectionSettings(
+        connection.id,
+        { autoConnect, status },
+      );
+      setDatabaseConnections((current) =>
+        current.map((item) => (item.id === saved.id ? saved : item)),
+      );
+    } catch (error) {
+      console.error(error);
+      showSnackbar("Connection setting could not be saved.", "invalid");
+    }
   }
 
   function disconnectDatabaseConnection(connection: DatabaseConnection): void {
@@ -606,6 +734,22 @@ function App(): JSX.Element {
     }
     setSettingsOpen(false);
     setActiveSection(section);
+  }
+
+  function handleToolChange(tool: ToolId): void {
+    if (settingsDirty && settingsOpen) {
+      setPendingNav(() => () => {
+        setSettingsOpen(false);
+        setActiveSection("tools");
+        setActiveTool(tool);
+        setSettingsDirty(false);
+      });
+      return;
+    }
+
+    setSettingsOpen(false);
+    setActiveSection("tools");
+    setActiveTool(tool);
   }
 
   function closeSettings(): void {
@@ -897,6 +1041,9 @@ function App(): JSX.Element {
       onConfirm={() => void confirmDeleteDatabaseConnection()}
     />
   ) : null;
+  const chatFeature = chatEnabled ? (
+    <ChatFeature onToast={showSnackbar} />
+  ) : null;
 
   if (!selectedProject && !initialStateLoaded) {
     return (
@@ -912,9 +1059,7 @@ function App(): JSX.Element {
               <h1>IVS Dashboard</h1>
               <p>Loading project configuration.</p>
             </div>
-            <div className="main-header-actions">
-              <ChatFeature onToast={showSnackbar} />
-            </div>
+            <div className="main-header-actions">{chatFeature}</div>
           </header>
         </main>
         {splashOverlay}
@@ -938,6 +1083,7 @@ function App(): JSX.Element {
           activeSection={
             activeSection === "project" ? "dashboard" : activeSection
           }
+          activeTool={activeTool}
           theme={theme}
           collapsed={sidebarCollapsed}
           onProjectChange={switchProject}
@@ -945,6 +1091,7 @@ function App(): JSX.Element {
           onDatabaseConnect={connectDatabaseConnection}
           onDatabaseDisconnect={disconnectDatabaseConnection}
           onSectionChange={handleSectionChange}
+          onToolChange={handleToolChange}
           onAddProject={openAddProjectDialog}
           onAddDatabaseConnection={handleAddDatabaseConnection}
           onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
@@ -967,27 +1114,72 @@ function App(): JSX.Element {
                 <h1>Databases</h1>
                 <p>Create a connection to browse objects and run SQL.</p>
               </div>
+            ) : activeSection === "tools" && activeTool === "api-tester" ? (
+              <ApiTesterHeaderTabs
+                activeView={apiTesterView}
+                onViewChange={setApiTesterView}
+              />
+            ) : activeSection === "tools" ? (
+              <div>
+                <h1>
+                  {activeTool === "api-tester" ? "API Tester" : "Comparing"}
+                </h1>
+                <p>
+                  {activeTool === "api-tester"
+                    ? "Simple REST client for testing endpoints and inspecting JSON responses"
+                    : "Compare two files or pasted text."}
+                </p>
+              </div>
             ) : (
               <div>
                 <h1>Overview</h1>
                 <p>All project server status and last build results.</p>
               </div>
             )}
-            <div className="main-header-actions">
-              {activeSection === "database" && selectedDatabaseConnection ? (
-                <DatabaseHeaderActions
-                  connection={selectedDatabaseConnection}
-                  databaseStatus={databaseRuntimeStatus}
-                  fontSizeMode={fontSizeMode}
-                  onFontSizeChange={setFontSizeMode}
-                  onSettingsClick={openDatabaseConnectionSettings}
-                />
-              ) : null}
-              <ChatFeature onToast={showSnackbar} />
-            </div>
+            {activeSection === "tools" && activeTool === "api-tester" ? (
+              <div className="main-header-actions">
+                {apiTesterView === "test" ? (
+                  <button
+                    className="button primary compact"
+                    type="button"
+                    onClick={() =>
+                      window.dispatchEvent(new Event("api-tester:send"))
+                    }
+                  >
+                    <Send size={15} />
+                    Send
+                  </button>
+                ) : null}
+                {chatFeature}
+              </div>
+            ) : (
+              <div className="main-header-actions">
+                {activeSection === "database" && selectedDatabaseConnection ? (
+                  <DatabaseHeaderActions
+                    connection={selectedDatabaseConnection}
+                    databaseStatus={databaseRuntimeStatus}
+                    fontSizeMode={fontSizeMode}
+                    onFontSizeChange={setFontSizeMode}
+                    onSettingsClick={openDatabaseConnectionSettings}
+                  />
+                ) : null}
+                {chatFeature}
+              </div>
+            )}
           </header>
 
-          {activeSection === "database" ? (
+          {activeSection === "tools" ? (
+            activeTool === "api-tester" ? (
+              <ApiTesterMockup
+                view={apiTesterView}
+                storageScopeId="global"
+                onViewChange={setApiTesterView}
+                onFeedback={showSnackbar}
+              />
+            ) : (
+              <CompareTool />
+            )
+          ) : activeSection === "database" ? (
             selectedDatabaseConnection ? (
               <DatabaseWorkspace
                 connection={selectedDatabaseConnection}
@@ -1049,6 +1241,7 @@ function App(): JSX.Element {
         selectedProjectId={selectedProject.id}
         selectedDatabaseConnectionId={selectedDatabaseConnectionId}
         activeSection={activeSection}
+        activeTool={activeTool}
         theme={theme}
         collapsed={sidebarCollapsed}
         onProjectChange={switchProject}
@@ -1056,6 +1249,7 @@ function App(): JSX.Element {
         onDatabaseConnect={connectDatabaseConnection}
         onDatabaseDisconnect={disconnectDatabaseConnection}
         onSectionChange={handleSectionChange}
+        onToolChange={handleToolChange}
         onAddProject={openAddProjectDialog}
         onAddDatabaseConnection={handleAddDatabaseConnection}
         onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
@@ -1089,7 +1283,12 @@ function App(): JSX.Element {
               <h1>Databases</h1>
               <p>Create a connection to browse objects and run SQL.</p>
             </div>
-          ) : (
+          ) : activeSection === "tools" && activeTool === "api-tester" ? (
+            <ApiTesterHeaderTabs
+              activeView={apiTesterView}
+              onViewChange={setApiTesterView}
+            />
+          ) : activeSection === "tools" ? null : (
             <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
           )}
           {activeSection === "project" ? (
@@ -1110,7 +1309,7 @@ function App(): JSX.Element {
                   }
                 />
               ) : null}
-              <ChatFeature onToast={showSnackbar} />
+              {chatFeature}
             </div>
           ) : activeSection === "database" && selectedDatabaseConnection ? (
             <div className="main-header-actions">
@@ -1121,12 +1320,12 @@ function App(): JSX.Element {
                 onFontSizeChange={setFontSizeMode}
                 onSettingsClick={openDatabaseConnectionSettings}
               />
-              <ChatFeature onToast={showSnackbar} />
+              {chatFeature}
             </div>
+          ) : activeSection === "tools" && activeTool === "api-tester" ? (
+            <div className="main-header-actions">{chatFeature}</div>
           ) : (
-            <div className="main-header-actions">
-              <ChatFeature onToast={showSnackbar} />
-            </div>
+            <div className="main-header-actions">{chatFeature}</div>
           )}
         </header>
 
@@ -1153,6 +1352,17 @@ function App(): JSX.Element {
             />
           ) : (
             <DatabaseEmptyState onCreate={handleAddDatabaseConnection} />
+          )
+        ) : activeSection === "tools" ? (
+          activeTool === "api-tester" ? (
+            <ApiTesterMockup
+              view={apiTesterView}
+              storageScopeId={selectedProject.id}
+              onViewChange={setApiTesterView}
+              onFeedback={showSnackbar}
+            />
+          ) : (
+            <CompareTool />
           )
         ) : activeSection === "project" ? (
           <>
@@ -1470,6 +1680,41 @@ function createLoadingProjectState(): ProjectRuntimeState {
       tail: [],
     },
   };
+}
+
+function ApiTesterHeaderTabs({
+  activeView,
+  onViewChange,
+}: {
+  activeView: ApiTesterView;
+  onViewChange: (view: ApiTesterView) => void;
+}): JSX.Element {
+  return (
+    <div
+      className="tabs api-tester-header-tabs"
+      role="tablist"
+      aria-label="API tester sections"
+    >
+      <button
+        className={`tab${activeView === "test" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeView === "test"}
+        onClick={() => onViewChange("test")}
+      >
+        API Test
+      </button>
+      <button
+        className={`tab${activeView === "history" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeView === "history"}
+        onClick={() => onViewChange("history")}
+      >
+        History
+      </button>
+    </div>
+  );
 }
 
 export default App;

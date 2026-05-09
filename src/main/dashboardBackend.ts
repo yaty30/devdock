@@ -536,7 +536,7 @@ export class DashboardBackend {
     }
 
     const mysqlConnection = await createMysqlConnection(
-      toMysqlConnectionOptions(connection),
+      toMysqlConnectionOptions(connection, { includeDatabase: false }),
     );
     try {
       const [schemaRows] = await mysqlConnection.query<RowDataPacket[]>(
@@ -1530,6 +1530,7 @@ export class DashboardBackend {
         const runningProcess = this.serviceProcesses.get(processKey);
         const explicitlyStopped =
           this.explicitlyStoppedServices.has(processKey);
+        const previousStatus = this.getStoredStatus(projectId, service);
 
         if (explicitlyStopped) {
           const status = this.statusRecord(
@@ -1549,6 +1550,18 @@ export class DashboardBackend {
             "Stopping",
             config.healthUrl,
             runningProcess.startedAt,
+          );
+          this.upsertStatus(projectId, status);
+          return status;
+        }
+
+        if (!runningProcess && isRecentStartFailureStatus(previousStatus)) {
+          const status = this.statusRecord(
+            service,
+            "error",
+            previousStatus?.message ?? "Service failed to start",
+            config.healthUrl,
+            normalizeOptionalDate(previousStatus?.startedAt),
           );
           this.upsertStatus(projectId, status);
           return status;
@@ -1583,7 +1596,6 @@ export class DashboardBackend {
           service === "wildfly"
             ? wildflyReadyByLog || (!runningProcess && reachable)
             : reachable;
-        const previousStatus = this.getStoredStatus(projectId, service);
         const startedAt =
           runningProcess?.startedAt ||
           normalizeOptionalDate(previousStatus?.startedAt);
@@ -2212,8 +2224,32 @@ export class DashboardBackend {
           code === 0 ? "stopped" : "error",
           `Process exited with code ${code ?? "unknown"}`,
           config.healthUrl,
+          serviceProcess.startedAt,
         );
         this.upsertStatus(projectId, status);
+      }
+    });
+    child.on("error", (error) => {
+      if (this.serviceProcesses.get(key) === serviceProcess) {
+        this.serviceProcesses.delete(key);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendLog(
+        projectId,
+        service,
+        stamp(`${service} failed: ${message}`),
+      );
+      if (!serviceProcess.stopRequested) {
+        this.upsertStatus(
+          projectId,
+          this.statusRecord(
+            service,
+            "error",
+            message,
+            config.healthUrl,
+            serviceProcess.startedAt,
+          ),
+        );
       }
     });
 
@@ -3244,6 +3280,26 @@ function hasRecentServiceStartupSignal(processState: ServiceProcess): boolean {
   );
 }
 
+function isRecentStartFailureStatus(
+  status: ServiceStatusRecord | undefined,
+): boolean {
+  if (status?.state !== "error") {
+    return false;
+  }
+
+  const checkedAt = new Date(status.checkedAt).getTime();
+  if (
+    Number.isNaN(checkedAt) ||
+    Date.now() - checkedAt > SERVICE_STARTING_GRACE_MS
+  ) {
+    return false;
+  }
+
+  return /process exited|failed|working directory|no command|running server limit/i.test(
+    status.message,
+  );
+}
+
 function isServiceStartupLogLine(service: ServiceName, line: string): boolean {
   const normalized = line.toLowerCase();
   if (
@@ -3493,7 +3549,10 @@ function unquoteSqlIdentifier(value: string): string {
   return trimmed;
 }
 
-function toMysqlConnectionOptions(connection: DatabaseConnection): {
+function toMysqlConnectionOptions(
+  connection: DatabaseConnection,
+  options: { includeDatabase?: boolean } = {},
+): {
   host: string;
   port: number;
   user: string;
@@ -3506,12 +3565,13 @@ function toMysqlConnectionOptions(connection: DatabaseConnection): {
   bigNumberStrings: boolean;
 } {
   const database = connection.database?.trim();
+  const includeDatabase = options.includeDatabase ?? true;
   return {
     host: connection.host.trim(),
     port: Number(connection.port) || 3306,
     user: connection.user.trim(),
     password: connection.password ?? "",
-    database: database || undefined,
+    database: includeDatabase && database ? database : undefined,
     connectTimeout: connection.connectionTimeoutMs ?? 10000,
     ssl: connection.sslMode === "required" ? {} : undefined,
     dateStrings: true,
