@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Send } from "lucide-react";
+import {
+  CheckCircle2,
+  ChefHat,
+  ChevronUp,
+  Minimize2,
+  Package,
+  PackageCheck,
+  Send,
+} from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
@@ -39,7 +47,9 @@ import type {
   FontSizeMode,
   Project,
   ProjectDashboardSummary,
+  ProjectRecord,
   ProjectRuntimeState,
+  RecentBuildRecord,
   ShutdownEntry,
   Theme,
   ToolId,
@@ -48,6 +58,8 @@ import type {
 const SPLASH_READY_FRAME_MS = 800;
 const SPLASH_FADE_OUT_MS = 1100;
 const SPLASH_LOGO_SIZE = "min(90px, 11vw)";
+const INITIAL_STATE_LOAD_TIMEOUT_MS = 10000;
+const PROJECT_STATE_LOAD_TIMEOUT_MS = 8000;
 const DATABASE_IDLE_DISCONNECT_MS = 2 * 60 * 1000;
 
 type SplashFrame = "open" | "close";
@@ -55,6 +67,11 @@ type SplashPhase = "visible" | "exiting" | "hidden";
 type SnackbarState = {
   message: string;
   tone: "valid" | "invalid" | "warning";
+};
+type BuildMiniPanelItem = {
+  project: ProjectRecord;
+  build: RecentBuildRecord;
+  debug?: boolean;
 };
 type DatabaseRuntimeStatus =
   | "idle"
@@ -129,6 +146,9 @@ function App(): JSX.Element {
   const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
   const [snackbarClosing, setSnackbarClosing] = useState(false);
   const [chatEnabled, setChatEnabled] = useState(false);
+  const [buildMiniPanelMinimized, setBuildMiniPanelMinimized] = useState(false);
+  const [dismissedBuildMiniRecordKeys, setDismissedBuildMiniRecordKeys] =
+    useState<Set<string>>(() => new Set());
   const projectLoadingTimerRef = useRef<number | null>(null);
   const projectSwitchStartedAtRef = useRef<number | null>(null);
   const splashSequenceStartedRef = useRef(false);
@@ -136,6 +156,7 @@ function App(): JSX.Element {
   const dashboardOverviewRequestRef = useRef(0);
   const snackbarDismissTimerRef = useRef<number | null>(null);
   const snackbarCloseTimerRef = useRef<number | null>(null);
+  const buildMiniPanelBuildIdRef = useRef<string | null>(null);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarTransitionReadyRef = useRef(false);
   const databaseSleepTimerRef = useRef<number | null>(null);
@@ -267,6 +288,17 @@ function App(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false;
+    const initialLoadTimeout = window.setTimeout(() => {
+      if (cancelled) {
+        return;
+      }
+
+      console.error("[renderer:startup] Initial state load timed out");
+      setInitialStateLoaded(true);
+      setProjectLoading(false);
+      setDashboardOverviewLoading(false);
+    }, INITIAL_STATE_LOAD_TIMEOUT_MS);
+
     async function loadInitialState(): Promise<void> {
       const snapshot = await window.ivsDashboard.getSnapshot();
       const connections = await window.ivsDashboard.getDatabaseConnections();
@@ -275,6 +307,7 @@ function App(): JSX.Element {
       if (cancelled) {
         return;
       }
+      window.clearTimeout(initialLoadTimeout);
       const hydratedConnections: DatabaseConnection[] = connections.map(
         (connection) => ({
           ...connection,
@@ -306,12 +339,15 @@ function App(): JSX.Element {
 
     void loadInitialState().catch((error) => {
       console.error(error);
+      window.clearTimeout(initialLoadTimeout);
       setInitialStateLoaded(true);
       setProjectLoading(false);
+      setDashboardOverviewLoading(false);
     });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(initialLoadTimeout);
     };
   }, []);
 
@@ -376,11 +412,24 @@ function App(): JSX.Element {
     }
 
     let cancelled = false;
+    const loadingTimeout = window.setTimeout(() => {
+      if (cancelled) {
+        return;
+      }
+
+      console.error(
+        `[renderer:project] Project state load timed out for ${selectedProject.id}`,
+      );
+      setProjectLoading(false);
+      projectSwitchStartedAtRef.current = null;
+    }, PROJECT_STATE_LOAD_TIMEOUT_MS);
+
     setProjectLoading(true);
     window.ivsDashboard
       .getProjectState(selectedProject.id)
       .then((nextState) => {
         if (!cancelled) {
+          window.clearTimeout(loadingTimeout);
           setProjectState(nextState);
           setProjectStateProjectId(selectedProject.id);
           const switchStartedAt = projectSwitchStartedAtRef.current;
@@ -403,12 +452,14 @@ function App(): JSX.Element {
       .catch((error) => {
         console.error(error);
         if (!cancelled) {
+          window.clearTimeout(loadingTimeout);
           setProjectLoading(false);
         }
       });
 
     return () => {
       cancelled = true;
+      window.clearTimeout(loadingTimeout);
     };
   }, [selectedProject, activeSection]);
 
@@ -483,6 +534,25 @@ function App(): JSX.Element {
         (entry) => entry.connectionId === selectedDatabaseConnection.id,
       )
     : [];
+  const runningBuildItems = getBuildMiniPanelItems(
+    dashboardOverview,
+    projects,
+    dismissedBuildMiniRecordKeys,
+  );
+  const runningBuildKey = runningBuildItems
+    .map((item) => `${item.project.id}:${item.build.id}`)
+    .join("|");
+
+  useEffect(() => {
+    if (buildMiniPanelBuildIdRef.current === runningBuildKey) {
+      return;
+    }
+
+    buildMiniPanelBuildIdRef.current = runningBuildKey;
+    if (runningBuildKey) {
+      setBuildMiniPanelMinimized(false);
+    }
+  }, [runningBuildKey]);
 
   useEffect(() => {
     if (splashSequenceStartedRef.current) {
@@ -550,6 +620,54 @@ function App(): JSX.Element {
     }
 
     doSwitch();
+  }
+
+  function openProjectDashboard(project: ProjectRecord): void {
+    const targetProject: Project = {
+      id: project.id,
+      name: project.name,
+      code: project.code,
+    };
+
+    const doOpen = (): void => {
+      setActiveTab("dashboard");
+      if (targetProject.id === selectedProject?.id) {
+        setSettingsOpen(false);
+        setActiveSection("project");
+        return;
+      }
+
+      if (projectLoadingTimerRef.current !== null) {
+        window.clearTimeout(projectLoadingTimerRef.current);
+      }
+      selectedProjectIdRef.current = targetProject.id;
+      setSelectedProject(targetProject);
+      setProjectLoading(true);
+      setProjectStateProjectId(null);
+      projectSwitchStartedAtRef.current = Date.now();
+      setSettingsOpen(false);
+      setSettingsDirty(false);
+      setActiveSection("project");
+    };
+
+    if (settingsDirty && settingsOpen) {
+      setPendingNav(() => doOpen);
+      return;
+    }
+
+    doOpen();
+  }
+
+  function dismissBuildMiniRecord(item: BuildMiniPanelItem): void {
+    if (item.build.status === "Running") {
+      return;
+    }
+
+    setDismissedBuildMiniRecordKeys((current) => {
+      const next = new Set(current);
+      next.add(getBuildMiniRecordKey(item));
+      return next;
+    });
   }
 
   function switchDatabaseConnection(connection: DatabaseConnection): void {
@@ -1044,6 +1162,17 @@ function App(): JSX.Element {
   const chatFeature = chatEnabled ? (
     <ChatFeature onToast={showSnackbar} />
   ) : null;
+  const buildMiniPanel =
+    activeSection !== "project" && runningBuildItems.length > 0 ? (
+      <BuildMiniPanel
+        items={runningBuildItems}
+        minimized={buildMiniPanelMinimized}
+        onMinimize={() => setBuildMiniPanelMinimized(true)}
+        onRestore={() => setBuildMiniPanelMinimized(false)}
+        onOpenProject={openProjectDashboard}
+        onDismissRecord={dismissBuildMiniRecord}
+      />
+    ) : null;
 
   if (!selectedProject && !initialStateLoaded) {
     return (
@@ -1223,6 +1352,7 @@ function App(): JSX.Element {
         ) : null}
         {databaseConnectionDialog}
         {databaseDeleteDialog}
+        {buildMiniPanel}
         {splashOverlay}
       </div>
     );
@@ -1473,6 +1603,7 @@ function App(): JSX.Element {
       ) : null}
 
       {databaseDeleteDialog}
+      {buildMiniPanel}
 
       {pendingNav ? (
         <ConfirmDialog
@@ -1586,6 +1717,252 @@ function DatabaseEmptyState({
 
 function DatabaseConnectionIcon(): JSX.Element {
   return <span className="database-empty-icon">DB</span>;
+}
+
+function BuildMiniPanel({
+  items,
+  minimized,
+  onMinimize,
+  onRestore,
+  onOpenProject,
+  onDismissRecord,
+}: {
+  items: BuildMiniPanelItem[];
+  minimized: boolean;
+  onMinimize: () => void;
+  onRestore: () => void;
+  onOpenProject: (project: ProjectRecord) => void;
+  onDismissRecord: (item: BuildMiniPanelItem) => void;
+}): JSX.Element {
+  const now = useAppNow(1000);
+  const buildCount = items.length;
+  const runningCount = items.filter(
+    (item) => item.build.status === "Running",
+  ).length;
+  const restoreStatus = getBuildMiniRestoreStatus(items);
+
+  return (
+    <div
+      className={`build-mini-dock${minimized ? " minimized" : " expanded"}`}
+      aria-live="polite"
+    >
+      <button
+        className={`build-mini-restore ${restoreStatus}`}
+        type="button"
+        aria-label="Show build progress"
+        title="Show build progress"
+        onClick={onRestore}
+      >
+        <Package size={18} />
+      </button>
+      <section className="build-mini-panel" aria-label="Build progress">
+        <header className="build-mini-header">
+          <span className="build-mini-icon">
+            <Package size={18} />
+          </span>
+          <div>
+            <h2>{runningCount > 0 ? "Build Running" : "Build Complete"}</h2>
+            <p>{getBuildMiniSummary(buildCount, runningCount)}</p>
+          </div>
+          <button
+            className="build-mini-minimize"
+            type="button"
+            aria-label="Minimize build progress"
+            title="Minimize"
+            onClick={onMinimize}
+          >
+            <Minimize2 size={15} />
+          </button>
+        </header>
+        <div className="build-mini-list">
+          {items.map((item) => {
+            const elapsedLabel = formatBuildMiniElapsed(item.build, now);
+            const title =
+              item.build.outcomeType === "build-and-deploy"
+                ? "Build & Deploy"
+                : "WAR Build";
+
+            return (
+              <button
+                className="build-mini-item"
+                type="button"
+                key={`${item.project.id}-${item.build.id}`}
+                onClick={() => {
+                  onDismissRecord(item);
+                  onOpenProject(item.project);
+                }}
+              >
+                <span
+                  className={`build-mini-item-status ${getBuildMiniStatusClass(
+                    item.build.status,
+                  )}`}
+                />
+                <span className="build-mini-item-copy">
+                  <strong>
+                    {item.project.name}
+                    {item.debug ? " (debug)" : ""}
+                  </strong>
+                  <span>
+                    {title} - {item.build.profile}
+                  </span>
+                </span>
+                <span className="build-mini-item-meta">
+                  <strong>{elapsedLabel}</strong>
+                  <span>{item.build.status}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function getBuildMiniSummary(buildCount: number, runningCount: number): string {
+  if (runningCount > 0) {
+    return `${runningCount} active ${runningCount === 1 ? "project" : "projects"}`;
+  }
+  return `${buildCount} recent ${buildCount === 1 ? "record" : "records"}`;
+}
+
+function getBuildMiniRecordKey(item: BuildMiniPanelItem): string {
+  return `${item.project.id}:${item.build.id}`;
+}
+
+function getBuildMiniRestoreStatus(items: BuildMiniPanelItem[]): string {
+  if (items.some((item) => item.build.status === "Running")) {
+    return "running";
+  }
+  if (items.some((item) => item.build.status === "Failed")) {
+    return "failed";
+  }
+  if (items.some((item) => item.build.status === "Stopped")) {
+    return "stopped";
+  }
+  if (items.some((item) => item.build.status === "Success")) {
+    return "success";
+  }
+  return "running";
+}
+
+function getBuildMiniStatusClass(status: RecentBuildRecord["status"]): string {
+  if (status === "Failed") {
+    return "failed";
+  }
+  if (status === "Stopped") {
+    return "stopped";
+  }
+  if (status === "Success") {
+    return "success";
+  }
+  return "running";
+}
+
+function useAppNow(intervalMs: number): number {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+
+  return now;
+}
+
+function formatAppElapsed(totalSeconds: number): string {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+
+  return `${seconds}s`;
+}
+
+function formatBuildMiniElapsed(build: RecentBuildRecord, now: number): string {
+  if (build.status !== "Running") {
+    return build.duration;
+  }
+
+  const startedAt = new Date(build.startedAt).getTime();
+  if (Number.isNaN(startedAt)) {
+    return "--";
+  }
+
+  return formatAppElapsed(Math.max(0, Math.floor((now - startedAt) / 1000)));
+}
+
+function getBuildMiniPanelItems(
+  summaries: ProjectDashboardSummary[],
+  projects: Project[],
+  dismissedRecordKeys: Set<string>,
+): BuildMiniPanelItem[] {
+  const realItems = summaries
+    .filter((summary) => summary.lastBuild)
+    .map((summary) => ({
+      project: summary.project,
+      build: summary.lastBuild!,
+    }));
+
+  const debugItems = createDebugBuildMiniPanelItems(projects, summaries);
+  const seen = new Set<string>();
+  return [
+    ...realItems,
+    // ...debugItems
+  ].filter((item) => {
+    const key = getBuildMiniRecordKey(item);
+    if (item.build.status !== "Running" && dismissedRecordKeys.has(key)) {
+      return false;
+    }
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function createDebugBuildMiniPanelItems(
+  projects: Project[],
+  summaries: ProjectDashboardSummary[],
+): BuildMiniPanelItem[] {
+  const now = Date.now();
+  const projectById = new Map(projects.map((project) => [project.id, project]));
+  const candidates = [
+    ...projects,
+    ...summaries.map((summary) => summary.project),
+  ].filter((project, index, allProjects) => {
+    return allProjects.findIndex((item) => item.id === project.id) === index;
+  });
+  const debugProjects = candidates.slice(0, 2);
+
+  return debugProjects.map((project, index) => {
+    const normalizedProject = projectById.get(project.id) ?? project;
+    const startedAt = new Date(now - (index + 2) * 73_000).toISOString();
+    return {
+      project: normalizedProject,
+      debug: true,
+      build: {
+        id: `debug-running-build-${index + 1}`,
+        branch: index === 0 ? "feature/api-tools" : "release/war-debug",
+        commit: index === 0 ? "debug-a1b2c3" : "debug-d4e5f6",
+        commitCleanliness: "clean",
+        profile: index === 0 ? "local-war" : "sit-war",
+        status: "Running",
+        duration: "--:--",
+        completed: "Running",
+        startedAt,
+        outcomeType: index === 0 ? "build-only" : "build-and-deploy",
+      },
+    };
+  });
 }
 
 function applyDashboardEvent(

@@ -38,6 +38,7 @@ export function AppSelect<T extends string>({
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [dropdownStyle, setDropdownStyle] = useState<CSSProperties>();
+  const [selectWidth, setSelectWidth] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLUListElement>(null);
@@ -109,6 +110,21 @@ export function AppSelect<T extends string>({
       setOpen(false);
     }
   }, [disabled]);
+
+  useLayoutEffect(() => {
+    const trigger = triggerRef.current;
+    if (!trigger) {
+      return;
+    }
+
+    const width = Math.max(
+      minDropdownWidth,
+      measureDropdownWidth(trigger, options, showDots),
+    );
+    setSelectWidth((currentWidth) =>
+      currentWidth === width ? currentWidth : width,
+    );
+  }, [minDropdownWidth, options, showDots]);
 
   useLayoutEffect(() => {
     if (!open) {
@@ -256,11 +272,18 @@ export function AppSelect<T extends string>({
       ))}
     </ul>
   ) : null;
+  const containerStyle =
+    selectWidth === null
+      ? undefined
+      : ({
+          "--custom-select-width": `${selectWidth}px`,
+        } as CSSProperties);
 
   return (
     <div
       className={`custom-select${className ? ` ${className}` : ""}`}
       ref={containerRef}
+      style={containerStyle}
     >
       <button
         className="custom-select-trigger"

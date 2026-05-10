@@ -667,6 +667,10 @@ export function DatabaseWorkspace({
           queryCount={queryCount}
           lastRefreshTime={lastRefreshTime}
           onRerun={(record) => {
+            if (record.status !== "success") {
+              return;
+            }
+
             setRerunRequest({ id: `${record.id}-${Date.now()}`, record });
             onTabChange("connection");
           }}
@@ -1896,6 +1900,15 @@ function ConnectionActionWorkspace({
 
   function rerunHistoryRecord(record: DatabaseExecutionRecord): void {
     if (executingRef.current || metadataLoading) {
+      return;
+    }
+    if (record.status !== "success") {
+      addMessage("error", "Only successful SQL executions can be re-run.");
+      updateActiveSheetOutput((output) => ({
+        ...output,
+        hasExecuted: true,
+        activeOutputTab: "messages",
+      }));
       return;
     }
 

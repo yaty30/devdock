@@ -368,6 +368,8 @@ export type ApiTesterRequest = {
   url: string;
   headers: Record<string, string>;
   body?: string;
+  bodyBase64?: string;
+  bodyEncoding?: "utf8" | "base64";
   timeoutMs?: number;
 };
 

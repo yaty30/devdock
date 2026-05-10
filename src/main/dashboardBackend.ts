@@ -952,6 +952,15 @@ export class DashboardBackend {
     };
   }
 
+  getWarDirectory(projectId: string): string | null {
+    const pomXml = this.getSettings(projectId).maven.pomXml.trim();
+    if (!pomXml) {
+      return null;
+    }
+
+    return join(dirname(pomXml), "target");
+  }
+
   async autoStartServices(): Promise<void> {
     const projects = this.getProjects();
     const startedCommands = new Set<string>();

@@ -27,6 +27,7 @@ import type {
   SheetUpdate,
   ApiTesterRequest,
   ApiTesterResponse,
+  RecentBuildRecord,
 } from "../shared/dashboardTypes";
 import type {
   ChatNativeNotification,
@@ -37,6 +38,13 @@ import type {
 if (started) {
   app.quit();
   process.exit(0);
+}
+
+const APP_NAME = "IVS Dashboard";
+const APP_USER_MODEL_ID = "com.yaty.ivs-dashboard";
+app.setName(APP_NAME);
+if (process.platform === "win32") {
+  app.setAppUserModelId(APP_USER_MODEL_ID);
 }
 
 loadEnvironmentFile();
@@ -239,9 +247,18 @@ function registerIpc(): void {
   ipcMain.handle(
     "dashboard:runBuild",
     (_event, projectId: string, profileId: string) =>
-      withLoggedErrors("dashboard:runBuild", () =>
-        getBackend().runBuild(projectId, profileId),
-      ),
+      withLoggedErrors("dashboard:runBuild", async () => {
+        const build = await getBackend().runBuild(projectId, profileId);
+        const project = getBackend()
+          .getSnapshot()
+          .projects.find((item) => item.id === projectId);
+        showBuildNotification(
+          build,
+          project?.name ?? projectId,
+          getBackend().getWarDirectory(projectId),
+        );
+        return build;
+      }),
   );
   ipcMain.handle("dashboard:stopBuild", (_event, projectId: string) =>
     withLoggedErrors("dashboard:stopBuild", () =>
@@ -481,13 +498,17 @@ async function sendApiTesterRequest(
     }
   });
   const canHaveBody = method !== "GET" && method !== "HEAD";
+  const requestBody =
+    canHaveBody && request.bodyEncoding === "base64" && request.bodyBase64
+      ? Buffer.from(request.bodyBase64, "base64")
+      : request.body;
   const startedAt = performance.now();
 
   try {
     const response = await fetch(url.toString(), {
       method,
       headers,
-      body: canHaveBody ? request.body : undefined,
+      body: canHaveBody ? requestBody : undefined,
       redirect: "follow",
       signal: controller.signal,
     });
@@ -796,6 +817,59 @@ function showChatNotification(notification: ChatNativeNotification): void {
   nativeNotification.show();
 }
 
+function showBuildNotification(
+  build: RecentBuildRecord,
+  projectName: string,
+  warDirectory: string | null,
+): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || window.isFocused()) {
+    return;
+  }
+
+  window.flashFrame(true);
+  if (!Notification.isSupported()) {
+    return;
+  }
+
+  const nativeNotification = new Notification({
+    title: `Build ${build.status}: ${projectName}`,
+    body: [
+      `Profile: ${build.profile}`,
+      `Branch: ${build.branch}`,
+      `Commit: ${build.commit}/${build.commitCleanliness}`,
+      `Duration: ${build.duration}`,
+    ].join("\n"),
+    silent: false,
+  });
+  nativeNotification.on("click", () => {
+    void openBuildNotificationTarget(window, warDirectory);
+  });
+  nativeNotification.show();
+}
+
+async function openBuildNotificationTarget(
+  window: BrowserWindow,
+  warDirectory: string | null,
+): Promise<void> {
+  window.flashFrame(false);
+  if (warDirectory && existsSync(warDirectory)) {
+    const result = await shell.openPath(warDirectory);
+    if (!result) {
+      return;
+    }
+    console.error(
+      `[main:notification] Failed to open ${warDirectory}: ${result}`,
+    );
+  }
+
+  if (window.isMinimized()) {
+    window.restore();
+  }
+  window.show();
+  window.focus();
+}
+
 const createWindow = (): void => {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -864,6 +938,35 @@ const createWindow = (): void => {
   mainWindow.once("ready-to-show", () => {
     mainWindow!.show();
   });
+  mainWindow.webContents.once("did-finish-load", () => {
+    mainWindow?.show();
+  });
+  mainWindow.webContents.on(
+    "did-fail-load",
+    (_event, errorCode, errorDescription, validatedURL) => {
+      console.error(
+        `[main:window] Failed to load renderer (${errorCode}) ${validatedURL}: ${errorDescription}`,
+      );
+      mainWindow?.show();
+    },
+  );
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[main:window] Renderer process gone", details);
+    mainWindow?.show();
+  });
+  mainWindow.webContents.on("unresponsive", () => {
+    console.error("[main:window] Renderer became unresponsive");
+    mainWindow?.show();
+  });
+  mainWindow.webContents.on(
+    "console-message",
+    (_event, level, message, line, sourceId) => {
+      const prefix = level >= 2 ? "error" : level === 1 ? "warn" : "info";
+      console[prefix](
+        `[renderer:console] ${sourceId}:${line} ${message}`,
+      );
+    },
+  );
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("http://") || url.startsWith("https://")) {

@@ -9,10 +9,12 @@ import {
 } from "react";
 import {
   AlertCircle,
+  ArrowLeftRight,
   Check,
   Copy,
   Download,
   Eraser,
+  FileUp,
   Redo2,
   LoaderCircle,
   Plus,
@@ -22,11 +24,13 @@ import {
   Sparkles,
   Trash2,
   X,
+  BrushCleaning,
 } from "lucide-react";
 import {
   AppSelect,
   type AppSelectOption,
 } from "../../components/common/AppSelect";
+import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Panel } from "../../components/common/Panel";
 import type {
   ApiTesterRequest,
@@ -44,6 +48,7 @@ type ApiMethod =
   | "OPTIONS";
 
 type ApiBuilderTab = "Params" | "Headers" | "Body" | "Auth";
+type ApiBodyMode = "raw" | "media";
 type ApiResponseTab = "Pretty" | "Raw" | "Headers" | "Cookies";
 type ApiTesterView = "test" | "history";
 
@@ -52,6 +57,30 @@ type ApiPanelDragState = {
   startBuilderWidth: number;
   minBuilderWidth: number;
   maxBuilderWidth: number;
+};
+
+type ApiHistoryColumnKey =
+  | "time"
+  | "method"
+  | "url"
+  | "status"
+  | "duration"
+  | "size"
+  | "message"
+  | "rerun";
+
+type ApiHistoryColumn = {
+  key: ApiHistoryColumnKey;
+  label: string;
+  width: number;
+  minWidth: number;
+};
+
+type ApiHistoryColumnDragState = {
+  key: ApiHistoryColumnKey;
+  startX: number;
+  startWidth: number;
+  nextWidth: number;
 };
 
 type ApiKeyValueRow = {
@@ -67,10 +96,22 @@ type SavedApiTesterRequest = {
   params: ApiKeyValueRow[];
   headers: ApiKeyValueRow[];
   body: string;
+  bodyMode?: ApiBodyMode;
+  mediaFieldName?: string;
+  mediaFields?: ApiKeyValueRow[];
   bearerToken: string;
 };
 
-type ApiTesterRequestSnapshot = SavedApiTesterRequest;
+type ApiTesterRequestSnapshot = SavedApiTesterRequest & {
+  mediaFile?: ApiTesterMediaFile | null;
+};
+
+type ApiTesterMediaFile = {
+  name: string;
+  type: string;
+  size: number;
+  base64: string;
+};
 
 type ApiTesterHistoryMetadata = {
   id: string;
@@ -100,6 +141,8 @@ const API_TESTER_HISTORY_METADATA_STORAGE_KEY =
   "ivs-dashboard-api-tester-history-metadata";
 const API_TESTER_HISTORY_DETAIL_STORAGE_PREFIX =
   "ivs-dashboard-api-tester-history-detail:";
+const API_TESTER_HISTORY_COLUMN_WIDTHS_STORAGE_KEY =
+  "ivs-dashboard-api-tester-history-column-widths";
 const API_TESTER_HISTORY_LIMIT = 250;
 const API_TESTER_BODY_PREVIEW_LIMIT_BYTES = 100 * 1024;
 const API_TESTER_SEND_EVENT = "api-tester:send";
@@ -113,9 +156,40 @@ const API_METHODS: ApiMethod[] = [
   "HEAD",
   "OPTIONS",
 ];
+
+const getMethodColor = (method: ApiMethod): string => {
+  switch (method) {
+    case "GET":
+      return "var(--accent)";
+    case "POST":
+      return "var(--success)";
+    case "PUT":
+      return "var(--warning)";
+    case "PATCH":
+      return "var(--info)";
+    case "DELETE":
+      return "var(--error)";
+    case "HEAD":
+      return "var(--mild)";
+    case "OPTIONS":
+      return "var(--command)";
+  }
+};
+
 const API_METHOD_OPTIONS: Array<AppSelectOption<ApiMethod>> = API_METHODS.map(
-  (value) => ({ value, label: value }),
+  (value) => ({ value, label: value, dotColor: getMethodColor(value) }),
 );
+
+const API_HISTORY_COLUMNS: ApiHistoryColumn[] = [
+  { key: "time", label: "Time", width: 150, minWidth: 122 },
+  { key: "method", label: "Method", width: 104, minWidth: 88 },
+  { key: "url", label: "URL", width: 320, minWidth: 180 },
+  { key: "status", label: "Status", width: 104, minWidth: 92 },
+  { key: "duration", label: "Duration", width: 118, minWidth: 98 },
+  { key: "size", label: "Size", width: 104, minWidth: 86 },
+  { key: "message", label: "Message", width: 280, minWidth: 160 },
+  { key: "rerun", label: "Re-run", width: 88, minWidth: 76 },
+];
 
 const DEFAULT_PARAMS: ApiKeyValueRow[] = [
   createRow("expand", "profile", true),
@@ -125,6 +199,8 @@ const DEFAULT_PARAMS: ApiKeyValueRow[] = [
 const DEFAULT_HEADERS: ApiKeyValueRow[] = [
   createRow("Accept", "application/json", true),
 ];
+
+const DEFAULT_MEDIA_FIELDS: ApiKeyValueRow[] = [createRow()];
 
 export function ApiTesterMockup({
   view = "test",
@@ -156,6 +232,16 @@ export function ApiTesterMockup({
   const [body, setBody] = useState(
     savedRequest?.body ?? '{\n  "name": "Alex Morgan"\n}',
   );
+  const [bodyMode, setBodyMode] = useState<ApiBodyMode>(
+    savedRequest?.bodyMode ?? "raw",
+  );
+  const [mediaFieldName, setMediaFieldName] = useState(
+    savedRequest?.mediaFieldName ?? "file",
+  );
+  const [mediaFields, setMediaFields] = useState<ApiKeyValueRow[]>(
+    savedRequest?.mediaFields ?? DEFAULT_MEDIA_FIELDS,
+  );
+  const [mediaFile, setMediaFile] = useState<ApiTesterMediaFile | null>(null);
   const [bearerToken, setBearerToken] = useState(
     savedRequest?.bearerToken ?? "",
   );
@@ -197,6 +283,9 @@ export function ApiTesterMockup({
       params,
       headers,
       body,
+      bodyMode,
+      mediaFieldName,
+      mediaFields,
       bearerToken,
     };
     window.localStorage.setItem(
@@ -204,16 +293,26 @@ export function ApiTesterMockup({
       JSON.stringify(nextRequest),
     );
     setSavedAt(new Date().toLocaleTimeString());
-  }, [bearerToken, body, headers, method, params, url]);
+  }, [
+    bearerToken,
+    body,
+    bodyMode,
+    headers,
+    mediaFieldName,
+    mediaFields,
+    method,
+    params,
+    url,
+  ]);
 
   const writeHistory = useCallback(
     (
       metadata: ApiTesterHistoryMetadata,
       detail: ApiTesterHistoryDetail,
     ): void => {
+      saveHistoryDetail(storageScopeId, detail);
       setHistory((current) => {
         const next = [metadata, ...current].slice(0, API_TESTER_HISTORY_LIMIT);
-        saveHistoryDetail(storageScopeId, detail);
         writeHistoryMetadata(storageScopeId, next);
         pruneHistoryDetails(storageScopeId, next);
         return next;
@@ -223,7 +322,9 @@ export function ApiTesterMockup({
   );
 
   const executeRequest = useCallback(
-    async (snapshot: ApiTesterRequestSnapshot): Promise<void> => {
+    async (
+      snapshot: ApiTesterRequestSnapshot,
+    ): Promise<ApiTesterHistoryMetadata | null> => {
       setRequestError(null);
       setIsSending(true);
 
@@ -231,40 +332,52 @@ export function ApiTesterMockup({
       const startedAt = performance.now();
       try {
         requestUrl = buildRequestUrl(snapshot.url, snapshot.params);
+        const requestBody = canMethodSendBody(snapshot.method)
+          ? buildRequestBody(snapshot)
+          : undefined;
         const requestHeaders = buildRequestHeaders(
           snapshot.headers,
           snapshot.bearerToken,
           snapshot.method,
-          snapshot.body,
+          requestBody?.textPreview ?? snapshot.body,
+          requestBody?.contentType,
         );
+        const historySnapshot = {
+          ...snapshot,
+          body: requestBody?.textPreview ?? snapshot.body,
+        };
         const nextResponse = await sendApiTesterRequest({
           method: snapshot.method,
           url: requestUrl,
           headers: requestHeaders,
-          body: canMethodSendBody(snapshot.method) ? snapshot.body : undefined,
+          body: requestBody?.body,
+          bodyBase64: requestBody?.bodyBase64,
+          bodyEncoding: requestBody?.bodyEncoding,
           timeoutMs: 60000,
         });
         setResponse(nextResponse);
         setActiveResponseTab("Pretty");
         const historyId = createHistoryId();
+        const metadata: ApiTesterHistoryMetadata = {
+          id: historyId,
+          method: snapshot.method,
+          url: requestUrl,
+          status: nextResponse.status,
+          durationMs: nextResponse.durationMs,
+          responseSizeBytes: nextResponse.sizeBytes,
+          message: nextResponse.statusText,
+          createdAt: new Date().toISOString(),
+        };
         writeHistory(
-          {
-            id: historyId,
-            method: snapshot.method,
-            url: requestUrl,
-            status: nextResponse.status,
-            durationMs: nextResponse.durationMs,
-            responseSizeBytes: nextResponse.sizeBytes,
-            message: nextResponse.statusText,
-            createdAt: new Date().toISOString(),
-          },
+          metadata,
           createHistoryDetail(
             historyId,
             requestHeaders,
-            snapshot,
+            historySnapshot,
             nextResponse,
           ),
         );
+        return metadata;
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Request failed.";
@@ -288,6 +401,7 @@ export function ApiTesterMockup({
           },
           createErrorHistoryDetail(historyId, snapshot, message),
         );
+        return null;
       } finally {
         setIsSending(false);
       }
@@ -302,9 +416,25 @@ export function ApiTesterMockup({
       params,
       headers,
       body,
+      bodyMode,
+      mediaFieldName,
+      mediaFields,
+      mediaFile,
       bearerToken,
     });
-  }, [bearerToken, body, executeRequest, headers, method, params, url]);
+  }, [
+    bearerToken,
+    body,
+    bodyMode,
+    executeRequest,
+    headers,
+    mediaFieldName,
+    mediaFields,
+    mediaFile,
+    method,
+    params,
+    url,
+  ]);
 
   useEffect(() => {
     if (!canMethodSendBody(method) && activeBuilderTab === "Body") {
@@ -319,7 +449,13 @@ export function ApiTesterMockup({
     }
   }
 
-  function rerunHistoryRecord(record: ApiTesterHistoryMetadata): void {
+  async function rerunHistoryRecord(
+    record: ApiTesterHistoryMetadata,
+  ): Promise<ApiTesterHistoryMetadata | null> {
+    if (!isSuccessfulApiHistoryRecord(record)) {
+      return null;
+    }
+
     const detail = readHistoryDetail(storageScopeId, record.id);
     const nextHeaders = detail
       ? detail.requestHeaders.map((header) =>
@@ -333,12 +469,15 @@ export function ApiTesterMockup({
     setParams([createRow()]);
     setHeaders(nextHeaders);
     setBody(nextBody);
+    setBodyMode("raw");
+    setMediaFieldName("file");
+    setMediaFields(DEFAULT_MEDIA_FIELDS);
+    setMediaFile(null);
     setBearerToken("");
     if (!canMethodSendBody(record.method) && activeBuilderTab === "Body") {
       setActiveBuilderTab("Params");
     }
-    onViewChange?.("test");
-    void executeRequest({
+    return executeRequest({
       method: record.method,
       url: record.url,
       params: [],
@@ -446,10 +585,29 @@ export function ApiTesterMockup({
     setParams([createRow()]);
     setHeaders(DEFAULT_HEADERS);
     setBody("");
+    setBodyMode("raw");
+    setMediaFieldName("file");
+    setMediaFields(DEFAULT_MEDIA_FIELDS);
+    setMediaFile(null);
     setBearerToken("");
     setResponse(null);
     setRequestError(null);
     setSavedAt(null);
+  }
+
+  async function selectMediaFile(file: File | null): Promise<void> {
+    if (!file) {
+      setMediaFile(null);
+      return;
+    }
+
+    try {
+      setMediaFile(await readMediaFile(file));
+    } catch (error) {
+      console.error(error);
+      onFeedback?.("File could not be loaded", "invalid");
+      setMediaFile(null);
+    }
   }
 
   function downloadResponse(): void {
@@ -488,7 +646,7 @@ export function ApiTesterMockup({
           options={API_METHOD_OPTIONS}
           ariaLabel="HTTP method"
           onChange={selectMethod}
-          showDots={false}
+          showDots={true}
           minDropdownWidth={110}
         />
         <input
@@ -506,7 +664,7 @@ export function ApiTesterMockup({
         <button
           className="button primary compact"
           type="button"
-          disabled={isSending}
+          disabled={isSending || !url.trim()}
           onClick={() => void sendRequest()}
         >
           {isSending ? (
@@ -522,21 +680,20 @@ export function ApiTesterMockup({
             type="button"
             title="Copy full URL"
             onClick={() => void navigator.clipboard?.writeText(preparedUrl)}
+            disabled={!preparedUrl.trim() || isSending}
           >
             <Copy size={15} />
           </button>
           <button
             className="icon-button secondary"
             type="button"
-            title="Save request"
-            onClick={saveRequest}
-          >
-            <Save size={15} />
-          </button>
-          <button
-            className="icon-button secondary"
-            type="button"
             title="Clear"
+            disabled={
+              (isSending &&
+                !url &&
+                params.every((row) => !row.key && !row.value)) ||
+              !url.trim()
+            }
             onClick={clearRequest}
           >
             <Eraser size={15} />
@@ -598,14 +755,87 @@ export function ApiTesterMockup({
               />
             ) : null}
             {activeBuilderTab === "Body" ? (
-              <textarea
-                className="api-body-editor"
-                value={body}
-                spellCheck={false}
-                aria-label="Request body"
-                placeholder="Request body"
-                onChange={(event) => setBody(event.target.value)}
-              />
+              <div className="api-body-panel">
+                <div className="api-body-mode-tabs" role="tablist">
+                  <button
+                    className={bodyMode === "raw" ? "active" : undefined}
+                    type="button"
+                    role="tab"
+                    aria-selected={bodyMode === "raw"}
+                    onClick={() => setBodyMode("raw")}
+                  >
+                    Raw
+                  </button>
+                  <button
+                    className={bodyMode === "media" ? "active" : undefined}
+                    type="button"
+                    role="tab"
+                    aria-selected={bodyMode === "media"}
+                    onClick={() => setBodyMode("media")}
+                  >
+                    Media
+                  </button>
+                </div>
+                {bodyMode === "raw" ? (
+                  <textarea
+                    className="api-body-editor"
+                    value={body}
+                    spellCheck={false}
+                    aria-label="Request body"
+                    placeholder="Request body"
+                    onChange={(event) => setBody(event.target.value)}
+                  />
+                ) : (
+                  <div className="api-media-upload-panel">
+                    <div className="api-media-upload-card">
+                      <FileUp size={18} />
+                      <div>
+                        <strong>
+                          {mediaFile ? mediaFile.name : "No media selected"}
+                        </strong>
+                        <span>
+                          {mediaFile
+                            ? `${mediaFile.type || "application/octet-stream"} - ${formatBytes(mediaFile.size)}`
+                            : "Choose an image, video, audio, or document to send as multipart/form-data."}
+                        </span>
+                      </div>
+                      <label className="button secondary compact">
+                        Choose File
+                        <input
+                          type="file"
+                          onChange={(event) =>
+                            void selectMediaFile(
+                              event.target.files?.[0] ?? null,
+                            )
+                          }
+                        />
+                      </label>
+                    </div>
+                    <label className="api-media-field-name">
+                      <span>File Field Name</span>
+                      <input
+                        value={mediaFieldName}
+                        placeholder="file"
+                        onChange={(event) =>
+                          setMediaFieldName(event.target.value)
+                        }
+                      />
+                    </label>
+                    <div className="api-media-fields">
+                      <div className="api-media-fields-title">
+                        Additional Form Fields
+                      </div>
+                      <ApiKeyValueEditor
+                        rows={mediaFields}
+                        keyLabel="Field"
+                        valueLabel="Value"
+                        emptyLabel="No form fields"
+                        onRowsChange={setMediaFields}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : null}
             {activeBuilderTab === "Auth" ? (
               <div className="api-auth-panel">
@@ -745,12 +975,31 @@ function ApiTesterHistoryView({
   history: ApiTesterHistoryMetadata[];
   storageScopeId: string;
   onFeedback?: (message: string, tone: "valid" | "invalid" | "warning") => void;
-  onRerun: (record: ApiTesterHistoryMetadata) => void;
+  onRerun: (
+    record: ApiTesterHistoryMetadata,
+  ) => Promise<ApiTesterHistoryMetadata | null>;
   onClearHistory: () => void;
 }): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedDetail, setSelectedDetail] =
     useState<ApiTesterHistoryDetail | null>(null);
+  const [clearHistoryConfirmOpen, setClearHistoryConfirmOpen] = useState(false);
+  const [historyColumnWidths, setHistoryColumnWidths] = useState<
+    Partial<Record<ApiHistoryColumnKey, number>>
+  >(() => readHistoryColumnWidths(storageScopeId));
+  const historyScrollRef = useRef<HTMLDivElement>(null);
+  const historyColumnDragRef = useRef<ApiHistoryColumnDragState | null>(null);
+  const historyColumnResizeFrameRef = useRef<number | null>(null);
+  const [historyScrollWidth, setHistoryScrollWidth] = useState(0);
+
+  const resolvedHistoryColumns = useMemo(
+    () => resolveHistoryColumns(historyColumnWidths, historyScrollWidth),
+    [historyColumnWidths, historyScrollWidth],
+  );
+  const historyTableWidth = resolvedHistoryColumns.reduce(
+    (total, column) => total + column.width,
+    0,
+  );
 
   useEffect(() => {
     if (!selectedId || history.some((entry) => entry.id === selectedId)) {
@@ -760,9 +1009,135 @@ function ApiTesterHistoryView({
     setSelectedDetail(null);
   }, [history, selectedId, storageScopeId]);
 
+  useEffect(() => {
+    setHistoryColumnWidths(readHistoryColumnWidths(storageScopeId));
+  }, [storageScopeId]);
+
+  useEffect(() => {
+    const element = historyScrollRef.current;
+    if (!element) {
+      return undefined;
+    }
+
+    const updateWidth = (): void => {
+      setHistoryScrollWidth(Math.floor(element.clientWidth));
+    };
+
+    updateWidth();
+    if (!window.ResizeObserver) {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (historyColumnResizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(historyColumnResizeFrameRef.current);
+      }
+    };
+  }, []);
+
   function selectHistoryEntry(entryId: string): void {
     setSelectedId(entryId);
     setSelectedDetail(readHistoryDetail(storageScopeId, entryId));
+  }
+
+  async function rerunHistoryEntry(
+    entry: ApiTesterHistoryMetadata,
+  ): Promise<void> {
+    const nextMetadata = await onRerun(entry);
+    if (!nextMetadata) {
+      return;
+    }
+
+    setSelectedId(nextMetadata.id);
+    setSelectedDetail(readHistoryDetail(storageScopeId, nextMetadata.id));
+  }
+
+  function startHistoryColumnResize(
+    column: ApiHistoryColumn,
+    event: PointerEvent<HTMLSpanElement>,
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const currentWidth =
+      resolvedHistoryColumns.find((item) => item.key === column.key)?.width ??
+      column.width;
+    historyColumnDragRef.current = {
+      key: column.key,
+      startX: event.clientX,
+      startWidth: currentWidth,
+      nextWidth: currentWidth,
+    };
+  }
+
+  function resizeHistoryColumn(event: PointerEvent<HTMLSpanElement>): void {
+    const drag = historyColumnDragRef.current;
+    if (!drag) {
+      return;
+    }
+
+    const column = API_HISTORY_COLUMNS.find((item) => item.key === drag.key);
+    if (!column) {
+      return;
+    }
+
+    drag.nextWidth = Math.max(
+      column.minWidth,
+      drag.startWidth + event.clientX - drag.startX,
+    );
+
+    if (historyColumnResizeFrameRef.current !== null) {
+      return;
+    }
+
+    historyColumnResizeFrameRef.current = window.requestAnimationFrame(() => {
+      historyColumnResizeFrameRef.current = null;
+      const latestDrag = historyColumnDragRef.current;
+      if (!latestDrag) {
+        return;
+      }
+      setHistoryColumnWidths((current) => ({
+        ...current,
+        [latestDrag.key]: latestDrag.nextWidth,
+      }));
+    });
+  }
+
+  function stopHistoryColumnResize(event: PointerEvent<HTMLSpanElement>): void {
+    if (
+      historyColumnDragRef.current &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    const drag = historyColumnDragRef.current;
+    if (historyColumnResizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(historyColumnResizeFrameRef.current);
+      historyColumnResizeFrameRef.current = null;
+    }
+    historyColumnDragRef.current = null;
+    if (drag) {
+      const next = {
+        ...historyColumnWidths,
+        [drag.key]: drag.nextWidth,
+      };
+      setHistoryColumnWidths(next);
+      writeHistoryColumnWidths(storageScopeId, next);
+    }
+  }
+
+  function resetHistoryColumnWidth(column: ApiHistoryColumn): void {
+    const next = { ...historyColumnWidths };
+    delete next[column.key];
+    setHistoryColumnWidths(next);
+    writeHistoryColumnWidths(storageScopeId, next);
   }
 
   const selectedMetadata =
@@ -779,87 +1154,133 @@ function ApiTesterHistoryView({
         className="database-history-panel api-history-panel"
         action={
           <button
-            className="button secondary compact"
+            className="icon-button secondary compact"
             type="button"
+            title="Clear API test history"
+            aria-label="Clear API test history"
             disabled={history.length === 0}
-            onClick={onClearHistory}
+            onClick={() => setClearHistoryConfirmOpen(true)}
           >
-            Clear History
+            <BrushCleaning size={14} />
           </button>
         }
       >
-        <div className="database-history-scroll">
-          <table className="recent-builds-table database-history-table api-history-table">
+        <div className="database-history-scroll" ref={historyScrollRef}>
+          <table
+            className="recent-builds-table database-history-table api-history-table"
+            style={{
+              width: `${historyTableWidth}px`,
+              minWidth: `${historyTableWidth}px`,
+            }}
+          >
+            <colgroup>
+              {resolvedHistoryColumns.map((column) => (
+                <col key={column.key} style={{ width: `${column.width}px` }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Method</th>
-                <th>URL</th>
-                <th>Status</th>
-                <th>Duration</th>
-                <th>Size</th>
-                <th>Message</th>
-                <th>Re-run</th>
+                {resolvedHistoryColumns.map((column) => (
+                  <th key={column.key}>
+                    <span className="database-result-th-content api-history-th-content">
+                      <span className="database-result-column-label">
+                        {column.label}
+                      </span>
+                      <span
+                        className="database-column-resize-handle api-history-column-resize-handle"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`Resize ${column.label} column`}
+                        onPointerDown={(event) =>
+                          startHistoryColumnResize(column, event)
+                        }
+                        onPointerMove={resizeHistoryColumn}
+                        onPointerUp={stopHistoryColumnResize}
+                        onPointerCancel={stopHistoryColumnResize}
+                        onDoubleClick={() => resetHistoryColumnWidth(column)}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <ArrowLeftRight size={13} />
+                      </span>
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
-              {history.map((entry) => (
-                <tr
-                  key={entry.id}
-                  className={
-                    entry.id === selectedId
-                      ? "recent-build-row-active"
-                      : undefined
-                  }
-                  onClick={() => selectHistoryEntry(entry.id)}
-                >
-                  <td>{formatCompactDateTime(entry.createdAt)}</td>
-                  <td>
-                    <span className="api-history-method">{entry.method}</span>
-                  </td>
-                  <td className="api-history-url-cell" title={entry.url}>
-                    {entry.url}
-                  </td>
-                  <td>
-                    <span
-                      className={`status-pill ${
-                        entry.status !== null && entry.status < 400
-                          ? "success"
-                          : "failed"
-                      }`}
-                    >
-                      {entry.status === null ? "Error" : entry.status}
-                    </span>
-                  </td>
-                  <td>
-                    {entry.durationMs === null
-                      ? "--"
-                      : `${entry.durationMs} ms`}
-                  </td>
-                  <td>
-                    {entry.responseSizeBytes === null
-                      ? "--"
-                      : formatBytes(entry.responseSizeBytes)}
-                  </td>
-                  <td className="database-history-message-cell">
-                    {entry.message}
-                  </td>
-                  <td>
-                    <button
-                      className="icon-button secondary database-history-rerun"
-                      type="button"
-                      aria-label={`Re-run API test from ${formatCompactDateTime(entry.createdAt)}`}
-                      title="Re-run API test"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onRerun(entry);
-                      }}
-                    >
-                      <Redo2 size={14} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {history.map((entry) => {
+                const canRerun = isSuccessfulApiHistoryRecord(entry);
+
+                return (
+                  <tr
+                    key={entry.id}
+                    className={
+                      entry.id === selectedId
+                        ? "recent-build-row-active"
+                        : undefined
+                    }
+                    onClick={() => selectHistoryEntry(entry.id)}
+                  >
+                    <td>{formatCompactDateTime(entry.createdAt)}</td>
+                    <td>
+                      <span
+                        className={`api-history-method ${entry.method.toLowerCase()}`}
+                      >
+                        {entry.method}
+                      </span>
+                    </td>
+                    <td className="api-history-url-cell" title={entry.url}>
+                      {entry.url}
+                    </td>
+                    <td>
+                      <span
+                        className={`status-pill ${
+                          entry.status !== null && entry.status < 400
+                            ? "success"
+                            : "failed"
+                        }`}
+                      >
+                        {entry.status === null ? "Error" : entry.status}
+                      </span>
+                    </td>
+                    <td>
+                      {entry.durationMs === null
+                        ? "--"
+                        : `${entry.durationMs} ms`}
+                    </td>
+                    <td>
+                      {entry.responseSizeBytes === null
+                        ? "--"
+                        : formatBytes(entry.responseSizeBytes)}
+                    </td>
+                    <td className="database-history-message-cell">
+                      {entry.message}
+                    </td>
+                    <td>
+                      <button
+                        className="icon-button secondary database-history-rerun"
+                        type="button"
+                        aria-label={`Re-run API test from ${formatCompactDateTime(entry.createdAt)}`}
+                        title={
+                          canRerun
+                            ? "Re-run API test"
+                            : "Only successful API tests can be re-run"
+                        }
+                        disabled={!canRerun}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (!canRerun) {
+                            return;
+                          }
+                          void rerunHistoryEntry(entry);
+                        }}
+                      >
+                        <Redo2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
           {history.length === 0 ? (
@@ -880,6 +1301,19 @@ function ApiTesterHistoryView({
           onClose={() => {
             setSelectedId(null);
             setSelectedDetail(null);
+          }}
+        />
+      ) : null}
+      {clearHistoryConfirmOpen ? (
+        <ConfirmDialog
+          title="Clear API Test History?"
+          message="Clearing API test history is irreversible and will remove every saved request and response detail."
+          confirmLabel="Continue"
+          onClose={() => setClearHistoryConfirmOpen(false)}
+          onConfirm={() => {
+            setSelectedId(null);
+            setSelectedDetail(null);
+            onClearHistory();
           }}
         />
       ) : null}
@@ -934,10 +1368,10 @@ function ApiTesterHistoryDetailPanel({
         <p className="database-empty-state">Stored detail is not available.</p>
       ) : (
         <div className="api-history-detail-scroll">
-          <section className="api-history-detail-section api-history-request-section">
-            <div className="api-history-detail-section-header">
-              <h3>Request</h3>
-            </div>
+          <Panel
+            title="Request"
+            className="api-history-detail-section api-history-request-section"
+          >
             <div className="api-history-detail-headers-scroll">
               <table className="api-param-table api-history-detail-headers api-history-summary-table">
                 <colgroup>
@@ -968,6 +1402,26 @@ function ApiTesterHistoryDetailPanel({
               </table>
             </div>
             <HistoryDetailBlock
+              title="Body"
+              action={
+                <CopyDetailButton
+                  label="Copy request body"
+                  disabled={!detail.requestBodyPreview}
+                  onClick={() =>
+                    void copyDetailText(
+                      detail.requestBodyPreview,
+                      "Request body",
+                    )
+                  }
+                />
+              }
+            >
+              <HistoryBodyTable
+                value={detail.requestBodyPreview}
+                emptyMessage="No request body was stored."
+              />
+            </HistoryDetailBlock>
+            <HistoryDetailBlock
               title={`Headers (${detail.requestHeaders.length})`}
               action={
                 <CopyDetailButton
@@ -984,10 +1438,10 @@ function ApiTesterHistoryDetailPanel({
             >
               <HistoryHeaderList headers={detail.requestHeaders} />
             </HistoryDetailBlock>
-          </section>
-          <section className="api-history-detail-section api-history-response-section">
-            <div className="api-history-detail-section-header">
-              <h3>Response</h3>
+          </Panel>
+          <Panel
+            title="Response"
+            titleMeta={
               <div className="api-history-detail-meta">
                 <span
                   className={`status-pill ${
@@ -1009,29 +1463,31 @@ function ApiTesterHistoryDetailPanel({
                     : `${metadata.durationMs} ms`}
                 </span>
               </div>
-            </div>
-
-            <HistoryDetailBlock title={`Body`}>
+            }
+            className="api-history-detail-section api-history-response-section"
+          >
+            <HistoryDetailBlock
+              title="Body"
+              action={
+                <CopyDetailButton
+                  label="Copy response body"
+                  disabled={
+                    detail.binaryResponseBody || !detail.responseBodyPreview
+                  }
+                  onClick={() =>
+                    void copyDetailText(
+                      detail.responseBodyPreview,
+                      "Response body",
+                    )
+                  }
+                />
+              }
+            >
               <HistoryBodyTable
-                label="Body"
                 value={
                   detail.binaryResponseBody ? "" : detail.responseBodyPreview
                 }
                 emptyMessage="No response body was stored."
-                action={
-                  <CopyDetailButton
-                    label="Copy response body"
-                    disabled={
-                      detail.binaryResponseBody || !detail.responseBodyPreview
-                    }
-                    onClick={() =>
-                      void copyDetailText(
-                        detail.responseBodyPreview,
-                        "Response body",
-                      )
-                    }
-                  />
-                }
               />
             </HistoryDetailBlock>
             {detail.binaryResponseBody ? (
@@ -1062,7 +1518,7 @@ function ApiTesterHistoryDetailPanel({
             >
               <HistoryHeaderList headers={detail.responseHeaders} />
             </HistoryDetailBlock>
-          </section>
+          </Panel>
         </div>
       )}
     </Panel>
@@ -1125,15 +1581,11 @@ function HistoryDetailBlock({
 }
 
 function HistoryBodyTable({
-  label,
   value,
   emptyMessage,
-  action,
 }: {
-  label: string;
   value: string;
   emptyMessage: string;
-  action?: JSX.Element;
 }): JSX.Element {
   const rows = createHistoryBodyRows(value);
 
@@ -1151,6 +1603,13 @@ function HistoryBodyTable({
           </tr>
         </thead>
         <tbody>
+          {rows.length === 0 ? (
+            <tr>
+              <td colSpan={2} className="api-history-body-empty">
+                {emptyMessage}
+              </td>
+            </tr>
+          ) : null}
           {rows.map((row) => (
             <tr key={`${row.key}-${row.value}`}>
               <td>{row.key}</td>
@@ -1426,6 +1885,75 @@ function writeHistoryMetadata(
   );
 }
 
+function readHistoryColumnWidths(
+  scopeId: string,
+): Partial<Record<ApiHistoryColumnKey, number>> {
+  try {
+    const raw = window.localStorage.getItem(
+      historyColumnWidthsStorageKey(scopeId),
+    );
+    if (!raw) {
+      return {};
+    }
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+
+    return API_HISTORY_COLUMNS.reduce<
+      Partial<Record<ApiHistoryColumnKey, number>>
+    >((widths, column) => {
+      const width = (parsed as Partial<Record<ApiHistoryColumnKey, unknown>>)[
+        column.key
+      ];
+      if (typeof width === "number" && Number.isFinite(width)) {
+        widths[column.key] = normalizeHistoryColumnWidth(column, width);
+      }
+      return widths;
+    }, {});
+  } catch {
+    return {};
+  }
+}
+
+function writeHistoryColumnWidths(
+  scopeId: string,
+  widths: Partial<Record<ApiHistoryColumnKey, number>>,
+): void {
+  window.localStorage.setItem(
+    historyColumnWidthsStorageKey(scopeId),
+    JSON.stringify(widths),
+  );
+}
+
+function normalizeHistoryColumnWidth(
+  column: ApiHistoryColumn,
+  width: number | undefined,
+): number {
+  return Math.max(column.minWidth, Math.round(width ?? column.width));
+}
+
+function resolveHistoryColumns(
+  widths: Partial<Record<ApiHistoryColumnKey, number>>,
+  availableWidth: number,
+): ApiHistoryColumn[] {
+  const columns = API_HISTORY_COLUMNS.map((column) => ({
+    ...column,
+    width: normalizeHistoryColumnWidth(column, widths[column.key]),
+  }));
+  const totalWidth = columns.reduce((total, column) => total + column.width, 0);
+  const extraWidth = Math.max(0, availableWidth - totalWidth);
+  if (extraWidth === 0) {
+    return columns;
+  }
+
+  return columns.map((column) =>
+    column.key === "url"
+      ? { ...column, width: column.width + extraWidth }
+      : column,
+  );
+}
+
 function CopyDetailButton({
   label,
   disabled,
@@ -1506,6 +2034,10 @@ function historyMetadataStorageKey(scopeId: string): string {
   return `${API_TESTER_HISTORY_METADATA_STORAGE_KEY}:${sanitizeStorageScope(scopeId)}`;
 }
 
+function historyColumnWidthsStorageKey(scopeId: string): string {
+  return `${API_TESTER_HISTORY_COLUMN_WIDTHS_STORAGE_KEY}:${sanitizeStorageScope(scopeId)}`;
+}
+
 function historyDetailStoragePrefix(scopeId: string): string {
   return `${API_TESTER_HISTORY_DETAIL_STORAGE_PREFIX}${sanitizeStorageScope(scopeId)}:`;
 }
@@ -1516,6 +2048,12 @@ function historyDetailStorageKey(scopeId: string, id: string): string {
 
 function sanitizeStorageScope(scopeId: string): string {
   return encodeURIComponent(scopeId || "global");
+}
+
+function isSuccessfulApiHistoryRecord(
+  record: ApiTesterHistoryMetadata,
+): boolean {
+  return record.status !== null && record.status >= 200 && record.status < 300;
 }
 
 function isApiTesterHistoryMetadata(
@@ -1692,11 +2230,15 @@ async function sendApiTesterRequestInRenderer(
 ): Promise<ApiTesterResponse> {
   const method = request.method.trim().toUpperCase();
   const canHaveBody = method !== "GET" && method !== "HEAD";
+  const requestBody =
+    canHaveBody && request.bodyEncoding === "base64" && request.bodyBase64
+      ? base64ToArrayBuffer(request.bodyBase64)
+      : request.body;
   const startedAt = performance.now();
   const response = await fetch(request.url, {
     method,
     headers: request.headers,
-    body: canHaveBody ? request.body : undefined,
+    body: canHaveBody ? requestBody : undefined,
     redirect: "follow",
   });
   const body = await response.text();
@@ -1740,6 +2282,7 @@ function buildRequestHeaders(
   bearerToken: string,
   method: ApiMethod,
   body: string,
+  contentType?: string,
 ): Record<string, string> {
   const headers: Record<string, string> = {};
   rows.forEach((row) => {
@@ -1755,14 +2298,142 @@ function buildRequestHeaders(
   const hasContentType = Object.keys(headers).some(
     (key) => key.toLowerCase() === "content-type",
   );
-  if (canMethodSendBody(method) && body.trim() && !hasContentType) {
-    headers["Content-Type"] = "application/json";
+  if (canMethodSendBody(method) && !hasContentType) {
+    if (contentType) {
+      headers["Content-Type"] = contentType;
+    } else if (body.trim()) {
+      headers["Content-Type"] = "application/json";
+    }
   }
   return headers;
 }
 
+function buildRequestBody(request: ApiTesterRequestSnapshot):
+  | {
+      body?: string;
+      bodyBase64?: string;
+      bodyEncoding?: "utf8" | "base64";
+      contentType?: string;
+      textPreview: string;
+    }
+  | undefined {
+  if (request.bodyMode === "media") {
+    if (!request.mediaFile) {
+      throw new Error("Choose a media file before sending this request.");
+    }
+
+    const boundary = `----ivs-dashboard-${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    const fieldName = request.mediaFieldName?.trim() || "file";
+    const parts: Uint8Array[] = [];
+    const previewLines: string[] = [];
+
+    (request.mediaFields ?? []).forEach((field) => {
+      const key = field.key.trim();
+      if (!field.enabled || !key) {
+        return;
+      }
+      parts.push(
+        utf8Bytes(
+          `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(
+            key,
+          )}"\r\n\r\n${field.value}\r\n`,
+        ),
+      );
+      previewLines.push(`${key}: ${field.value}`);
+    });
+
+    parts.push(
+      utf8Bytes(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(
+          fieldName,
+        )}"; filename="${escapeMultipartValue(
+          request.mediaFile.name,
+        )}"\r\nContent-Type: ${
+          request.mediaFile.type || "application/octet-stream"
+        }\r\n\r\n`,
+      ),
+      base64ToUint8Array(request.mediaFile.base64),
+      utf8Bytes(`\r\n--${boundary}--\r\n`),
+    );
+    previewLines.push(
+      `${fieldName}: ${request.mediaFile.name} (${request.mediaFile.type || "application/octet-stream"}, ${formatBytes(
+        request.mediaFile.size,
+      )})`,
+    );
+
+    return {
+      bodyBase64: uint8ArrayToBase64(concatUint8Arrays(parts)),
+      bodyEncoding: "base64",
+      contentType: `multipart/form-data; boundary=${boundary}`,
+      textPreview: [`multipart/form-data`, ...previewLines].join("\n"),
+    };
+  }
+
+  return {
+    body: request.body,
+    textPreview: request.body,
+  };
+}
+
 function canMethodSendBody(method: ApiMethod): boolean {
   return method !== "GET" && method !== "HEAD";
+}
+
+async function readMediaFile(file: File): Promise<ApiTesterMediaFile> {
+  const buffer = await file.arrayBuffer();
+  return {
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    base64: uint8ArrayToBase64(new Uint8Array(buffer)),
+  };
+}
+
+function utf8Bytes(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
+}
+
+function base64ToUint8Array(value: string): Uint8Array {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function base64ToArrayBuffer(value: string): ArrayBuffer {
+  const bytes = base64ToUint8Array(value);
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+}
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return window.btoa(binary);
+}
+
+function concatUint8Arrays(parts: Uint8Array[]): Uint8Array {
+  const totalLength = parts.reduce((total, part) => total + part.length, 0);
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  parts.forEach((part) => {
+    combined.set(part, offset);
+    offset += part.length;
+  });
+  return combined;
+}
+
+function escapeMultipartValue(value: string): string {
+  return value.replace(/["\r\n]/g, "_");
 }
 
 function getDisplayedResponseBody(

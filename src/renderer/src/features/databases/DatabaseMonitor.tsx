@@ -154,6 +154,7 @@ export function DatabaseMonitor({
                       aria-label={`Re-run query from ${formatCompactTime(entry.time)}`}
                       title="Re-run query"
                       onClick={() => onRerun(entry)}
+                      disabled={entry.status !== "success"}
                     >
                       <Redo2 size={14} />
                     </button>

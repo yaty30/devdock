@@ -6,6 +6,7 @@ import {
   Play,
   RotateCcw,
   Settings,
+  ShipWheel,
   Square,
 } from "lucide-react";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
@@ -428,7 +429,7 @@ function BuildActionsDropdown({
               ? "Start WildFly before running a build"
               : latestProfileUsedToday
                 ? `Run ${latestProfileUsedToday.buttonName} Build`
-              : undefined
+                : undefined
           }
           disabled={buildDisabled || stoppingBuild}
           onClick={() => {
@@ -489,6 +490,18 @@ function BuildActionsDropdown({
                 <kbd>Ctrl+{index + 1}</kbd>
               </button>
             ))}
+            {settings.buildProfiles.length === 0 ? (
+              <button
+                type="button"
+                role="menuitem"
+                key="no-build-profiles"
+                title="No build profiles defined"
+                disabled
+              >
+                <ShipWheel size={14} />
+                <span>No build profiles defined.</span>
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
