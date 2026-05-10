@@ -27,11 +27,44 @@ export function buildSideBySideDiff(
     return [];
   }
 
-  if (leftLines.length * rightLines.length > LCS_CELL_LIMIT) {
-    return buildIndexDiff(leftLines, rightLines);
+  const prefixLength = countCommonPrefix(leftLines, rightLines);
+  const suffixLength = countCommonSuffix(leftLines, rightLines, prefixLength);
+  const rows: DiffRow[] = [];
+
+  for (let index = 0; index < prefixLength; index += 1) {
+    rows.push({
+      kind: "equal",
+      leftLineNumber: index + 1,
+      rightLineNumber: index + 1,
+      leftText: leftLines[index],
+      rightText: rightLines[index],
+    });
   }
 
-  return pairDiffOperations(buildLineOperations(leftLines, rightLines));
+  const leftMiddleEnd = leftLines.length - suffixLength;
+  const rightMiddleEnd = rightLines.length - suffixLength;
+  rows.push(
+    ...buildDiffRowsFromLines(
+      leftLines.slice(prefixLength, leftMiddleEnd),
+      rightLines.slice(prefixLength, rightMiddleEnd),
+      prefixLength,
+      prefixLength,
+    ),
+  );
+
+  for (let index = 0; index < suffixLength; index += 1) {
+    const leftIndex = leftMiddleEnd + index;
+    const rightIndex = rightMiddleEnd + index;
+    rows.push({
+      kind: "equal",
+      leftLineNumber: leftIndex + 1,
+      rightLineNumber: rightIndex + 1,
+      leftText: leftLines[leftIndex],
+      rightText: rightLines[rightIndex],
+    });
+  }
+
+  return rows;
 }
 
 export function formatDiffSummary(
@@ -53,9 +86,64 @@ function splitCompareLines(text: string): string[] {
     : text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
 }
 
+function countCommonPrefix(leftLines: string[], rightLines: string[]): number {
+  const limit = Math.min(leftLines.length, rightLines.length);
+  let index = 0;
+  while (index < limit && leftLines[index] === rightLines[index]) {
+    index += 1;
+  }
+  return index;
+}
+
+function countCommonSuffix(
+  leftLines: string[],
+  rightLines: string[],
+  prefixLength: number,
+): number {
+  const limit = Math.min(
+    leftLines.length - prefixLength,
+    rightLines.length - prefixLength,
+  );
+  let offset = 0;
+  while (
+    offset < limit &&
+    leftLines[leftLines.length - 1 - offset] ===
+      rightLines[rightLines.length - 1 - offset]
+  ) {
+    offset += 1;
+  }
+  return offset;
+}
+
+function buildDiffRowsFromLines(
+  leftLines: string[],
+  rightLines: string[],
+  leftLineOffset: number,
+  rightLineOffset: number,
+): DiffRow[] {
+  if (leftLines.length === 0 && rightLines.length === 0) {
+    return [];
+  }
+
+  if (leftLines.length * rightLines.length > LCS_CELL_LIMIT) {
+    return buildIndexDiff(
+      leftLines,
+      rightLines,
+      leftLineOffset,
+      rightLineOffset,
+    );
+  }
+
+  return pairDiffOperations(
+    buildLineOperations(leftLines, rightLines, leftLineOffset, rightLineOffset),
+  );
+}
+
 function buildLineOperations(
   leftLines: string[],
   rightLines: string[],
+  leftLineOffset: number,
+  rightLineOffset: number,
 ): DiffOperation[] {
   const lcsMatrix = Array.from({ length: leftLines.length + 1 }, () =>
     new Array<number>(rightLines.length + 1).fill(0),
@@ -89,8 +177,8 @@ function buildLineOperations(
       operations.push({
         kind: "equal",
         text: leftLines[leftIndex],
-        lineNumber: leftIndex + 1,
-        rightLineNumber: rightIndex + 1,
+        lineNumber: leftLineOffset + leftIndex + 1,
+        rightLineNumber: rightLineOffset + rightIndex + 1,
       });
       leftIndex += 1;
       rightIndex += 1;
@@ -103,14 +191,14 @@ function buildLineOperations(
       operations.push({
         kind: "insert",
         text: rightLines[rightIndex],
-        lineNumber: rightIndex + 1,
+        lineNumber: rightLineOffset + rightIndex + 1,
       });
       rightIndex += 1;
     } else if (leftIndex < leftLines.length) {
       operations.push({
         kind: "delete",
         text: leftLines[leftIndex],
-        lineNumber: leftIndex + 1,
+        lineNumber: leftLineOffset + leftIndex + 1,
       });
       leftIndex += 1;
     }
@@ -172,7 +260,12 @@ function pairDiffOperations(operations: DiffOperation[]): DiffRow[] {
   return rows;
 }
 
-function buildIndexDiff(leftLines: string[], rightLines: string[]): DiffRow[] {
+function buildIndexDiff(
+  leftLines: string[],
+  rightLines: string[],
+  leftLineOffset: number,
+  rightLineOffset: number,
+): DiffRow[] {
   const rowCount = Math.max(leftLines.length, rightLines.length);
   return Array.from({ length: rowCount }, (_, rowIndex) => {
     const leftValue = leftLines[rowIndex];
@@ -180,8 +273,8 @@ function buildIndexDiff(leftLines: string[], rightLines: string[]): DiffRow[] {
     if (leftValue === rightValue) {
       return {
         kind: "equal",
-        leftLineNumber: rowIndex + 1,
-        rightLineNumber: rowIndex + 1,
+        leftLineNumber: leftLineOffset + rowIndex + 1,
+        rightLineNumber: rightLineOffset + rowIndex + 1,
         leftText: leftValue,
         rightText: rightValue,
       };
@@ -193,8 +286,10 @@ function buildIndexDiff(leftLines: string[], rightLines: string[]): DiffRow[] {
           : rightValue === undefined
             ? "removed"
             : "changed",
-      leftLineNumber: leftValue === undefined ? undefined : rowIndex + 1,
-      rightLineNumber: rightValue === undefined ? undefined : rowIndex + 1,
+      leftLineNumber:
+        leftValue === undefined ? undefined : leftLineOffset + rowIndex + 1,
+      rightLineNumber:
+        rightValue === undefined ? undefined : rightLineOffset + rowIndex + 1,
       leftText: leftValue,
       rightText: rightValue,
     };

@@ -157,6 +157,7 @@ function App(): JSX.Element {
   const snackbarDismissTimerRef = useRef<number | null>(null);
   const snackbarCloseTimerRef = useRef<number | null>(null);
   const buildMiniPanelBuildIdRef = useRef<string | null>(null);
+  const buildMiniPanelSessionStartedAtRef = useRef(Date.now());
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarTransitionReadyRef = useRef(false);
   const databaseSleepTimerRef = useRef<number | null>(null);
@@ -538,6 +539,7 @@ function App(): JSX.Element {
     dashboardOverview,
     projects,
     dismissedBuildMiniRecordKeys,
+    buildMiniPanelSessionStartedAtRef.current,
   );
   const runningBuildKey = runningBuildItems
     .map((item) => `${item.project.id}:${item.build.id}`)
@@ -1903,6 +1905,7 @@ function getBuildMiniPanelItems(
   summaries: ProjectDashboardSummary[],
   projects: Project[],
   dismissedRecordKeys: Set<string>,
+  sessionStartedAt: number,
 ): BuildMiniPanelItem[] {
   const realItems = summaries
     .filter((summary) => summary.lastBuild)
@@ -1918,6 +1921,13 @@ function getBuildMiniPanelItems(
     // ...debugItems
   ].filter((item) => {
     const key = getBuildMiniRecordKey(item);
+    const startedAt = new Date(item.build.startedAt).getTime();
+    if (
+      item.build.status !== "Running" &&
+      (Number.isNaN(startedAt) || startedAt < sessionStartedAt)
+    ) {
+      return false;
+    }
     if (item.build.status !== "Running" && dismissedRecordKeys.has(key)) {
       return false;
     }

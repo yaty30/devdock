@@ -9,17 +9,22 @@ export function CompareTool(): JSX.Element {
   const [rightText, setRightText] = useState("");
   const [leftFileName, setLeftFileName] = useState<string | null>(null);
   const [rightFileName, setRightFileName] = useState<string | null>(null);
+  const [leftReady, setLeftReady] = useState(false);
+  const [rightReady, setRightReady] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const leftInputRef = useRef<HTMLInputElement>(null);
   const rightInputRef = useRef<HTMLInputElement>(null);
+  const compareReady = leftReady && rightReady;
   const diffRows = useMemo(
-    () => buildSideBySideDiff(leftText, rightText),
-    [leftText, rightText],
+    () => (compareReady ? buildSideBySideDiff(leftText, rightText) : []),
+    [compareReady, leftText, rightText],
   );
   const changedRowCount = diffRows.filter((row) => row.kind !== "equal").length;
   const leftTitle = leftFileName ?? "A";
   const rightTitle = rightFileName ?? "B";
-  const diffSummary = formatDiffSummary(diffRows.length, changedRowCount);
+  const diffSummary = compareReady
+    ? formatDiffSummary(diffRows.length, changedRowCount)
+    : "";
 
   function importFile(
     event: ChangeEvent<HTMLInputElement>,
@@ -37,10 +42,12 @@ export function CompareTool(): JSX.Element {
       if (side === "left") {
         setLeftText(value);
         setLeftFileName(file.name);
+        setLeftReady(true);
         return;
       }
       setRightText(value);
       setRightFileName(file.name);
+      setRightReady(true);
     };
     reader.readAsText(file);
   }
@@ -55,15 +62,18 @@ export function CompareTool(): JSX.Element {
           onChange={(value) => {
             setLeftText(value);
             setLeftFileName(null);
+            setLeftReady(value.length > 0);
           }}
           onImport={() => leftInputRef.current?.click()}
           onClear={() => {
             setLeftText("");
             setLeftFileName(null);
+            setLeftReady(false);
           }}
           onPasteFromClipboard={(value) => {
             setLeftText(value);
             setLeftFileName(null);
+            setLeftReady(value.length > 0);
           }}
         />
         <CompareInputPane
@@ -73,15 +83,18 @@ export function CompareTool(): JSX.Element {
           onChange={(value) => {
             setRightText(value);
             setRightFileName(null);
+            setRightReady(value.length > 0);
           }}
           onImport={() => rightInputRef.current?.click()}
           onClear={() => {
             setRightText("");
             setRightFileName(null);
+            setRightReady(false);
           }}
           onPasteFromClipboard={(value) => {
             setRightText(value);
             setRightFileName(null);
+            setRightReady(value.length > 0);
           }}
         />
         <input
@@ -103,6 +116,7 @@ export function CompareTool(): JSX.Element {
         leftTitle={leftTitle}
         rightTitle={rightTitle}
         summary={diffSummary}
+        ready={compareReady}
         className="panel"
         expanded={expanded}
         setExpanded={setExpanded}
@@ -123,6 +137,7 @@ export function CompareTool(): JSX.Element {
           leftTitle={leftTitle}
           rightTitle={rightTitle}
           summary={diffSummary}
+          ready={compareReady}
           className="compare-diff-expanded"
           expanded={expanded}
         />

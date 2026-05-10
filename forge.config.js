@@ -117,6 +117,17 @@ module.exports = {
   packagerConfig: {
     asar: true,
     prune: true,
+    extraResource: [
+      path.join(
+        __dirname,
+        "src",
+        "renderer",
+        "src",
+        "assets",
+        "toast-icon.png",
+      ),
+      path.join(__dirname, ".env"),
+    ],
     ignore: ignoreDevelopmentFiles,
   },
   rebuildConfig: {},
@@ -140,7 +151,9 @@ module.exports = {
         name: "ivs_dashboard",
         authors: "yaty",
         description: "IVS Dashboard",
+
         setupExe: "IVS-Dashboard-Setup.exe",
+
         setupIcon: path.join(
           __dirname,
           "src",
@@ -149,6 +162,16 @@ module.exports = {
           "assets",
           "icon.ico",
         ),
+
+        // Windows shortcuts
+        createStartMenuShortcut: true,
+        createDesktopShortcut: true,
+
+        // Display name shown in Start Menu / desktop shortcut
+        shortcutName: "IVS Dashboard",
+
+        // Optional: Start Menu folder name
+        shortcutFolderName: "IVS Dashboard",
       },
     },
   ],

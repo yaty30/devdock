@@ -7,8 +7,18 @@ import {
   ipcMain,
   shell,
 } from "electron";
-import type { OpenDialogOptions, SaveDialogOptions } from "electron";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import type {
+  NotificationConstructorOptions,
+  OpenDialogOptions,
+  SaveDialogOptions,
+} from "electron";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { hostname } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -41,12 +51,10 @@ if (started) {
 }
 
 const APP_NAME = "IVS Dashboard";
-const APP_USER_MODEL_ID = "com.yaty.ivs-dashboard";
 app.setName(APP_NAME);
-if (process.platform === "win32") {
-  app.setAppUserModelId(APP_USER_MODEL_ID);
+if (process.platform === "win32" && !app.isPackaged) {
+  app.setAppUserModelId(process.execPath);
 }
-
 loadEnvironmentFile();
 
 let backend: DashboardBackend | null = null;
@@ -57,7 +65,7 @@ let isQuitting = false;
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
 const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
 const API_TESTER_REQUEST_CHANNEL = "apiTester:sendRequest";
-const CHAT_ENABLED = readBooleanEnvironmentFlag("ENABLE_CHAT", true);
+const CHAT_ENABLED = readBooleanEnvironmentFlag("ENABLE_CHAT", false);
 const DEFAULT_CHAT_PORT = Number(
   process.env.IVS_DASHBOARD_CHAT_PORT ?? "43781",
 );
@@ -539,6 +547,7 @@ async function sendApiTesterRequest(
 function loadEnvironmentFile(): void {
   const candidates = [
     join(process.cwd(), ".env"),
+    join(process.resourcesPath, ".env"),
     join(__dirname, "../../.env"),
   ];
   const loaded = new Set<string>();
@@ -832,20 +841,149 @@ function showBuildNotification(
     return;
   }
 
-  const nativeNotification = new Notification({
-    title: `Build ${build.status}: ${projectName}`,
-    body: [
-      `Profile: ${build.profile}`,
-      `Branch: ${build.branch}`,
-      `Commit: ${build.commit}/${build.commitCleanliness}`,
-      `Duration: ${build.duration}`,
-    ].join("\n"),
-    silent: false,
+  const fallbackOptions = createBuildNotificationFallbackOptions(
+    build,
+    projectName,
+  );
+  const iconOptions = createBuildNotificationIconOptions();
+
+  let fallbackTriggered = false;
+  const showFallback = (reason: string): void => {
+    if (fallbackTriggered) {
+      return;
+    }
+    fallbackTriggered = true;
+    console.warn(
+      `[main:notification] Build toast falling back to default options: ${reason}`,
+    );
+    try {
+      const fallbackNotification = new Notification(fallbackOptions);
+      fallbackNotification.on("show", () =>
+        console.info("[main:notification] Build fallback toast shown"),
+      );
+      fallbackNotification.on("failed", (_event, error) =>
+        console.error(
+          `[main:notification] Build fallback toast failed: ${error}`,
+        ),
+      );
+      fallbackNotification.on("click", () => {
+        void openBuildNotificationTarget(window, warDirectory);
+      });
+      fallbackNotification.show();
+    } catch (error) {
+      console.error(
+        `[main:notification] Failed to show fallback toast: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  };
+
+  let nativeNotification: Notification;
+  try {
+    nativeNotification = new Notification({
+      ...fallbackOptions,
+      ...iconOptions,
+    });
+  } catch (error) {
+    showFallback(
+      `constructor threw: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return;
+  }
+
+  let shown = false;
+  const showTimeout = setTimeout(() => {
+    if (!shown) {
+      showFallback("native toast did not fire 'show' within 1500ms");
+    }
+  }, 1500);
+
+  nativeNotification.on("show", () => {
+    shown = true;
+    clearTimeout(showTimeout);
+    console.info(
+      `[main:notification] Build toast shown (${build.status}) for ${projectName}`,
+    );
+  });
+  nativeNotification.on("failed", (_event, error) => {
+    clearTimeout(showTimeout);
+    showFallback(`native toast failed: ${error}`);
+  });
+  nativeNotification.on("close", () => {
+    clearTimeout(showTimeout);
   });
   nativeNotification.on("click", () => {
     void openBuildNotificationTarget(window, warDirectory);
   });
-  nativeNotification.show();
+
+  try {
+    nativeNotification.show();
+  } catch (error) {
+    clearTimeout(showTimeout);
+    showFallback(
+      `show() threw: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function createBuildNotificationFallbackOptions(
+  build: RecentBuildRecord,
+  projectName: string,
+): NotificationConstructorOptions {
+  const statusLabel = `Build ${build.status}`;
+  const detailLines = [
+    `${build.profile} on ${build.branch}`,
+    `${build.commit}/${build.commitCleanliness}`,
+    `Duration ${build.duration}`,
+  ];
+
+  return {
+    title: `${statusLabel}: ${projectName}`,
+    body: detailLines.join("\n"),
+    silent: false,
+  };
+}
+
+function createBuildNotificationIconOptions(): NotificationConstructorOptions {
+  const iconPath = resolveNotificationIconPath();
+  return iconPath ? { icon: iconPath } : {};
+}
+
+const MAX_TOAST_IMAGE_BYTES = 200 * 1024;
+
+function resolveNotificationIconPath(): string | null {
+  const candidates = [
+    join(process.resourcesPath, "toast-icon.png"),
+    join(
+      app.getAppPath(),
+      "src",
+      "renderer",
+      "src",
+      "assets",
+      "toast-icon.png",
+    ),
+  ];
+
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+
+    try {
+      if (statSync(candidate).size > MAX_TOAST_IMAGE_BYTES) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return null;
 }
 
 async function openBuildNotificationTarget(
@@ -962,9 +1100,7 @@ const createWindow = (): void => {
     "console-message",
     (_event, level, message, line, sourceId) => {
       const prefix = level >= 2 ? "error" : level === 1 ? "warn" : "info";
-      console[prefix](
-        `[renderer:console] ${sourceId}:${line} ${message}`,
-      );
+      console[prefix](`[renderer:console] ${sourceId}:${line} ${message}`);
     },
   );
 
