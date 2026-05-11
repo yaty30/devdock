@@ -1096,7 +1096,7 @@ function DashboardDetailRow({
 function databaseConnectionStatus(status: DatabaseConnection["status"]): {
   label: string;
   tone: "success" | "warning" | "failed" | "idle";
-  pillClass: "success" | "stopped" | "failed";
+  pillClass: "success" | "warning" | "failed";
 } {
   if (status === "connected") {
     return { label: "Connected", tone: "success", pillClass: "success" };
@@ -1104,7 +1104,7 @@ function databaseConnectionStatus(status: DatabaseConnection["status"]): {
   if (status === "error") {
     return { label: "Error", tone: "failed", pillClass: "failed" };
   }
-  return { label: "Disconnected", tone: "warning", pillClass: "stopped" };
+  return { label: "Disconnected", tone: "warning", pillClass: "warning" };
 }
 
 function databaseStatusPill(status: DatabaseConnection["status"]): JSX.Element {
@@ -1140,7 +1140,7 @@ function projectOverallStatus(summary: ProjectDashboardSummary): {
   if (states.every((state) => state === "running")) {
     return { label: "All Services Running", tone: "success" };
   }
-  if (states.some((state) => state === "error")) {
+  if (states.some((state) => state === "failed")) {
     return { label: "Service Error", tone: "failed" };
   }
   if (states.some((state) => state === "running")) {
@@ -1538,7 +1538,7 @@ export function ProjectDashboardContent({
         open={zoomLog !== null}
         title={zoomLog?.title ?? ""}
         subtitle={zoomLog !== null ? `Project: ${projectId}` : undefined}
-        size="xl"
+        size="fullScreen"
         className="log-zoom-modal"
         contentClassName="log-zoom-modal-content"
         closeLabel="Close log view"
@@ -1677,8 +1677,11 @@ function buildStatusPill(
 }
 
 function serviceStateClass(state: string): string {
-  if (state === "running" || state === "success") {
+  if (state === "success") {
     return "success";
+  }
+  if (state === "running") {
+    return "running";
   }
   if (state === "starting") {
     return "starting";

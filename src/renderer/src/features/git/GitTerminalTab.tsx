@@ -236,7 +236,13 @@ export function GitTerminalTab({
           </div>
           <div className="git-status-item git-status-item-status">
             <span>Status</span>
-            <strong>{status.status}</strong>
+            <strong
+              className={`git-working-tree-status ${gitWorkingTreeStatusClass(
+                status.status,
+              )}`}
+            >
+              {status.status}
+            </strong>
           </div>
         </div>
         <div className="git-terminal-actions">
@@ -497,6 +503,22 @@ function gitHistoryStorageKey(projectId: string): string {
 
 function historyStatusClass(status: GitCommandHistoryItem["status"]): string {
   return status.toLowerCase();
+}
+
+function gitWorkingTreeStatusClass(
+  status: string,
+): "success" | "warning" | "failed" {
+  if (status === "Clean") {
+    return "success";
+  }
+
+  if (
+    /error|failed|fatal|unavailable|not configured|does not exist/i.test(status)
+  ) {
+    return "failed";
+  }
+
+  return "warning";
 }
 
 function terminalLineClass(line: string): string {

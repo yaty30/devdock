@@ -109,9 +109,13 @@ export function HeaderUtilityActions({
 }
 
 const FONT_SIZE_OPTIONS: Array<{ value: FontSizeMode; label: string }> = [
-  { value: "large", label: "Large" },
-  { value: "regular", label: "Regular" },
-  { value: "small", label: "Small" },
+  { value: "50", label: "50%" },
+  { value: "70", label: "70%" },
+  { value: "90", label: "90%" },
+  { value: "100", label: "100%" },
+  { value: "120", label: "120%" },
+  { value: "140", label: "140%" },
+  { value: "160", label: "160%" },
 ];
 
 export function FontSizeDropdown({
@@ -126,6 +130,11 @@ export function FontSizeDropdown({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const [openMode, setOpenMode] = useState<"hover" | "click" | null>(null);
   const open = openMode !== null;
+  const activeIndex = Math.max(
+    0,
+    FONT_SIZE_OPTIONS.findIndex((option) => option.value === value),
+  );
+  const activeLabel = FONT_SIZE_OPTIONS[activeIndex]?.label ?? "100%";
 
   useEffect(() => {
     if (openMode !== "click") {
@@ -185,25 +194,34 @@ export function FontSizeDropdown({
         className={`build-dropdown-popover${open ? " open" : ""}`}
         aria-hidden={!open}
       >
-        <div className="build-dropdown-menu" role="menu">
-          {FONT_SIZE_OPTIONS.map((option) => (
-            <button
-              className={value === option.value ? "active" : undefined}
-              type="button"
-              role="menuitemradio"
-              aria-checked={value === option.value}
-              key={option.value}
-              onClick={() => {
+        <div className="build-dropdown-menu font-size-slider-menu">
+          <div className="font-size-slider-header">
+            <span>Font size</span>
+            <strong>{activeLabel}</strong>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={FONT_SIZE_OPTIONS.length - 1}
+            step={1}
+            value={activeIndex}
+            aria-label="Font size"
+            aria-valuetext={activeLabel}
+            onChange={(event) => {
+              const option = FONT_SIZE_OPTIONS[Number(event.target.value)];
+              if (option) {
                 onChange(option.value);
-                setOpenMode(null);
-              }}
-            >
-              <span className={`font-size-option-swatch ${option.value}`}>
-                A
-              </span>
-              <span>{option.label}</span>
-            </button>
-          ))}
+              }
+            }}
+          />
+          <div className="font-size-slider-scale" aria-hidden="true">
+            {FONT_SIZE_OPTIONS.map((option) => (
+              <span
+                className={value === option.value ? "active" : undefined}
+                key={option.value}
+              />
+            ))}
+          </div>
         </div>
       </div>
     </div>

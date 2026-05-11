@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { flushSync } from "react-dom";
+import { createRoot, type Root } from "react-dom/client";
 import {
   autocompletion,
   acceptCompletion,
@@ -12,6 +14,14 @@ import { defaultKeymap, indentLess, indentMore } from "@codemirror/commands";
 import { sql } from "@codemirror/lang-sql";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import {
+  findNext,
+  findPrevious,
+  getSearchQuery,
+  search,
+  SearchQuery,
+  setSearchQuery,
+} from "@codemirror/search";
+import {
   EditorState,
   Prec,
   StateEffect,
@@ -23,9 +33,11 @@ import {
   EditorView,
   keymap,
   type DecorationSet,
+  type Panel as CodeMirrorPanel,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
+import { FindControls } from "../../components/common/FindControls";
 import type { DatabaseTable } from "../../types";
 import type {
   DatabaseCompletionData,
@@ -210,6 +222,10 @@ function createSqlEditorExtensions(
     sql(),
     syntaxHighlighting(sqlHighlightStyle),
     executedSqlHighlightField,
+    search({
+      top: true,
+      createPanel: createSqlFindPanel,
+    }),
     EditorState.transactionExtender.of((transaction) =>
       transaction.docChanged ? { effects: setExecutedSqlRange.of(null) } : null,
     ),
@@ -335,6 +351,130 @@ function createSqlEditorExtensions(
       },
     }),
   ];
+}
+
+function createSqlFindPanel(view: EditorView): CodeMirrorPanel {
+  const dom = document.createElement("div");
+  let root: Root | null = createRoot(dom);
+  dom.className = "cm-search database-sql-find-panel";
+
+  const render = (): void => {
+    if (!root) {
+      return;
+    }
+
+    const findState = getSqlFindState(view);
+    flushSync(() => {
+      root?.render(
+        <FindControls
+          value={findState.value}
+          activeIndex={findState.activeIndex}
+          matchCount={findState.matchCount}
+          ariaLabel="Find SQL"
+          className="log-find-row database-sql-find-row"
+          inputRef={(input) => {
+            input?.setAttribute("main-field", "true");
+          }}
+          onChange={(nextValue) => {
+            const currentQuery = getSearchQuery(view.state);
+            view.dispatch({
+              effects: setSearchQuery.of(
+                new SearchQuery({
+                  search: nextValue,
+                  caseSensitive: currentQuery.caseSensitive,
+                  literal: currentQuery.literal,
+                  regexp: currentQuery.regexp,
+                  replace: currentQuery.replace,
+                  wholeWord: currentQuery.wholeWord,
+                  test: currentQuery.test,
+                }),
+              ),
+            });
+            render();
+          }}
+          onPrevious={() => {
+            findPrevious(view);
+            render();
+          }}
+          onNext={() => {
+            findNext(view);
+            render();
+          }}
+          onClear={() => {
+            const currentQuery = getSearchQuery(view.state);
+            view.dispatch({
+              effects: setSearchQuery.of(
+                new SearchQuery({
+                  search: "",
+                  caseSensitive: currentQuery.caseSensitive,
+                  literal: currentQuery.literal,
+                  regexp: currentQuery.regexp,
+                  replace: currentQuery.replace,
+                  wholeWord: currentQuery.wholeWord,
+                  test: currentQuery.test,
+                }),
+              ),
+            });
+            render();
+          }}
+        />,
+      );
+    });
+  };
+
+  render();
+
+  return {
+    dom,
+    top: true,
+    update() {
+      render();
+    },
+    destroy() {
+      root?.unmount();
+      root = null;
+    },
+  };
+}
+
+function getSqlFindState(view: EditorView): {
+  value: string;
+  activeIndex: number;
+  matchCount: number;
+} {
+  const query = getSearchQuery(view.state);
+
+  if (!query.search || !query.valid) {
+    return { value: query.search, activeIndex: 0, matchCount: 0 };
+  }
+
+  const selection = view.state.selection.main;
+  const cursor = query.getCursor(view.state);
+  let matchCount = 0;
+  let activeIndex = 0;
+  let exactSelectionMatch = false;
+
+  for (let next = cursor.next(); !next.done; next = cursor.next()) {
+    const { from, to } = next.value;
+
+    if (from === selection.from && to === selection.to) {
+      activeIndex = matchCount;
+      exactSelectionMatch = true;
+    } else if (
+      !exactSelectionMatch &&
+      (from < selection.from || (from === selection.from && to < selection.to))
+    ) {
+      activeIndex = matchCount;
+    }
+
+    matchCount += 1;
+  }
+
+  return {
+    value: query.search,
+    activeIndex: matchCount === 0 ? 0 : Math.min(activeIndex, matchCount - 1),
+    matchCount,
+  };
 }
 
 export function getExecutionTarget(state: EditorState): ExecutionTarget | null {

@@ -2336,5 +2336,29 @@ function readStoredTheme(): Theme {
 
 function readStoredFontSizeMode(): FontSizeMode {
   const stored = window.localStorage.getItem("ivs-dashboard-font-size");
-  return stored === "large" || stored === "small" ? stored : "regular";
+  if (
+    stored === "50" ||
+    stored === "70" ||
+    stored === "90" ||
+    stored === "100" ||
+    stored === "120" ||
+    stored === "140" ||
+    stored === "160"
+  ) {
+    return stored;
+  }
+
+  if (stored === "180" || stored === "200") {
+    return "160";
+  }
+
+  if (stored === "small") {
+    return "90";
+  }
+
+  if (stored === "large") {
+    return "120";
+  }
+
+  return "100";
 }

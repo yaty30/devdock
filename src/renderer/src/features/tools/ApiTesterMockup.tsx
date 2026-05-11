@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ClipboardEvent,
   type CSSProperties,
   type PointerEvent,
 } from "react";
@@ -470,6 +471,20 @@ export function ApiTesterMockup({
     }
   }
 
+  function pasteRequestUrl(event: ClipboardEvent<HTMLInputElement>): void {
+    const pastedText = event.clipboardData.getData("text").trim();
+    const parsed = parseUrlWithQueryParams(pastedText);
+
+    if (!parsed) {
+      return;
+    }
+
+    event.preventDefault();
+    setUrl(parsed.url);
+    setParams(parsed.params);
+    setActiveBuilderTab("Params");
+  }
+
   async function rerunHistoryRecord(
     record: ApiTesterHistoryMetadata,
   ): Promise<ApiTesterHistoryMetadata | null> {
@@ -679,6 +694,7 @@ export function ApiTesterMockup({
           placeholder="https://api.example.com/v1/resource"
           aria-label="Request URL"
           onChange={(event) => setUrl(event.target.value)}
+          onPaste={pasteRequestUrl}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               void sendRequest();
@@ -2520,6 +2536,31 @@ function buildRequestUrl(url: string, params: ApiKeyValueRow[]): string {
     }
   });
   return parsed.toString();
+}
+
+function parseUrlWithQueryParams(
+  value: string,
+): { url: string; params: ApiKeyValueRow[] } | null {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(value);
+    const params = Array.from(parsed.searchParams.entries());
+
+    if (params.length === 0) {
+      return null;
+    }
+
+    parsed.search = "";
+    return {
+      url: parsed.toString(),
+      params: params.map(([key, paramValue]) => createRow(key, paramValue, true)),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function buildRequestHeaders(

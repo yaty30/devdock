@@ -66,7 +66,14 @@ export type AppSection = "dashboard" | "project" | "database" | "tools";
 export type ToolId = "comparing" | "api-tester" | "cryptographic";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal" | "notes";
 export type DatabaseWorkspaceTab = "connection" | "monitor";
-export type FontSizeMode = "large" | "regular" | "small";
+export type FontSizeMode =
+  | "50"
+  | "70"
+  | "90"
+  | "100"
+  | "120"
+  | "140"
+  | "160";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
 

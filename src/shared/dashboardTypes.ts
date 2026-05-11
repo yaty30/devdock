@@ -12,10 +12,10 @@ export type ServiceState =
   | "starting"
   | "stopped"
   | "unknown"
-  | "error";
+  | "failed";
 export type BuildOutcomeType = "build-only" | "build-and-deploy";
 export type BuildStatus = "running" | "success" | "failed" | "stopped";
-export type ActivityTone = "success" | "accent" | "info" | "neutral" | "error";
+export type ActivityTone = "success" | "accent" | "info" | "neutral" | "failed";
 export type ActivityKind = "service" | "build" | "git" | "system";
 export type LogChannel = "frontend" | "wildfly" | "build" | "tail";
 

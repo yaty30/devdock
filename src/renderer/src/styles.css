@@ -38,6 +38,7 @@
   --icon-muted: #6b7280;
   --terminal-bg: #f8f8f8;
   --terminal-border: #d6d6d6;
+  --font-scale: 1;
   --cm-sql-keyword: #1d4ed8;
   --cm-sql-string: #15803d;
   --cm-sql-number: #0e7490;
@@ -47,52 +48,50 @@
   --cm-sql-atom: #be123c;
   --cm-sql-name: #0a0a0a;
   --null-value: #e1b3c0;
-  --control-sm: 30px;
-  --control-md: 34px;
-  --control-lg: 40px;
-  --space-panel: 16px;
-  --space-section: 16px;
-  --font-xs: 11px;
-  --font-sm: 12px;
-  --font-md: 13px;
-  --font-lg: 14px;
-  --font-xl: 16px;
-  --font-title: 27px;
-  --font-code: calc(var(--font-sm) + 0.5px);
+  --control-sm: clamp(30px, calc(30px * var(--font-scale)), 42px);
+  --control-md: clamp(34px, calc(34px * var(--font-scale)), 48px);
+  --control-lg: clamp(40px, calc(40px * var(--font-scale)), 54px);
+  --space-panel: calc(16px * var(--font-scale));
+  --space-section: calc(16px * var(--font-scale));
+  --font-xs: calc(11px * var(--font-scale));
+  --font-sm: calc(12px * var(--font-scale));
+  --font-md: calc(13px * var(--font-scale));
+  --font-lg: calc(14px * var(--font-scale));
+  --font-xl: calc(16px * var(--font-scale));
+  --font-title: clamp(18px, calc(27px * var(--font-scale)), 34px);
+  --font-code: calc(var(--font-sm) + (0.5px * var(--font-scale)));
   --font-table: var(--font-sm);
   --font-meta: var(--font-xs);
   --database-code-font-size: var(--font-code);
   --database-table-font-size: var(--font-table);
 }
 
-:root[data-font-size="large"] {
-  --control-sm: 35px;
-  --control-md: 41px;
-  --control-lg: 48px;
-  --space-panel: 20px;
-  --space-section: 20px;
-  --font-xs: 13px;
-  --font-sm: 14px;
-  --font-md: 15px;
-  --font-lg: 17px;
-  --font-xl: 19px;
-  --font-title: 32px;
-  --font-code: var(--font-md);
+:root[data-font-size="50"] {
+  --font-scale: 0.5;
 }
 
-:root[data-font-size="small"] {
-  --control-sm: 28px;
-  --control-md: 32px;
-  --control-lg: 38px;
-  --space-panel: 14px;
-  --space-section: 14px;
-  --font-xs: 10.5px;
-  --font-sm: 11.5px;
-  --font-md: 12px;
-  --font-lg: 13px;
-  --font-xl: 15px;
-  --font-title: 25px;
-  --font-code: var(--font-xs);
+:root[data-font-size="70"] {
+  --font-scale: 0.7;
+}
+
+:root[data-font-size="90"] {
+  --font-scale: 0.9;
+}
+
+:root[data-font-size="100"] {
+  --font-scale: 1;
+}
+
+:root[data-font-size="120"] {
+  --font-scale: 1.2;
+}
+
+:root[data-font-size="140"] {
+  --font-scale: 1.4;
+}
+
+:root[data-font-size="160"] {
+  --font-scale: 1.6;
 }
 
 [data-theme="dark"] {
@@ -146,6 +145,11 @@
 [data-theme="dark"] .status-pill.success {
   color: var(--success);
   background: var(--success-soft);
+}
+
+[data-theme="dark"] .status-pill.warning {
+  color: var(--warning);
+  background: var(--warning-soft);
 }
 
 [data-theme="dark"] .status-pill.stopped {
@@ -346,7 +350,7 @@ body {
 
 .fatal-startup-panel h1 {
   margin: 0 0 10px;
-  font-size: 24px;
+  font-size: var(--font-title);
 }
 
 .fatal-startup-panel p {
@@ -359,7 +363,7 @@ body {
   padding: 12px;
   margin: 0;
   overflow: auto;
-  font-size: 12px;
+  font-size: var(--font-sm);
   white-space: pre-wrap;
   background: #f9fafb;
   border: 1px solid #e5e7eb;
@@ -376,36 +380,6 @@ body {
   overflow: hidden;
   background: var(--app-bg);
   transition: grid-template-columns 180ms ease;
-}
-
-.app-shell[data-font-size="large"] {
-  --control-sm: 35px;
-  --control-md: 41px;
-  --control-lg: 48px;
-  --space-panel: 20px;
-  --space-section: 20px;
-  --font-xs: 13px;
-  --font-sm: 14px;
-  --font-md: 15px;
-  --font-lg: 17px;
-  --font-xl: 19px;
-  --font-title: 32px;
-  --font-code: var(--font-md);
-}
-
-.app-shell[data-font-size="small"] {
-  --control-sm: 28px;
-  --control-md: 32px;
-  --control-lg: 38px;
-  --space-panel: 14px;
-  --space-section: 14px;
-  --font-xs: 10.5px;
-  --font-sm: 11.5px;
-  --font-md: 12px;
-  --font-lg: 13px;
-  --font-xl: 15px;
-  --font-title: 25px;
-  --font-code: var(--font-xs);
 }
 
 .app-shell.sidebar-collapsed {
@@ -555,7 +529,7 @@ body {
   align-items: center;
   gap: 12px;
   width: 100%;
-  height: var(--control-lg);
+  min-height: var(--control-lg);
   padding: 0 10px;
   color: var(--nav-text);
   text-align: left;
@@ -597,7 +571,7 @@ body {
   height: 20px;
   padding: 0 6px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
   line-height: 1;
   background: var(--accent-soft);
@@ -703,7 +677,7 @@ body {
   width: 40px;
   height: 22px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
   background: var(--field-bg);
   border: 1px solid #dfe3ff;
@@ -756,9 +730,9 @@ body {
 }
 
 .project-service-dot.running {
-  background: var(--success);
+  background: var(--info);
   opacity: 1;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 18%, transparent);
 }
 
 .project-service-dot.starting {
@@ -899,12 +873,12 @@ body {
 .service-status-tooltip-label {
   width: 58px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 600;
 }
 
 .service-status-tooltip-state {
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 700;
   color: var(--muted);
   padding: 2px 10px;
@@ -915,8 +889,8 @@ body {
 }
 
 .service-status-tooltip-state.running {
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 10%, transparent);
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 10%, transparent);
 }
 
 .service-status-tooltip-state.starting {
@@ -924,10 +898,14 @@ body {
   background: color-mix(in srgb, var(--info) 10%, transparent);
 }
 
-.service-status-tooltip-state.stopping,
-.service-status-tooltip-state.stopped {
+.service-status-tooltip-state.stopping {
   color: var(--warning);
   background: color-mix(in srgb, var(--warning) 10%, transparent);
+}
+
+.service-status-tooltip-state.stopped {
+  color: var(--muted);
+  background: var(--subtle-bg);
 }
 
 .service-status-tooltip-state.error {
@@ -1006,7 +984,7 @@ body {
   margin-bottom: 0px;
   color: var(--muted);
   opacity: 0.6;
-  font-size: 11px;
+  font-size: var(--font-xs);
   line-height: 1.2;
   text-align: center;
   user-select: none;
@@ -1077,7 +1055,7 @@ body {
   height: 18px;
   padding: 0 5px;
   color: #ffffff;
-  font-size: 10px;
+  font-size: var(--font-xs);
   font-weight: 850;
   line-height: 1;
   background: var(--error);
@@ -1139,7 +1117,7 @@ body {
 .chat-drawer-header h2,
 .chat-message-header h3 {
   margin: 0 0 4px;
-  font-size: 16px;
+  font-size: var(--font-xl);
   line-height: 1.1;
   letter-spacing: 0;
 }
@@ -1151,7 +1129,7 @@ body {
 
 .chat-connection {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
 }
 
@@ -1173,7 +1151,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 9px 14px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
   border-bottom: 1px solid var(--border);
 }
@@ -1288,13 +1266,13 @@ body {
 
 .chat-conversation-title-row strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .chat-conversation-title-row time,
 .chat-conversation-meta {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 720;
 }
 
@@ -1305,7 +1283,7 @@ body {
   height: 18px;
   padding: 0 6px;
   color: #ffffff;
-  font-size: 10px;
+  font-size: var(--font-xs);
   background: var(--accent);
   border-radius: 999px;
 }
@@ -1322,7 +1300,7 @@ body {
   max-width: 420px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 760;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1359,7 +1337,7 @@ body {
   gap: 10px;
   margin-bottom: 5px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: var(--font-xs);
   font-weight: 800;
 }
 
@@ -1370,7 +1348,7 @@ body {
 .chat-message p {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 650;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -1408,7 +1386,7 @@ body {
   gap: 8px;
   min-height: 82px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
 }
 
@@ -1455,7 +1433,7 @@ body {
   max-width: 100%;
   padding: 7px 9px;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
@@ -1483,7 +1461,7 @@ body {
 .chat-send-error {
   margin: 0;
   color: var(--error);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
 }
 
@@ -1523,7 +1501,7 @@ body {
   min-height: 38px;
   padding: 0 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -1534,7 +1512,7 @@ body {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   text-align: right;
   text-overflow: ellipsis;
@@ -1581,7 +1559,7 @@ body {
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
 }
 
@@ -1617,7 +1595,7 @@ body {
   align-items: center;
   gap: 8px;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
 }
 
@@ -1630,7 +1608,7 @@ body {
 
 .chat-member-label small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 700;
 }
 
@@ -1722,7 +1700,7 @@ body {
   max-width: 52px;
   overflow: hidden;
   color: rgba(255, 255, 255, 0.82);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
   text-overflow: ellipsis;
   text-transform: uppercase;
@@ -1792,10 +1770,10 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  height: 36px;
+  min-height: 36px;
   padding: 0 10px;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
   text-align: left;
   background: transparent;
@@ -1829,7 +1807,7 @@ body {
   color: var(--muted);
   opacity: 0.6;
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
 }
 
@@ -1839,36 +1817,53 @@ body {
 }
 
 .font-size-dropdown {
-  --build-dropdown-width: 144px;
+  --build-dropdown-width: 210px;
 }
 
 .font-size-dropdown-trigger {
   min-width: 42px;
 }
 
-.font-size-option-swatch {
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  color: var(--accent);
+.font-size-slider-menu {
+  gap: 9px;
+  padding: 10px;
+}
+
+.font-size-slider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: var(--font-sm);
+  font-weight: 750;
+}
+
+.font-size-slider-header strong {
+  color: var(--text);
   font-weight: 850;
-  line-height: 1;
-  background: var(--field-bg);
-  border: 1px solid var(--border);
-  border-radius: 5px;
 }
 
-.font-size-option-swatch.large {
-  font-size: 15px;
+.font-size-slider-menu input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
 }
 
-.font-size-option-swatch.regular {
-  font-size: 13px;
+.font-size-slider-scale {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
 }
 
-.font-size-option-swatch.small {
-  font-size: 11px;
+.font-size-slider-scale span {
+  width: 5px;
+  height: 5px;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.font-size-slider-scale span.active {
+  background: var(--accent);
 }
 
 .api-cookie-trigger {
@@ -1885,7 +1880,7 @@ body {
   background: var(--accent);
   border-radius: 7px;
   color: #fff;
-  font-size: 9px;
+  font-size: var(--font-xs);
   font-weight: 800;
   line-height: 13px;
   text-align: center;
@@ -1909,7 +1904,7 @@ body {
   height: 22px;
   padding: 0 7px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   line-height: 22px;
   font-variant-numeric: tabular-nums;
@@ -1950,7 +1945,7 @@ body {
   table-layout: fixed;
   border-collapse: collapse;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .api-cookie-name-col {
@@ -2008,7 +2003,7 @@ body {
 .api-cookie-table-empty {
   padding: 12px 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   text-align: center;
 }
 
@@ -2018,7 +2013,7 @@ body {
   justify-content: center;
   gap: 9px;
   min-width: 136px;
-  height: calc(var(--control-lg) + 2px);
+  min-height: calc(var(--control-lg) + 2px);
   padding: 0 16px;
   border-radius: 7px;
   font-size: var(--font-md);
@@ -2043,9 +2038,9 @@ body {
 
 .button.compact {
   min-width: auto;
-  height: var(--control-md);
+  min-height: var(--control-md);
   padding: 0 12px;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .tabs {
@@ -2053,7 +2048,7 @@ body {
   flex: 0 0 auto;
   width: max-content;
   align-items: center;
-  height: 38px;
+  min-height: 38px;
   margin-bottom: 0;
   overflow: hidden;
   background: var(--surface);
@@ -2082,7 +2077,7 @@ body {
   display: flex;
   align-items: center;
   gap: 9px;
-  height: var(--control-lg);
+  min-height: var(--control-lg);
   padding: 0 8px 0 12px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -2092,7 +2087,7 @@ body {
 
 .service-control-card span {
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 750;
   white-space: nowrap;
   user-select: none;
@@ -2113,8 +2108,8 @@ body {
 }
 
 .service-status-dot.running {
-  background: var(--success);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.14);
+  background: var(--info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 14%, transparent);
 }
 
 .service-status-dot.starting {
@@ -2124,8 +2119,8 @@ body {
 }
 
 .service-status-dot.stopping {
-  background: #f97316;
-  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.14);
+  background: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent);
   animation: dot-pulse 1s ease-in-out infinite;
 }
 
@@ -2145,12 +2140,12 @@ body {
 
 .service-status-dot.error {
   background: var(--error);
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.14);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 14%, transparent);
 }
 
 .service-status-dot.unknown {
-  background: var(--warning);
-  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.14);
+  background: var(--muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 14%, transparent);
 }
 
 .service-action-group {
@@ -2208,9 +2203,9 @@ body {
 .tab {
   position: relative;
   width: 112px;
-  height: 36px;
+  min-height: 36px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 600;
   background: transparent;
   border: 0;
@@ -2261,7 +2256,7 @@ body {
   height: 34px;
   padding: 0 11px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   background: transparent;
   border: 1px solid transparent;
@@ -2339,14 +2334,14 @@ body {
   display: block;
   margin-bottom: 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1.15;
 }
 
 .dashboard-kpi-card strong {
   display: block;
   color: var(--text);
-  font-size: 22px;
+  font-size: var(--font-title);
   line-height: 1;
 }
 
@@ -2440,7 +2435,7 @@ body {
   width: 48px;
   height: 48px;
   color: var(--accent);
-  font-size: 16px;
+  font-size: var(--font-xl);
   font-weight: 800;
   letter-spacing: 0;
   background: var(--accent-soft);
@@ -2465,12 +2460,12 @@ body {
 
 .dashboard-project-card h2 {
   margin-bottom: 7px;
-  font-size: 17px;
+  font-size: var(--font-xl);
   line-height: 1.2;
 }
 
 .dashboard-project-card h3 {
-  font-size: 15px;
+  font-size: var(--font-lg);
   line-height: 1.2;
 }
 
@@ -2480,12 +2475,12 @@ body {
   flex-wrap: wrap;
   gap: 0 16px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .dashboard-project-meta strong {
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 650;
 }
 
@@ -2529,7 +2524,7 @@ body {
   align-items: center;
   gap: 8px;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   white-space: nowrap;
   user-select: none;
 }
@@ -2563,7 +2558,7 @@ body {
   width: max-content;
   min-height: 26px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   white-space: nowrap;
   border-radius: 7px;
@@ -2644,7 +2639,7 @@ body {
   min-width: 0;
   margin-top: 9px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .dashboard-detail-row > span {
@@ -2657,7 +2652,7 @@ body {
   min-width: 0;
   overflow: hidden;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 600;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -2667,14 +2662,14 @@ body {
 .dashboard-project-card .monitor-link {
   height: 28px;
   padding: 0 8px;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 600;
 }
 
 .dashboard-project-card .status-pill {
   height: 22px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1;
   border-radius: 7px;
 }
@@ -2952,7 +2947,7 @@ body {
 
 .panel-header h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--font-xl);
   line-height: 1.15;
   letter-spacing: 0;
 }
@@ -2963,7 +2958,7 @@ body {
   height: 24px;
   padding: 0 9px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   white-space: nowrap;
   background: var(--accent-soft);
@@ -2983,7 +2978,7 @@ body {
   align-items: center;
   flex: 0 0 auto;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .live-status {
@@ -2992,7 +2987,7 @@ body {
   flex-direction: row-reverse;
   gap: 8px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   white-space: nowrap;
   user-select: none;
 }
@@ -3001,8 +2996,8 @@ body {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #22c55e;
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.11);
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 11%, transparent);
 }
 
 .log-lines {
@@ -3015,7 +3010,7 @@ body {
   overflow: auto;
   color: var(--text);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 650;
   line-height: 1.14;
   scrollbar-color: var(--accent-soft) transparent;
@@ -3024,7 +3019,7 @@ body {
 
 .log-lines.dense {
   gap: 5px;
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   line-height: 1.14;
 }
 
@@ -3068,15 +3063,15 @@ body {
 }
 
 .log-line.error {
-  background: rgba(239, 68, 68, 0.07);
+  background: color-mix(in srgb, var(--error) 7%, transparent);
 }
 
 .log-line.warning {
-  background: rgba(245, 158, 11, 0.07);
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
 }
 
 .log-line.success {
-  background: rgba(34, 197, 94, 0.06);
+  background: color-mix(in srgb, var(--success) 6%, transparent);
 }
 
 .log-line:hover {
@@ -3096,7 +3091,7 @@ body {
 }
 
 .log-warning {
-  color: #ea580c;
+  color: var(--warning);
 }
 
 .log-loading-row {
@@ -3106,7 +3101,7 @@ body {
   padding: 7px 10px;
   margin: 0 -6px 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   text-align: center;
   background: var(--surface);
@@ -3119,15 +3114,15 @@ body {
 }
 
 .log-token-level-info {
-  color: #38bdf8;
+  color: var(--info);
 }
 
 .log-token-level-warn {
-  color: #f59e0b;
+  color: var(--warning);
 }
 
 .log-token-level-error {
-  color: #ef4444;
+  color: var(--error);
 }
 
 .log-token-success {
@@ -3174,7 +3169,7 @@ body {
   min-height: 30px;
   padding: 0 10px;
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
   background: var(--accent-soft);
   border: 1px solid transparent;
@@ -3188,7 +3183,7 @@ body {
   gap: 8px;
   padding: 0;
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 650;
   background: transparent;
   border: 0;
@@ -3293,7 +3288,7 @@ body {
 }
 
 .build-status-panel .panel-header h2 {
-  font-size: 16px;
+  font-size: var(--font-xl);
 }
 
 .build-status-panel .timeline {
@@ -3302,7 +3297,7 @@ body {
 
 .build-status-panel .timeline-item {
   min-height: 24px;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .timeline-item {
@@ -3311,7 +3306,7 @@ body {
   align-items: center;
   gap: 12px;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .timeline-item.complete svg {
@@ -3320,7 +3315,7 @@ body {
 
 .timeline-item.current svg,
 .timeline-item.current span {
-  color: var(--accent);
+  color: var(--info);
   font-weight: 650;
 }
 
@@ -3357,7 +3352,7 @@ body {
   align-items: center;
   gap: 7px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 750;
   user-select: none;
 }
@@ -3366,7 +3361,7 @@ body {
   display: grid;
   grid-template-columns: 54px minmax(0, 1fr);
   gap: 8px;
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .branch-row span {
@@ -3403,7 +3398,7 @@ body {
   gap: 6px;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   user-select: none;
 }
@@ -3413,7 +3408,7 @@ body {
   align-items: center;
   flex: 1;
   min-width: 0;
-  height: var(--control-sm);
+  min-height: var(--control-sm);
   color: var(--muted);
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -3444,16 +3439,16 @@ body {
 .log-find-count {
   min-width: 48px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 750;
   text-align: center;
 }
 
 .log-find-row button {
-  height: var(--control-sm);
+  min-height: var(--control-sm);
   padding: 0 8px;
   color: var(--nav-text);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 750;
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -3525,7 +3520,7 @@ body {
 .notes-view-toggle {
   display: inline-flex;
   align-items: center;
-  height: var(--control-md);
+  min-height: var(--control-md);
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -3624,7 +3619,7 @@ body {
   margin: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-lg);
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3642,7 +3637,7 @@ body {
   min-height: 0;
   overflow: auto;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 650;
   line-height: 1.45;
   scrollbar-color: var(--accent-soft) transparent;
@@ -3697,7 +3692,7 @@ body {
   margin: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-lg);
   line-height: 1.12;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3706,7 +3701,7 @@ body {
 .sheet-title-group span,
 .sheet-card-footer {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 700;
 }
 
@@ -3808,79 +3803,12 @@ body {
 }
 
 .database-sql-editor-shell .cm-panel.cm-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
   padding: 7px 8px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  user-select: none;
 }
 
-.database-sql-editor-shell .cm-panel.cm-search input[type="text"] {
-  flex: 1 1 170px;
-  min-width: 0;
-  height: var(--control-sm);
-  padding: 0 9px;
-  color: var(--text);
-  background: var(--field-bg);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  outline: none;
-  box-shadow: inset 0 1px 2px rgba(17, 24, 39, 0.04);
-}
-
-.database-sql-editor-shell .cm-panel.cm-search input[type="text"]:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.database-sql-editor-shell .cm-panel.cm-search label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-}
-
-.database-sql-editor-shell .cm-panel.cm-search input[type="checkbox"] {
-  accent-color: var(--accent);
-}
-
-.database-sql-editor-shell .cm-panel.cm-search button,
-.database-sql-editor-shell .cm-panel.cm-search .cm-button {
-  display: inline-grid;
-  place-items: center;
-  min-width: var(--control-sm);
-  height: var(--control-sm);
-  padding: 0 8px;
-  color: var(--nav-text);
-  font-size: 11px;
-  font-weight: 750;
-  background: var(--subtle-bg);
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background-image: none;
-  user-select: none;
-}
-
-.database-sql-editor-shell .cm-panel.cm-search button:hover,
-.database-sql-editor-shell .cm-panel.cm-search .cm-button:hover {
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-color: var(--accent);
-}
-
-.database-sql-editor-shell .cm-panel.cm-search button[name="close"] {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.database-sql-editor-shell .cm-panel.cm-search button[name="close"]:hover {
-  color: #ffffff;
-  background: var(--accent);
-  border-color: var(--accent);
+.database-sql-find-row {
+  width: min(520px, 100%);
+  margin: 0;
 }
 
 .sheet-format-toolbar {
@@ -3964,7 +3892,7 @@ body {
 
 .sheet-editor-prosemirror {
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1.45;
 }
 
@@ -4013,7 +3941,7 @@ body {
 .note-editor-prosemirror {
   min-height: 100%;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1.55;
 }
 
@@ -4054,7 +3982,7 @@ body {
   padding: 10px 11px;
   overflow: auto;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1.55;
   background: var(--field-bg);
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
@@ -4153,7 +4081,7 @@ body {
 .sheet-save-status {
   margin-right: auto;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
 }
 
@@ -4180,7 +4108,7 @@ body {
   height: 28px;
   padding: 0 9px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
   background: var(--accent-soft);
   border: 1px solid transparent;
@@ -4203,7 +4131,7 @@ body {
 .notes-list table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .notes-list th,
@@ -4218,7 +4146,7 @@ body {
   top: 0;
   z-index: 1;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   background: var(--surface);
 }
@@ -4249,7 +4177,7 @@ body {
   max-height: 48px;
   overflow: hidden;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 650;
   line-height: 1.35;
   -webkit-box-orient: vertical;
@@ -4259,7 +4187,7 @@ body {
 
 .notes-list td:first-child strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .notes-list-title-row {
@@ -4307,13 +4235,13 @@ body {
 
 .notes-empty h2 {
   margin: 0 0 7px;
-  font-size: 17px;
+  font-size: var(--font-xl);
 }
 
 .notes-empty p {
   margin: 0 0 16px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 650;
 }
 
@@ -4377,13 +4305,13 @@ body {
 
 .add-sheet-form label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
 }
 
 .add-sheet-form input {
   width: 100%;
-  height: var(--control-lg);
+  min-height: var(--control-lg);
   color: var(--text);
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -4399,7 +4327,7 @@ body {
 .form-error {
   margin: 0;
   color: var(--error);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
 }
 
@@ -4439,19 +4367,19 @@ body {
 .build-log-panel .log-lines {
   gap: 3px;
   padding-right: 4px;
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   line-height: 1.14;
 }
 
 .wildfly-panel .log-lines {
   gap: 3px;
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   line-height: 1.14;
 }
 
 .tail-log-panel .log-lines {
   gap: 3px;
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   line-height: 1.14;
 }
 
@@ -4531,7 +4459,7 @@ body {
   min-width: 0;
   flex: 1 1 auto;
   margin: 0;
-  font-size: 16px;
+  font-size: var(--font-xl);
   line-height: 1.15;
   user-select: none;
 }
@@ -4560,13 +4488,13 @@ body {
   align-items: center;
   column-gap: 12px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .monitor-row > span {
   min-width: 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 22px;
   white-space: nowrap;
   user-select: none;
@@ -4579,7 +4507,7 @@ body {
   min-height: 22px;
   overflow: hidden;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 650;
   line-height: 22px;
   text-overflow: ellipsis;
@@ -4637,7 +4565,7 @@ body {
 .monitor-card .status-pill {
   height: 22px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1;
   border-radius: 7px;
 }
@@ -4649,14 +4577,19 @@ body {
   width: max-content;
   height: 26px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   border-radius: 8px;
 }
 
 .status-pill.success {
   color: var(--success);
-  background: #dcfce7;
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.status-pill.warning {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
 }
 
 .status-pill.stopped {
@@ -4670,18 +4603,18 @@ body {
 }
 
 .status-pill.stopping {
-  color: #f97316;
-  background: #ffedd5;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
 }
 
 .status-pill.failed {
   color: var(--error);
-  background: #fee2e2;
+  background: color-mix(in srgb, var(--error) 14%, transparent);
 }
 
 .status-pill.running {
   color: var(--info);
-  background: var(--info-soft);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
 }
 
 .status-pill.idle {
@@ -4696,7 +4629,7 @@ body {
   width: max-content;
   height: 26px;
   padding: 0 10px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   border-radius: 8px;
 }
@@ -4742,7 +4675,7 @@ body {
   display: grid;
   gap: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 750;
 }
 
@@ -4782,7 +4715,7 @@ body {
   height: 30px;
   padding: 0 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   background: transparent;
   border: 1px solid var(--border);
@@ -4850,7 +4783,7 @@ body {
 .custom-select-value {
   flex: 1;
   text-align: left;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
 }
 
@@ -4915,7 +4848,7 @@ body {
 
 .custom-select-option-label {
   flex: 1;
-  font-size: 13px;
+  font-size: var(--font-md);
   text-align: left;
   white-space: nowrap;
 }
@@ -5011,7 +4944,7 @@ select option {
   margin: 0;
   border-collapse: collapse;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .recent-builds-table th,
@@ -5029,7 +4962,7 @@ select option {
   top: 0;
   z-index: 2;
   color: var(--accent);
-  font-size: 12.5px;
+  font-size: var(--font-sm);
   font-weight: bold;
   padding-top: 4px;
   padding-bottom: 4px;
@@ -5066,7 +4999,7 @@ select option {
   margin: 0;
   padding: 18px 20px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   text-align: center;
 }
 
@@ -5098,7 +5031,7 @@ select option {
 
 .table-sort-direction {
   color: var(--accent);
-  font-size: 10px;
+  font-size: var(--font-xs);
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -5112,7 +5045,7 @@ select option {
   margin-top: auto;
   padding-top: 14px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   user-select: none;
 }
 
@@ -5129,7 +5062,7 @@ select option {
   height: 28px;
   padding: 0;
   color: #a1a3be;
-  font-size: 14px;
+  font-size: var(--font-lg);
   font-weight: 750;
   background: transparent;
   border: 1px solid transparent;
@@ -5166,7 +5099,7 @@ select option {
   width: 28px;
   height: 28px;
   color: #a1a3be;
-  font-size: 14px;
+  font-size: var(--font-lg);
   font-weight: 750;
 }
 
@@ -5188,7 +5121,7 @@ select option {
   gap: 10px;
   margin: 7px 0 3px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
   text-transform: uppercase;
   user-select: none;
@@ -5233,11 +5166,12 @@ select option {
 }
 
 .activity-dot.success {
-  background: #22c55e;
+  background: var(--success);
 }
 
+.activity-dot.failed,
 .activity-dot.error {
-  background: #ef4444;
+  background: var(--error);
 }
 
 .activity-dot.accent {
@@ -5245,7 +5179,7 @@ select option {
 }
 
 .activity-dot.info {
-  background: #38bdf8;
+  background: var(--info);
 }
 
 .activity-dot.neutral {
@@ -5273,7 +5207,7 @@ select option {
 .activity-copy strong {
   overflow: hidden;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5282,7 +5216,7 @@ select option {
 .activity-copy span,
 .activity-item time {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   white-space: nowrap;
   padding-right: 6px;
 }
@@ -5294,7 +5228,7 @@ select option {
 
 .activity-empty {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   text-align: center;
   padding: 16px 0;
   margin: 0;
@@ -5327,7 +5261,7 @@ select option {
   margin: 0;
   color: var(--muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .git-status-strip {
@@ -5356,10 +5290,22 @@ select option {
 .git-status-strip strong {
   min-width: 0;
   overflow: hidden;
-  color: #2563eb;
+  color: var(--info);
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.git-working-tree-status.success {
+  color: var(--success);
+}
+
+.git-working-tree-status.warning {
+  color: var(--warning);
+}
+
+.git-working-tree-status.failed {
+  color: var(--error);
 }
 
 .git-status-item-status {
@@ -5388,10 +5334,10 @@ select option {
 .git-terminal-actions button,
 .git-find-row button,
 .git-command-row button {
-  height: var(--control-sm);
+  min-height: var(--control-sm);
   padding: 0 10px;
   color: var(--nav-text);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 750;
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -5429,12 +5375,12 @@ select option {
 }
 
 .git-terminal-panel .panel-header h2 {
-  font-size: 14px;
+  font-size: var(--font-lg);
 }
 
 .git-unavailable {
   color: #d97706;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
 }
 
@@ -5443,7 +5389,7 @@ select option {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   user-select: none;
 }
@@ -5459,7 +5405,7 @@ select option {
 
 .git-command-row input {
   min-width: 0;
-  height: var(--control-sm);
+  min-height: var(--control-sm);
   color: var(--text);
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -5488,7 +5434,7 @@ select option {
   padding: 0 9px;
   color: var(--accent);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 750;
   background: var(--accent-soft);
   border: 1px solid #dfe3ff;
@@ -5520,7 +5466,7 @@ select option {
   overflow: auto;
   color: #d1d5db;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: var(--font-sm);
   scrollbar-color: var(--accent-soft) transparent;
   scrollbar-width: thin;
   background: var(--terminal-bg);
@@ -5608,11 +5554,11 @@ select option {
 .git-command-prefix {
   display: inline-grid;
   place-items: center;
-  height: var(--control-sm);
+  min-height: var(--control-sm);
   padding: 0 10px;
   color: #16a34a;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 850;
   background: #ecfdf5;
   border: 1px solid #bbf7d0;
@@ -5644,7 +5590,7 @@ select option {
 .git-history-header h2 {
   margin: 0;
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--font-lg);
   line-height: 1.2;
   letter-spacing: 0;
 }
@@ -5711,7 +5657,7 @@ select option {
 }
 
 .git-history-dot.running {
-  background: var(--accent);
+  background: var(--info);
   animation: dot-pulse 1s ease-in-out infinite;
 }
 
@@ -5726,7 +5672,7 @@ select option {
   overflow: hidden;
   color: var(--nav-text);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -5737,7 +5683,7 @@ select option {
 .git-history-copy p {
   margin: 0;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   line-height: 1.25;
 }
 
@@ -5761,7 +5707,7 @@ select option {
   justify-content: center;
   height: 22px;
   padding: 0 7px;
-  font-size: 10.5px;
+  font-size: var(--font-xs);
   font-weight: 800;
   border-radius: 999px;
 }
@@ -5777,15 +5723,15 @@ select option {
 }
 
 .git-history-status.running {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--info);
+  background: color-mix(in srgb, var(--info) 14%, transparent);
 }
 
 .git-history-empty {
   margin: 0;
   padding: 14px 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   text-align: center;
 }
 
@@ -5854,6 +5800,12 @@ select option {
   width: min(1180px, calc(100vw - 64px));
 }
 
+.modal-fullScreen {
+  width: calc(100vw - 16px);
+  height: calc(100dvh - 16px);
+  max-height: calc(100dvh - 16px);
+}
+
 .database-result-fullscreen-modal {
   width: calc(100vw - 16px);
   height: calc(100dvh - 16px);
@@ -5876,12 +5828,13 @@ select option {
   overflow: hidden;
 }
 
+.modal-backdrop:has(.modal-fullScreen),
 .modal-backdrop:has(.database-result-fullscreen-modal),
 .modal-backdrop:has(.compare-expanded-modal) {
   padding: 8px;
 }
 
-.log-zoom-modal {
+.log-zoom-modal:not(.modal-fullScreen) {
   width: min(1500px, calc(100vw - 32px));
   height: min(840px, calc(100dvh - 64px));
 }
@@ -5923,14 +5876,14 @@ select option {
 }
 
 .modal-header h2 {
-  font-size: 18px;
+  font-size: var(--font-xl);
   line-height: 1.2;
 }
 
 .modal-header p {
   margin: 4px 0 0 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
 }
 
@@ -6021,11 +5974,10 @@ select option {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 38px;
   min-height: 38px;
   padding: 0 14px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
   background: transparent;
   border: 1px solid transparent;
@@ -6075,7 +6027,7 @@ select option {
   grid-template-columns: 96px minmax(0, 1fr);
   gap: 14px 18px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .settings-summary span {
@@ -6096,7 +6048,7 @@ select option {
   width: 100%;
   padding: 4px 8px;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 600;
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -6122,7 +6074,7 @@ select option {
   min-height: 38px;
   margin-bottom: 12px;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
 }
 
@@ -6148,7 +6100,7 @@ select option {
   height: 34px;
   padding: 0 14px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   white-space: nowrap;
   background: var(--subtle-bg);
@@ -6159,14 +6111,14 @@ select option {
 .settings-note {
   margin-top: 4px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .auto-start-checks {
   display: flex;
   gap: 18px;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 400;
 }
 
@@ -6203,7 +6155,7 @@ select option {
   min-height: 34px;
   margin-top: 2px;
   color: var(--nav-text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
 }
 
@@ -6233,7 +6185,7 @@ select option {
   height: 22px;
   padding: 0 7px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   line-height: 22px;
   font-variant-numeric: tabular-nums;
@@ -6256,7 +6208,7 @@ select option {
   width: 100%;
   border-collapse: collapse;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   overflow-x: hidden;
   table-layout: fixed;
 }
@@ -6425,7 +6377,7 @@ select option {
   height: 32px;
   padding: 0 12px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -6451,7 +6403,7 @@ select option {
   display: inline-grid;
   place-items: center;
   width: 34px;
-  height: 34px;
+  min-height: 34px;
   padding: 0;
   border-radius: 7px;
 }
@@ -6574,6 +6526,19 @@ select option {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 14%, transparent);
 }
 
+.database-status-dot.connecting,
+.database-status-dot.reconnecting {
+  background: var(--info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 14%, transparent);
+  animation: dot-pulse 1s ease-in-out infinite;
+}
+
+.database-status-dot.idle,
+.database-status-dot.sleeping {
+  background: var(--muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 14%, transparent);
+}
+
 .database-status-dot.error {
   background: var(--error);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--error) 14%, transparent);
@@ -6594,7 +6559,7 @@ select option {
   width: 28px;
   height: 28px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
@@ -6605,7 +6570,7 @@ select option {
   flex: 0 0 auto;
   margin-left: auto;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 750;
 }
 
@@ -6658,7 +6623,7 @@ select option {
   align-items: center;
   gap: 9px;
   min-width: 0;
-  height: var(--control-lg);
+  min-height: var(--control-lg);
   padding: 0 12px;
   color: var(--muted);
   background: var(--subtle-bg);
@@ -6704,7 +6669,7 @@ select option {
   width: 42px;
   height: 42px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 850;
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
@@ -6718,12 +6683,12 @@ select option {
 
 .database-empty-panel h2 {
   color: var(--text);
-  font-size: 18px;
+  font-size: var(--font-xl);
 }
 
 .database-empty-panel p {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .database-workspace-view {
@@ -6784,13 +6749,13 @@ select option {
 
 .database-connection-summary strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1.1;
 }
 
 .database-connection-summary div > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
 }
 
@@ -6799,7 +6764,7 @@ select option {
   gap: 6px;
   margin: 0 0 10px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
 }
 
@@ -6809,7 +6774,7 @@ select option {
   min-width: 0;
   padding: 0 9px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -6832,7 +6797,7 @@ select option {
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
-  height: var(--control-md);
+  min-height: var(--control-md);
   margin-bottom: 12px;
   color: var(--muted);
   background: var(--field-bg);
@@ -6878,7 +6843,7 @@ select option {
   min-height: 74px;
   padding: 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   text-align: center;
   background: var(--subtle-bg);
@@ -6900,7 +6865,7 @@ select option {
   height: 30px;
   padding: 0 7px;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   text-align: left;
   background: transparent;
@@ -6920,7 +6885,7 @@ select option {
 .database-tree-group .database-tree-count {
   color: var(--muted);
   opacity: 0.5;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 700;
   margin-left: 8px;
 }
@@ -6939,7 +6904,7 @@ select option {
   min-height: 28px;
   padding: 0 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   background-color: transparent;
   border: none;
@@ -6984,7 +6949,7 @@ button.database-tree-item {
   padding: 0 8px;
   gap: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   text-align: left;
   background: transparent;
@@ -7042,7 +7007,7 @@ button.database-tree-item {
   margin-left: 10px;
   color: var(--muted);
   opacity: 0.65;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 700;
 }
 .database-object-row .database-object-label {
@@ -7058,7 +7023,7 @@ button.database-tree-item {
   margin-left: 6px;
   color: var(--muted);
   opacity: 0.65;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 700;
 }
 
@@ -7099,7 +7064,7 @@ button.database-tree-item {
   height: 36px;
   padding: 0 22px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -7124,7 +7089,7 @@ button.database-tree-item {
   resize: none;
   color: var(--text);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 650;
   line-height: 1.55;
   background: var(--terminal-bg);
@@ -7290,7 +7255,7 @@ button.database-tree-item {
   table-layout: auto;
   border-collapse: collapse;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   background: var(--surface);
 }
 
@@ -7320,7 +7285,7 @@ button.database-tree-item {
 
 .database-result-row-details-table th {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   background: var(--subtle-bg);
 }
@@ -7469,7 +7434,7 @@ button.database-tree-item {
   margin: 8px;
   padding: 7px 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -7500,7 +7465,7 @@ button.database-tree-item {
   border-radius: 8px;
   color: var(--cm-sql-comment);
   opacity: 0.6;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 500;
 }
 
@@ -7513,7 +7478,7 @@ button.database-tree-item {
 
 .database-null-pill span {
   color: var(--null-value);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
   border: 1px solid var(--null-value);
   padding: 2px 6px;
@@ -7629,7 +7594,7 @@ button.database-tree-item {
   min-height: 30px;
   padding: 7px 9px;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 650;
   background: var(--subtle-bg);
   border-left: 3px solid var(--success);
@@ -7649,7 +7614,7 @@ button.database-tree-item {
   margin: 0;
   padding: 18px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   text-align: center;
 }
 
@@ -7685,7 +7650,7 @@ button.database-tree-item {
   min-width: 0;
   overflow: hidden;
   color: var(--accent);
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 800;
   line-height: 1.15;
   text-overflow: ellipsis;
@@ -7699,7 +7664,7 @@ button.database-tree-item {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-lg);
   font-weight: 750;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -7716,7 +7681,7 @@ button.database-tree-item {
 
 .database-history-count {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
 }
 
@@ -7797,7 +7762,7 @@ button.database-tree-item {
   min-width: 0;
   height: 24px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   background: var(--field-bg);
   border: 1px solid var(--accent);
@@ -7822,7 +7787,7 @@ button.database-tree-item {
   height: 30px;
   padding: 0 10px;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   text-align: left;
   background: transparent;
@@ -7901,7 +7866,7 @@ button.database-tree-item {
 
 .compare-toolbar span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
   white-space: nowrap;
 }
@@ -7958,7 +7923,7 @@ button.database-tree-item {
   width: 24px;
   height: 24px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
@@ -7969,7 +7934,7 @@ button.database-tree-item {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8029,7 +7994,7 @@ button.database-tree-item {
 .compare-result-title h2 {
   margin: 0;
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--font-lg);
   font-weight: 850;
   line-height: 1.1;
 }
@@ -8038,7 +8003,7 @@ button.database-tree-item {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 760;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8056,7 +8021,7 @@ button.database-tree-item {
   flex: 0 0 auto;
   min-height: 34px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 850;
   background: var(--subtle-bg);
   border-bottom: 1px solid var(--border);
@@ -8177,7 +8142,7 @@ button.database-tree-item {
   min-height: 120px;
   color: var(--muted);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 760;
 }
 
@@ -8219,7 +8184,7 @@ button.database-tree-item {
 .crypto-tool-intro h2 {
   margin: 0;
   color: var(--text);
-  font-size: 18px;
+  font-size: var(--font-xl);
   font-weight: 850;
   line-height: 1.15;
 }
@@ -8227,7 +8192,7 @@ button.database-tree-item {
 .crypto-tool-intro p {
   margin: 0;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: var(--font-sm);
   font-weight: 650;
   line-height: 1.35;
 }
@@ -8271,7 +8236,7 @@ button.database-tree-item {
   min-width: 0;
   overflow: hidden;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 820;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8299,7 +8264,7 @@ button.database-tree-item {
   height: 34px;
   padding: 0 11px;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -8320,7 +8285,7 @@ button.database-tree-item {
   height: 30px;
   padding: 0 10px;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 800;
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -8413,7 +8378,7 @@ button.database-tree-item {
   min-height: 140px;
   padding: 16px;
   color: var(--error);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 760;
   background: var(--terminal-bg);
 }
@@ -8441,7 +8406,7 @@ button.database-tree-item {
   margin-left: 4px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 740;
   white-space: nowrap;
 }
@@ -8503,7 +8468,7 @@ button.database-tree-item {
   max-width: 100%;
   overflow: hidden;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 840;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8512,7 +8477,7 @@ button.database-tree-item {
 .conversion-file-preview span {
   max-width: 100%;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 730;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -8615,7 +8580,7 @@ button.database-tree-item {
   gap: 7px;
   height: 34px;
   padding: 0 12px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 850;
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -8632,7 +8597,7 @@ button.database-tree-item {
   width: 100%;
   min-width: 0;
   height: 34px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 850;
 }
 
@@ -8672,7 +8637,7 @@ button.database-tree-item {
   padding: 8px 12px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 760;
 }
 
@@ -8683,7 +8648,7 @@ button.database-tree-item {
 
 .api-environment-strip b {
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .api-environment-strip code {
@@ -8692,7 +8657,7 @@ button.database-tree-item {
   overflow: hidden;
   color: var(--nav-text);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: var(--font-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
   background: var(--subtle-bg);
@@ -8757,7 +8722,7 @@ button.database-tree-item {
   height: 38px;
   padding: 0 14px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 780;
   background: transparent;
   border: 0;
@@ -8796,7 +8761,7 @@ button.database-tree-item {
   min-width: 720px;
   border-collapse: collapse;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .api-param-table th,
@@ -8909,7 +8874,7 @@ button.database-tree-item {
   height: 30px;
   padding: 0 12px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 820;
   background: transparent;
   border: 1px solid transparent;
@@ -8972,13 +8937,13 @@ button.database-tree-item {
 
 .api-media-upload-card strong {
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 850;
 }
 
 .api-media-upload-card span {
   margin-top: 3px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 720;
 }
 
@@ -8990,7 +8955,7 @@ button.database-tree-item {
   display: grid;
   gap: 7px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
 }
 
@@ -9017,7 +8982,7 @@ button.database-tree-item {
 
 .api-media-fields-title {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 850;
 }
 
@@ -9031,7 +8996,7 @@ button.database-tree-item {
   display: grid;
   gap: 7px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
 }
 
@@ -9056,7 +9021,7 @@ button.database-tree-item {
   padding: 8px 10px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 720;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -9116,7 +9081,7 @@ button.database-tree-item {
   padding: 0 8px;
   color: var(--accent);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   background: var(--accent-soft);
   border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
@@ -9226,7 +9191,7 @@ button.database-tree-item {
 .api-history-preview-header > span {
   margin: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 850;
 }
 
@@ -9236,7 +9201,7 @@ button.database-tree-item {
 }
 
 .api-history-detail-section .panel-header h2 {
-  font-size: 14px;
+  font-size: var(--font-lg);
   line-height: 1.15;
 }
 
@@ -9271,7 +9236,7 @@ button.database-tree-item {
 .api-history-detail-notice,
 .api-history-detail-empty {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 760;
 }
 
@@ -9308,19 +9273,20 @@ button.database-tree-item {
 
 .api-history-detail-headers-scroll {
   min-width: 0;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   border: 1px solid var(--border);
   border-radius: 7px;
 }
 
 .api-history-detail-headers {
-  width: 100%;
-  min-width: 0;
-  table-layout: fixed;
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
 }
 
 .api-history-header-name-col {
-  width: fit-content;
+  width: 1%;
 }
 
 .api-history-header-value-col {
@@ -9334,7 +9300,9 @@ button.database-tree-item {
 
 .api-history-detail-headers th:first-child,
 .api-history-detail-headers td:first-child {
-  width: 200px;
+  width: 1%;
+  overflow: visible;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -9428,7 +9396,7 @@ button.database-tree-item {
 
 .api-history-preview-header > span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 780;
 }
 
@@ -9460,7 +9428,7 @@ button.database-tree-item {
 
 .api-history-body-table th {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   text-transform: uppercase;
 }
@@ -9501,7 +9469,7 @@ button.database-tree-item {
 .api-response-header h2 {
   margin: 0 0 6px;
   color: var(--text);
-  font-size: 15px;
+  font-size: var(--font-lg);
   line-height: 1.1;
 }
 
@@ -9518,7 +9486,7 @@ button.database-tree-item {
   height: 22px;
   padding: 0 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -9589,7 +9557,7 @@ button.database-tree-item {
   padding: 16px;
   color: var(--muted);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 760;
 }
 
@@ -9652,7 +9620,7 @@ button.database-tree-item {
   table-layout: fixed;
   border-collapse: collapse;
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .database-row-comparison-column-col {
@@ -9744,7 +9712,7 @@ button.database-tree-item {
   height: 24px;
   padding: 0 9px;
   color: inherit;
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 850;
   background: rgba(255, 255, 255, 0.42);
   border: 1px solid currentColor;
@@ -9780,7 +9748,7 @@ button.database-tree-item {
 .database-connection-section-title {
   margin: 0;
   color: var(--accent);
-  font-size: 14px;
+  font-size: var(--font-lg);
   font-weight: 850;
   letter-spacing: 0;
 }
@@ -9801,7 +9769,7 @@ button.database-tree-item {
   gap: 7px;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
 }
 
@@ -9809,7 +9777,7 @@ button.database-tree-item {
 .database-connection-field select,
 .database-connection-field .custom-select-trigger {
   width: 100%;
-  height: var(--control-md);
+  min-height: var(--control-md);
   padding: 0 10px;
   color: var(--text);
   font: inherit;
@@ -9876,7 +9844,7 @@ button.database-tree-item {
 
 .database-connection-field strong {
   color: var(--error);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
 }
 
@@ -9887,7 +9855,7 @@ button.database-tree-item {
   align-self: end;
   min-height: var(--control-md);
   color: var(--nav-text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
 }
 
@@ -9899,7 +9867,7 @@ button.database-tree-item {
   margin: 0;
   padding: 0 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -9940,7 +9908,7 @@ button.database-tree-item {
 
 .database-delete-connection-button {
   order: -1;
-  height: var(--control-md);
+  min-height: var(--control-md);
 }
 
 .database-tree-button,
@@ -9954,13 +9922,13 @@ button.database-tree-item {
   color: var(--muted);
   opacity: 0.4;
   font-weight: lighter;
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .database-tree-button .database-column-count {
   color: var(--muted);
   opacity: 0.5;
-  font-size: 11px;
+  font-size: var(--font-xs);
 }
 
 .database-tree-button .open,
@@ -10038,7 +10006,7 @@ button.database-tree-item {
   max-width: 100%;
   overflow: hidden;
   color: var(--nav-text);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 700;
   background: var(--subtle-bg);
   border: 1px solid var(--border);
@@ -10112,7 +10080,7 @@ button.database-tree-item {
   min-width: 0;
   padding: 0 28px 0 12px;
   color: inherit;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   text-align: left;
   background: transparent;
@@ -10224,7 +10192,7 @@ button.database-tree-item {
   margin: 0;
   overflow: auto;
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 650;
   line-height: 1.55;
   tab-size: 2;
@@ -10311,7 +10279,7 @@ button.database-tree-item {
 
 .database-sheet-save-status {
   color: var(--muted);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 800;
   white-space: nowrap;
 }
@@ -10372,7 +10340,7 @@ button.database-tree-item {
   padding: 0 10px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10403,7 +10371,7 @@ button.database-tree-item {
   min-height: 40px;
   padding: 8px 10px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   border-top: 1px solid var(--border);
   user-select: none;
@@ -10437,14 +10405,14 @@ button.database-tree-item {
 .database-page-size-select .custom-select-trigger {
   min-width: 92px;
   height: 28px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
 }
 
 .database-pagination-controls select {
   height: 28px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 700;
   background: var(--field-bg);
   border: 1px solid var(--border);
@@ -10609,12 +10577,12 @@ button.database-tree-item {
 
 .app-shell[data-font-size] .header-settings-button {
   width: calc(var(--control-lg) + 2px);
-  height: calc(var(--control-lg) + 2px);
+  min-height: calc(var(--control-lg) + 2px);
 }
 
 .app-shell[data-font-size] .build-dropdown-menu button {
-  height: calc(var(--control-md) + 2px);
-  line-height: calc(var(--control-md) + 2px);
+  min-height: calc(var(--control-md) + 2px);
+  line-height: 1.25;
 }
 
 .app-shell[data-font-size] .settings-field-row input,
@@ -10625,17 +10593,16 @@ button.database-tree-item {
 .app-shell[data-font-size] .build-profiles-table input:not([type]),
 .app-shell[data-font-size] .build-profiles-table select,
 .app-shell[data-font-size] .build-profiles-table .custom-select-trigger {
-  height: var(--control-md);
-  line-height: var(--control-md);
+  min-height: var(--control-md);
+  line-height: 1.25;
 }
 
 .app-shell[data-font-size] .tabs {
-  height: calc(var(--control-md) + 4px);
+  min-height: calc(var(--control-md) + 4px);
 }
 
 .app-shell[data-font-size] .tab,
 .app-shell[data-font-size] .settings-tab {
-  height: calc(var(--control-md) + 2px);
   min-height: calc(var(--control-md) + 2px);
 }
 
@@ -10668,7 +10635,7 @@ button.database-tree-item {
   gap: 8px;
   padding-top: 16px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .settings-footer-row {
@@ -10714,7 +10681,7 @@ button.database-tree-item {
   max-width: 480px;
   padding: 9px 14px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1.6;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
   animation: snackbar-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -10727,21 +10694,21 @@ button.database-tree-item {
 }
 
 .validation-banner.valid {
-  color: #22543d;
-  background: #c6f6d5;
-  border: 1px solid #9ae6b4;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--success) 42%, var(--border));
 }
 
 [data-theme="dark"] .validation-banner.valid {
-  color: #9ae6b4;
-  background: rgba(74, 222, 128, 0.12);
-  border-color: rgba(74, 222, 128, 0.3);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
 }
 
 .validation-banner.invalid {
-  color: #742a2a;
-  background: #fff5f5;
-  border: 1px solid #fc8181;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--error) 42%, var(--border));
 }
 
 .app-snackbar {
@@ -10753,7 +10720,7 @@ button.database-tree-item {
   max-width: min(520px, calc(100vw - 48px));
   padding: 10px 15px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   line-height: 1.5;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
@@ -10766,21 +10733,21 @@ button.database-tree-item {
 }
 
 .app-snackbar.valid {
-  color: #22543d;
-  background: #c6f6d5;
-  border: 1px solid #9ae6b4;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--success) 42%, var(--border));
 }
 
 .app-snackbar.invalid {
-  color: #742a2a;
-  background: #fff5f5;
-  border: 1px solid #fc8181;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--error) 42%, var(--border));
 }
 
 .app-snackbar.warning {
-  color: #713f12;
-  background: #fffbeb;
-  border: 1px solid #fbbf24;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 42%, var(--border));
 }
 
 .build-mini-dock {
@@ -10841,7 +10808,7 @@ button.database-tree-item {
 }
 
 .build-mini-restore.running {
-  --build-mini-restore-color: var(--accent);
+  --build-mini-restore-color: var(--info);
 }
 
 .build-mini-restore.success {
@@ -10898,7 +10865,7 @@ button.database-tree-item {
 .build-mini-header h2 {
   margin: 0;
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--font-lg);
   line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10908,7 +10875,7 @@ button.database-tree-item {
   margin: 3px 0 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -10965,9 +10932,9 @@ button.database-tree-item {
 .build-mini-item-status {
   width: 9px;
   height: 9px;
-  background: var(--accent);
+  background: var(--info);
   border-radius: 999px;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--info) 14%, transparent);
 }
 
 .build-mini-item-status.running {
@@ -11002,7 +10969,7 @@ button.database-tree-item {
 .build-mini-item-copy strong,
 .build-mini-item-meta strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 850;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -11012,7 +10979,7 @@ button.database-tree-item {
 .build-mini-item-meta span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: var(--font-xs);
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -11048,27 +11015,27 @@ button.database-tree-item {
 }
 
 [data-theme="dark"] .app-snackbar.valid {
-  color: #9ae6b4;
-  background: #1a3d2b;
-  border-color: #2d6a3f;
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border));
 }
 
 [data-theme="dark"] .app-snackbar.invalid {
-  color: #fc8181;
-  background: #3d1515;
-  border-color: #6b2020;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--error) 42%, var(--border));
 }
 
 [data-theme="dark"] .app-snackbar.warning {
-  color: #fde68a;
-  background: #3f2d0c;
-  border-color: #92400e;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border));
 }
 
 [data-theme="dark"] .validation-banner.invalid {
-  color: #fc8181;
-  background: rgba(245, 101, 101, 0.1);
-  border-color: rgba(245, 101, 101, 0.3);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--error) 42%, var(--border));
 }
 
 .danger-button {
@@ -11078,7 +11045,7 @@ button.database-tree-item {
   height: 40px;
   padding: 0 16px;
   color: #ffffff;
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 750;
   background: #b45353;
   border: 1px solid #b45353;
@@ -11163,14 +11130,14 @@ button.database-tree-item {
 .confirm-dialog h2 {
   margin: 0 0 7px;
   color: var(--text);
-  font-size: 17px;
+  font-size: var(--font-xl);
   line-height: 1.2;
 }
 
 .confirm-dialog p {
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--font-lg);
   line-height: 1.45;
 }
 
@@ -11190,13 +11157,13 @@ button.database-tree-item {
   gap: 12px;
   align-items: baseline;
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-md);
   line-height: 1.3;
 }
 
 .confirm-dialog-detail-row span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
 }
 
@@ -11211,7 +11178,7 @@ button.database-tree-item {
   grid-template-columns: 82px minmax(0, 1fr);
   gap: 12px;
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-sm);
   line-height: 1.35;
 }
 
@@ -11256,7 +11223,7 @@ button.database-tree-item {
   height: 34px;
   padding: 0 14px;
   color: #ffffff;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   background: #dc2626;
   border: 1px solid #b91c1c;
@@ -11278,7 +11245,7 @@ button.database-tree-item {
   height: 34px;
   padding: 0 14px;
   color: #ffffff;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 750;
   background: #d97706;
   border: 1px solid #b45309;
@@ -11371,7 +11338,7 @@ button.database-tree-item {
 
 .shutdown-dialog h2 {
   margin: 0 0 20px;
-  font-size: 18px;
+  font-size: var(--font-xl);
   font-weight: 700;
 }
 
@@ -11406,13 +11373,13 @@ button.database-tree-item {
 }
 
 .shutdown-service-label strong {
-  font-size: 14px;
+  font-size: var(--font-lg);
   font-weight: 700;
 }
 
 .shutdown-service-label span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--font-sm);
 }
 
 .shutdown-service-status {
@@ -11420,7 +11387,7 @@ button.database-tree-item {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .shutdown-service-item.stopped .shutdown-service-status {
@@ -11440,7 +11407,7 @@ button.database-tree-item {
 
 .add-project-dialog h2 {
   margin: 0 0 22px;
-  font-size: 20px;
+  font-size: var(--font-title);
 }
 
 .add-project-dialog label {
@@ -11449,7 +11416,7 @@ button.database-tree-item {
   align-items: center;
   gap: 12px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 700;
 }
 
@@ -11466,7 +11433,7 @@ button.database-tree-item {
 .add-project-dialog p {
   margin: 18px 0 16px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--font-md);
 }
 
 .dialog-actions {

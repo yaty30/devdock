@@ -903,15 +903,19 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
 function statusPill(state: string | undefined): JSX.Element {
   const normalized = state ?? "unknown";
   const statusClass =
-    normalized === "running" || normalized === "success"
+    normalized === "success"
       ? "success"
-      : normalized === "starting"
-        ? "starting"
-        : normalized === "stopping"
-          ? "stopping"
-          : normalized === "stopped"
-            ? "stopped"
-            : "failed";
+      : normalized === "running"
+        ? "running"
+        : normalized === "starting"
+          ? "starting"
+          : normalized === "stopping"
+            ? "stopping"
+            : normalized === "stopped"
+              ? "stopped"
+              : normalized === "failed" || normalized === "error"
+                ? "failed"
+                : "idle";
   const text =
     normalized === "running"
       ? "Running"

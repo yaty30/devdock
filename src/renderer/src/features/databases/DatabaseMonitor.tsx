@@ -195,6 +195,6 @@ export function StatusPill({
       ? "success"
       : status === "error"
         ? "failed"
-        : "stopped";
+        : "warning";
   return <span className={`status-pill ${className}`}>{label}</span>;
 }

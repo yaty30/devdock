@@ -1486,7 +1486,11 @@ export class DashboardBackend {
       projectId,
       title,
       `Build #${rowId} - ${statusLabel}`,
-      result === "success" ? "success" : "error",
+      result === "success"
+        ? "success"
+        : result === "stopped"
+          ? "neutral"
+          : "failed",
       "build",
     );
     this.pruneBuilds(projectId);
@@ -1567,7 +1571,7 @@ export class DashboardBackend {
         if (!runningProcess && isRecentStartFailureStatus(previousStatus)) {
           const status = this.statusRecord(
             service,
-            "error",
+            "failed",
             previousStatus?.message ?? "Service failed to start",
             config.healthUrl,
             normalizeOptionalDate(previousStatus?.startedAt),
@@ -1625,7 +1629,7 @@ export class DashboardBackend {
             : stillStarting
               ? "starting"
               : runningProcess
-                ? "error"
+                ? "failed"
                 : "stopped",
           message:
             service === "wildfly" && reachable && !canReportRunning
@@ -2167,7 +2171,7 @@ export class DashboardBackend {
     if (runningServiceCount >= MAX_RUNNING_SERVICES) {
       const status = this.statusRecord(
         service,
-        "error",
+        "failed",
         RUNNING_SERVER_LIMIT_MESSAGE,
         config.healthUrl,
       );
@@ -2179,7 +2183,7 @@ export class DashboardBackend {
     if (!config.workingDirectory || !existsSync(config.workingDirectory)) {
       const status = this.statusRecord(
         service,
-        "error",
+        "failed",
         `Working directory does not exist: ${config.workingDirectory}`,
         config.healthUrl,
       );
@@ -2190,7 +2194,7 @@ export class DashboardBackend {
     if (!config.command.trim()) {
       const status = this.statusRecord(
         service,
-        "error",
+        "failed",
         "No command configured",
         config.healthUrl,
       );
@@ -2230,7 +2234,7 @@ export class DashboardBackend {
       if (!serviceProcess.stopRequested) {
         const status = this.statusRecord(
           service,
-          code === 0 ? "stopped" : "error",
+          code === 0 ? "stopped" : "failed",
           `Process exited with code ${code ?? "unknown"}`,
           config.healthUrl,
           serviceProcess.startedAt,
@@ -2253,7 +2257,7 @@ export class DashboardBackend {
           projectId,
           this.statusRecord(
             service,
-            "error",
+            "failed",
             message,
             config.healthUrl,
             serviceProcess.startedAt,
@@ -3292,7 +3296,7 @@ function hasRecentServiceStartupSignal(processState: ServiceProcess): boolean {
 function isRecentStartFailureStatus(
   status: ServiceStatusRecord | undefined,
 ): boolean {
-  if (status?.state !== "error") {
+  if (status?.state !== "failed") {
     return false;
   }
 
@@ -4104,7 +4108,7 @@ function settingsActivityEntries(
       add(
         "Build profile deleted",
         `Profile "${profileDisplayName(profile)}" deleted`,
-        "error",
+        "failed",
       );
     }
   }
