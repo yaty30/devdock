@@ -114,7 +114,7 @@ const FONT_SIZE_OPTIONS: Array<{ value: FontSizeMode; label: string }> = [
   { value: "small", label: "Small" },
 ];
 
-function FontSizeDropdown({
+export function FontSizeDropdown({
   value,
   onChange,
   disabled = false,

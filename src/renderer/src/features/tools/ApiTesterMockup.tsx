@@ -7,6 +7,8 @@ import {
   type CSSProperties,
   type PointerEvent,
 } from "react";
+import { Modal } from "../../components/dialogs/Modal";
+
 import {
   AlertCircle,
   ArrowLeftRight,
@@ -25,6 +27,7 @@ import {
   Trash2,
   X,
   BrushCleaning,
+  Cookie,
 } from "lucide-react";
 import {
   AppSelect,
@@ -90,6 +93,12 @@ type ApiKeyValueRow = {
   enabled: boolean;
 };
 
+export type ApiTesterCookieEntry = {
+  id: string;
+  name: string;
+  value: string;
+};
+
 type SavedApiTesterRequest = {
   method: ApiMethod;
   url: string;
@@ -143,6 +152,7 @@ const API_TESTER_HISTORY_DETAIL_STORAGE_PREFIX =
   "ivs-dashboard-api-tester-history-detail:";
 const API_TESTER_HISTORY_COLUMN_WIDTHS_STORAGE_KEY =
   "ivs-dashboard-api-tester-history-column-widths";
+const API_TESTER_COOKIES_STORAGE_KEY = "ivs-dashboard-api-tester-cookies";
 const API_TESTER_HISTORY_LIMIT = 250;
 const API_TESTER_BODY_PREVIEW_LIMIT_BYTES = 100 * 1024;
 const API_TESTER_SEND_EVENT = "api-tester:send";
@@ -346,6 +356,16 @@ export function ApiTesterMockup({
           ...snapshot,
           body: requestBody?.textPreview ?? snapshot.body,
         };
+        const cookieEntries = readStoredCookies(storageScopeId);
+        const activeCookieEntries = cookieEntries.filter((c) => c.name.trim());
+        if (
+          activeCookieEntries.length > 0 &&
+          !Object.keys(requestHeaders).some((k) => k.toLowerCase() === "cookie")
+        ) {
+          requestHeaders.Cookie = activeCookieEntries
+            .map((c) => `${c.name.trim()}=${c.value}`)
+            .join("; ");
+        }
         const nextResponse = await sendApiTesterRequest({
           method: snapshot.method,
           url: requestUrl,
@@ -406,7 +426,7 @@ export function ApiTesterMockup({
         setIsSending(false);
       }
     },
-    [writeHistory],
+    [storageScopeId, writeHistory],
   );
 
   const sendRequest = useCallback(async (): Promise<void> => {
@@ -697,14 +717,6 @@ export function ApiTesterMockup({
             onClick={clearRequest}
           >
             <Eraser size={15} />
-          </button>
-          <button
-            className="icon-button secondary"
-            type="button"
-            title="Auth settings"
-            onClick={() => setActiveBuilderTab("Auth")}
-          >
-            <Settings size={15} />
           </button>
         </div>
       </div>
@@ -1613,7 +1625,9 @@ function HistoryBodyTable({
           {rows.map((row) => (
             <tr key={`${row.key}-${row.value}`}>
               <td>{row.key}</td>
-              <td>{row.value}</td>
+              <td>
+                <div className="api-history-body-value-scroll">{row.value}</div>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -1825,6 +1839,246 @@ function ResponseCookiesTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+export function ApiTesterCookieButton({
+  storageScopeId,
+  onClick,
+}: {
+  storageScopeId: string;
+  onClick: () => void;
+}): JSX.Element {
+  const activeCookies = readStoredCookies(storageScopeId).filter((c) =>
+    c.name.trim(),
+  );
+
+  return (
+    <button
+      className="icon-button secondary header-settings-button api-cookie-trigger"
+      type="button"
+      aria-label="Cookie settings"
+      title={
+        activeCookies.length > 0
+          ? `Cookies (${activeCookies.length} active)`
+          : "Cookie settings"
+      }
+      onClick={onClick}
+    >
+      <Cookie size={18} />
+      {activeCookies.length > 0 ? (
+        <span className="api-cookie-badge">{activeCookies.length}</span>
+      ) : null}
+    </button>
+  );
+}
+
+export function ApiTesterCookieModal({
+  open,
+  storageScopeId,
+  onClose,
+}: {
+  open: boolean;
+  storageScopeId: string;
+  onClose: () => void;
+}): JSX.Element {
+  const [cookies, setCookies] = useState<ApiTesterCookieEntry[]>(() =>
+    readStoredCookies(storageScopeId),
+  );
+
+  useEffect(() => {
+    if (open) {
+      setCookies(readStoredCookies(storageScopeId));
+    }
+  }, [open, storageScopeId]);
+
+  function save(): void {
+    writeStoredCookies(storageScopeId, cookies);
+    onClose();
+  }
+
+  function updateCookie(
+    id: string,
+    field: "name" | "value",
+    value: string,
+  ): void {
+    setCookies((current) =>
+      current.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
+    );
+  }
+
+  function removeCookie(id: string): void {
+    setCookies((current) => current.filter((c) => c.id !== id));
+  }
+
+  function addCookie(): void {
+    setCookies((current) => [
+      ...current,
+      { id: createCookieEntryId(), name: "", value: "" },
+    ]);
+  }
+
+  return (
+    <Modal
+      open={open}
+      title="Cookie Settings"
+      subtitle="API Tester"
+      size="md"
+      className="api-cookie-modal"
+      contentClassName="api-cookie-modal-content"
+      closeLabel="Close cookie settings"
+      onClose={onClose}
+    >
+      <div className="database-connection-form">
+        <section className="database-connection-section">
+          <Panel
+            title="Request Cookies"
+            titleMeta={
+              <span className="api-cookie-count-badge">
+                {cookies.length}
+              </span>
+            }
+            action={
+              <button
+                className="icon-button primary"
+                type="button"
+                aria-label="Add cookie"
+                title="Add cookie"
+                onClick={addCookie}
+              >
+                <Plus size={16} />
+              </button>
+            }
+            className="api-cookie-panel-section"
+          >
+            <div className="api-cookie-table-wrap">
+              <table className="api-cookie-table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Value</th>
+                    <th aria-label="Actions" />
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {cookies.length === 0 ? (
+                    <tr>
+                      <td colSpan={3} className="api-cookie-table-empty">
+                        No cookies yet. Use the + button to add one.
+                      </td>
+                    </tr>
+                  ) : null}
+
+                  {cookies.map((cookie) => (
+                    <tr key={cookie.id}>
+                      <td>
+                        <input
+                          type="text"
+                          placeholder="session_id"
+                          value={cookie.name}
+                          aria-label="Cookie name"
+                          onChange={(event) =>
+                            updateCookie(cookie.id, "name", event.target.value)
+                          }
+                        />
+                      </td>
+
+                      <td>
+                        <input
+                          type="text"
+                          placeholder="abc123"
+                          value={cookie.value}
+                          aria-label="Cookie value"
+                          onChange={(event) =>
+                            updateCookie(cookie.id, "value", event.target.value)
+                          }
+                        />
+                      </td>
+
+                      <td className="api-cookie-table-remove-col">
+                        <button
+                          className="icon-button danger"
+                          type="button"
+                          aria-label="Remove cookie"
+                          title="Remove cookie"
+                          onClick={() => removeCookie(cookie.id)}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+        </section>
+
+        <div className="dialog-actions">
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            className="button primary compact"
+            type="button"
+            onClick={save}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function createCookieEntryId(): string {
+  return `api-cookie-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function cookiesStorageKey(scopeId: string): string {
+  return `${API_TESTER_COOKIES_STORAGE_KEY}:${sanitizeStorageScope(scopeId)}`;
+}
+
+function readStoredCookies(scopeId: string): ApiTesterCookieEntry[] {
+  try {
+    const raw = window.localStorage.getItem(cookiesStorageKey(scopeId));
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.filter(isApiTesterCookieEntry);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredCookies(
+  scopeId: string,
+  cookies: ApiTesterCookieEntry[],
+): void {
+  window.localStorage.setItem(
+    cookiesStorageKey(scopeId),
+    JSON.stringify(cookies),
+  );
+}
+
+function isApiTesterCookieEntry(value: unknown): value is ApiTesterCookieEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const entry = value as Partial<ApiTesterCookieEntry>;
+  return (
+    typeof entry.id === "string" &&
+    typeof entry.name === "string" &&
+    typeof entry.value === "string"
   );
 }
 
@@ -2167,7 +2421,10 @@ function maskHeaders(
 ): ApiTesterResponseHeader[] {
   return headers.map((header) => ({
     name: header.name,
-    value: isSensitiveHeader(header.name) ? "[masked]" : header.value,
+    value: isSensitiveHeader(header.name)
+      ? // "[masked]"
+        header.value
+      : header.value,
   }));
 }
 

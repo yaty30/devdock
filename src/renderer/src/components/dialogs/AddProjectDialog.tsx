@@ -70,8 +70,8 @@ export function AddProjectDialog({
               autoFocus
               type="text"
               value={projectName}
-              maxLength={20}
-              placeholder="Maximum 20 characters, e.g. Project IAP"
+              maxLength={16}
+              placeholder="Maximum 16 characters, e.g. Project IAP"
               onChange={(event) => setProjectName(event.target.value)}
             />
           </label>

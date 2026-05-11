@@ -1,6 +1,6 @@
 {
   "name": "ivs-dashboard-electron",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "description": "Static Electron React TypeScript prototype for an IVS Dashboard.",
   "main": "build/main/index.js",
   "productName": "IVS Dashboard",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "rebuild:native": "npm rebuild better-sqlite3 --runtime=electron --target=33.4.11 --dist-url=https://electronjs.org/headers",
     "build": "npm run typecheck && electron-vite build",
-    "preview": "node scripts/preview.cjs",
+    "preview": "node scripts/p`review.cjs",
     "start": "node scripts/start.cjs",
     "package": "npm run build && electron-forge package",
     "make": "npm run build && electron-forge make",

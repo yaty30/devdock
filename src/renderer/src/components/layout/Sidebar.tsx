@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   BarChart3,
+  Binary,
   Boxes,
   ChevronDown,
   Database,
@@ -17,10 +18,12 @@ import {
   Wrench,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
+import { Tooltip } from "../common/Tooltip";
 import type {
   AppSection,
   DatabaseConnection,
   Project,
+  ServiceStatusRecord,
   Theme,
   ToolId,
 } from "../../types";
@@ -34,6 +37,7 @@ export function Sidebar({
   activeTool,
   theme,
   collapsed,
+  projectStatuses = {},
   onProjectChange,
   onDatabaseConnectionChange,
   onDatabaseConnect,
@@ -53,6 +57,7 @@ export function Sidebar({
   activeTool: ToolId;
   theme: Theme;
   collapsed: boolean;
+  projectStatuses?: Record<string, ServiceStatusRecord[]>;
   onProjectChange: (project: Project) => void;
   onDatabaseConnectionChange: (connection: DatabaseConnection) => void;
   onDatabaseConnect: (connection: DatabaseConnection) => void;
@@ -142,20 +147,42 @@ export function Sidebar({
           aria-hidden={!collapsed && !projectsOpen}
         >
           {projects.map((project) => (
-            <button
-              className={`project-item${
-                activeSection === "project" && project.id === selectedProjectId
-                  ? " active"
-                  : ""
-              }`}
-              type="button"
+            <Tooltip
               key={project.id}
-              tabIndex={projectsOpen || collapsed ? 0 : -1}
-              onClick={() => onProjectChange(project)}
+              className="project-tooltip-anchor"
+              placement="right"
+              content={
+                <ServiceStatusTooltip statuses={projectStatuses[project.id]} />
+              }
             >
-              <span className="project-code">{project.code}</span>
-              <span>{project.name}</span>
-            </button>
+              <button
+                className={`project-item${
+                  activeSection === "project" &&
+                  project.id === selectedProjectId
+                    ? " active"
+                    : ""
+                }`}
+                type="button"
+                tabIndex={projectsOpen || collapsed ? 0 : -1}
+                onClick={() => onProjectChange(project)}
+              >
+                <div className="project-info">
+                  <span className="project-code">{project.code}</span>
+                  <span className="project-name">{project.name}</span>
+
+                  <div className="project-service-dots">
+                    <div className="project-service-dots dots">
+                      <span
+                        className={`project-service-dot ${getServiceState(projectStatuses[project.id], "frontend")}`}
+                      />
+                      <span
+                        className={`project-service-dot ${getServiceState(projectStatuses[project.id], "wildfly")}`}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </button>
+            </Tooltip>
           ))}
           <button
             className="project-item add-project-item"
@@ -282,13 +309,13 @@ export function Sidebar({
             }
           }}
           aria-expanded={collapsed ? false : toolsOpen}
-          aria-label="Tools (2)"
-          title="Tools (2)"
+          aria-label="Tools (3)"
+          title="Tools (3)"
         >
           <Wrench size={18} />
           <span className="nav-label project-nav-label">
             <span>Tools</span>
-            <span className="project-count-badge">2</span>
+            <span className="project-count-badge">3</span>
           </span>
           {!collapsed ? <ChevronDown className="chevron" size={16} /> : null}
         </button>
@@ -327,6 +354,20 @@ export function Sidebar({
             <FlaskConical size={16} />
             <span>API Tester</span>
           </button>
+          <button
+            className={`project-item tool-item${
+              activeSection === "tools" && activeTool === "cryptographic"
+                ? " active"
+                : ""
+            }`}
+            type="button"
+            tabIndex={toolsOpen || collapsed ? 0 : -1}
+            onClick={() => onToolChange("cryptographic")}
+            title="Cryptographic"
+          >
+            <Binary size={16} />
+            <span>Cryptographic</span>
+          </button>
 
           {collapsed ? (
             <>
@@ -355,6 +396,19 @@ export function Sidebar({
                 title="API Tester"
               >
                 <FlaskConical size={18} />
+              </button>
+              <button
+                className={`nav-item add-project-collapsed-btn${
+                  activeSection === "tools" && activeTool === "cryptographic"
+                    ? " active"
+                    : ""
+                }`}
+                type="button"
+                onClick={() => onToolChange("cryptographic")}
+                aria-label="Cryptographic"
+                title="Cryptographic"
+              >
+                <Binary size={18} />
               </button>
             </>
           ) : null}
@@ -464,4 +518,36 @@ function formatDatabaseConnectionTooltip(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function getServiceState(
+  statuses: ServiceStatusRecord[] | undefined,
+  service: "frontend" | "wildfly",
+): string {
+  return statuses?.find((s) => s.service === service)?.state ?? "unknown";
+}
+
+function ServiceStatusTooltip({
+  statuses,
+}: {
+  statuses: ServiceStatusRecord[] | undefined;
+}): JSX.Element {
+  const frontendState = getServiceState(statuses, "frontend");
+  const wildflyState = getServiceState(statuses, "wildfly");
+  return (
+    <span className="service-status-tooltip">
+      <span className="service-status-tooltip-row">
+        <span className="service-status-tooltip-label">Frontend</span>
+        <span className={`service-status-tooltip-state ${frontendState}`}>
+          {frontendState}
+        </span>
+      </span>
+      <span className="service-status-tooltip-row">
+        <span className="service-status-tooltip-label">Backend</span>
+        <span className={`service-status-tooltip-state ${wildflyState}`}>
+          {wildflyState}
+        </span>
+      </span>
+    </span>
+  );
 }

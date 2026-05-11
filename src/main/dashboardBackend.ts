@@ -3868,8 +3868,8 @@ function validateProjectIdentity(name: string, code: string): string[] {
   const errors: string[] = [];
   if (!name) {
     errors.push("Project name is required");
-  } else if (name.length > 20) {
-    errors.push("Project name must be 20 characters or fewer");
+  } else if (name.length > 16) {
+    errors.push("Project name must be 16 characters or fewer");
   }
 
   if (!code) {

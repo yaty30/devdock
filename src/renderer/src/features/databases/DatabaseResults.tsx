@@ -9,7 +9,9 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ArrowDownAZ,
   ArrowLeftRight,
+  ArrowUpAZ,
   Braces,
   ChevronDown,
   ChevronRight,
@@ -735,6 +737,21 @@ function ResultRowDetails({
   metadataTables: DatabaseTable[];
 }): JSX.Element {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [columnSortDirection, setColumnSortDirection] = useState<
+    "original" | "asc" | "desc"
+  >("original");
+  const sortedColumns = useMemo(() => {
+    if (columnSortDirection === "original") {
+      return columns;
+    }
+    return [...columns].sort((left, right) => {
+      const result = left.label.localeCompare(right.label, undefined, {
+        sensitivity: "base",
+        numeric: true,
+      });
+      return columnSortDirection === "asc" ? result : -result;
+    });
+  }, [columnSortDirection, columns]);
 
   function copyValue(columnKey: string, value: DatabaseQueryValue): void {
     void navigator.clipboard
@@ -764,7 +781,31 @@ function ResultRowDetails({
         </colgroup>
         <thead>
           <tr>
-            <th>Column</th>
+            <th>
+              <button
+                className="database-detail-sort-button"
+                type="button"
+                aria-label={getColumnSortLabel(columnSortDirection)}
+                title={getColumnSortLabel(columnSortDirection)}
+                onClick={() =>
+                  setColumnSortDirection((current) =>
+                    current === "original"
+                      ? "asc"
+                      : current === "asc"
+                        ? "desc"
+                        : "original",
+                  )
+                }
+              >
+                <span>Column</span>
+                {columnSortDirection ===
+                "original" ? null : columnSortDirection === "asc" ? (
+                  <ArrowDownAZ size={13} />
+                ) : (
+                  <ArrowUpAZ size={13} />
+                )}
+              </button>
+            </th>
             <th>Value</th>
             <th>Type</th>
             <th>Nullable</th>
@@ -772,7 +813,7 @@ function ResultRowDetails({
           </tr>
         </thead>
         <tbody>
-          {columns.map((column) => {
+          {sortedColumns.map((column) => {
             const metadata = resolveResultColumnMetadata(
               column,
               metadataTables,
@@ -806,6 +847,17 @@ function ResultRowDetails({
     </div>
   );
 }
+
+function getColumnSortLabel(direction: "original" | "asc" | "desc"): string {
+  if (direction === "original") {
+    return "Sort columns by name ascending";
+  }
+  if (direction === "asc") {
+    return "Sort columns by name descending";
+  }
+  return "Restore original column order";
+}
+
 function ResultRowComparison({
   compare,
   columns,

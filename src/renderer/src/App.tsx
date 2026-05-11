@@ -12,6 +12,7 @@ import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
 import {
+  FontSizeDropdown,
   HeaderActions,
   HeaderUtilityActions,
 } from "./components/layout/HeaderActions";
@@ -30,8 +31,13 @@ import { GitTerminalTab } from "./features/git/GitTerminalTab";
 import { MonitorTab } from "./features/monitor/MonitorTab";
 import { NotesTab } from "./features/notes/NotesTab";
 import { SettingsContent } from "./features/settings/SettingsContent";
-import { ApiTesterMockup } from "./features/tools/ApiTesterMockup";
+import {
+  ApiTesterCookieButton,
+  ApiTesterCookieModal,
+  ApiTesterMockup,
+} from "./features/tools/ApiTesterMockup";
 import { CompareTool } from "./features/tools/CompareTool";
+import { CryptographicTool, CryptographicToolTab } from "./features/tools/ConversionTools";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import closeMouthLogo from "./assets/close-mouth-logo.png";
@@ -50,6 +56,7 @@ import type {
   ProjectRecord,
   ProjectRuntimeState,
   RecentBuildRecord,
+  ServiceStatusRecord,
   ShutdownEntry,
   Theme,
   ToolId,
@@ -82,12 +89,15 @@ type DatabaseRuntimeStatus =
   | "reconnecting"
   | "error";
 type ApiTesterView = "test" | "history";
+type CompareView = "compare";
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [activeTool, setActiveTool] = useState<ToolId>("comparing");
   const [apiTesterView, setApiTesterView] = useState<ApiTesterView>("test");
+  const [comparingView, setComparingView] = useState<CompareView>("compare");
+  const [cryptoActiveTab, setCryptoActiveTab] = useState<CryptographicToolTab>("base64");
   const [projects, setProjects] = useState<Project[]>([]);
   const [databaseConnections, setDatabaseConnections] = useState<
     DatabaseConnection[]
@@ -95,6 +105,7 @@ function App(): JSX.Element {
   const [databaseConnectionModal, setDatabaseConnectionModal] = useState<
     "add" | "edit" | null
   >(null);
+  const [cookieModalOpen, setCookieModalOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [selectedDatabaseConnectionId, setSelectedDatabaseConnectionId] =
     useState<string | null>(null);
@@ -466,11 +477,13 @@ function App(): JSX.Element {
 
   useEffect(() => {
     const unsubscribe = window.ivsDashboard.onEvent((event) => {
-      if (
-        event.type === "status" ||
-        event.type === "builds" ||
-        event.type === "settings"
-      ) {
+      if (event.type === "status") {
+        setDashboardOverview((current) =>
+          applyDashboardOverviewStatusEvent(current, event),
+        );
+      }
+
+      if (event.type === "builds" || event.type === "settings") {
         void refreshDashboardOverview();
       }
 
@@ -524,6 +537,11 @@ function App(): JSX.Element {
 
   const activeProjectState =
     projectStateProjectId === selectedProject?.id ? projectState : null;
+  const sidebarProjectStatuses = getSidebarProjectStatuses(
+    dashboardOverview,
+    activeProjectState,
+    selectedProject?.id ?? null,
+  );
   const selectedDatabaseConnection =
     databaseConnections.find(
       (connection) => connection.id === selectedDatabaseConnectionId,
@@ -1037,8 +1055,8 @@ function App(): JSX.Element {
 
     if (!trimmedName) {
       errors.push("Project name is required");
-    } else if (trimmedName.length > 20) {
-      errors.push("Project name must be 20 characters or fewer");
+    } else if (trimmedName.length > 16) {
+      errors.push("Project name must be 16 characters or fewer");
     }
 
     if (!trimmedCode) {
@@ -1161,6 +1179,17 @@ function App(): JSX.Element {
       onConfirm={() => void confirmDeleteDatabaseConnection()}
     />
   ) : null;
+  const cookieModal = (
+    <ApiTesterCookieModal
+      open={cookieModalOpen}
+      storageScopeId={
+        activeSection === "tools" && selectedProject
+          ? selectedProject.id
+          : "global"
+      }
+      onClose={() => setCookieModalOpen(false)}
+    />
+  );
   const chatFeature = chatEnabled ? (
     <ChatFeature onToast={showSnackbar} />
   ) : null;
@@ -1250,17 +1279,16 @@ function App(): JSX.Element {
                 activeView={apiTesterView}
                 onViewChange={setApiTesterView}
               />
-            ) : activeSection === "tools" ? (
-              <div>
-                <h1>
-                  {activeTool === "api-tester" ? "API Tester" : "Comparing"}
-                </h1>
-                <p>
-                  {activeTool === "api-tester"
-                    ? "Simple REST client for testing endpoints and inspecting JSON responses"
-                    : "Compare two files or pasted text."}
-                </p>
-              </div>
+            ) : activeSection === "tools" && activeTool === "comparing" ? (
+              <CompareHeaderTabs
+                activeView={comparingView}
+                onViewChange={setComparingView}
+              />
+            ) : activeSection === "tools" && activeTool === "cryptographic" ? (
+              <CryptographicHeaderTabs
+                activeView={cryptoActiveTab}
+                onViewChange={setCryptoActiveTab}
+              />
             ) : (
               <div>
                 <h1>Overview</h1>
@@ -1281,6 +1309,14 @@ function App(): JSX.Element {
                     Send
                   </button>
                 ) : null}
+                <ApiTesterCookieButton
+                  storageScopeId="global"
+                  onClick={() => setCookieModalOpen(true)}
+                />
+                <FontSizeDropdown
+                  value={fontSizeMode}
+                  onChange={setFontSizeMode}
+                />
                 {chatFeature}
               </div>
             ) : (
@@ -1307,8 +1343,12 @@ function App(): JSX.Element {
                 onViewChange={setApiTesterView}
                 onFeedback={showSnackbar}
               />
-            ) : (
+            ) : activeTool === "comparing" ? (
               <CompareTool />
+            ) : (
+              <CryptographicTool
+                activeTab={cryptoActiveTab}
+              />
             )
           ) : activeSection === "database" ? (
             selectedDatabaseConnection ? (
@@ -1353,6 +1393,7 @@ function App(): JSX.Element {
           />
         ) : null}
         {databaseConnectionDialog}
+        {cookieModal}
         {databaseDeleteDialog}
         {buildMiniPanel}
         {splashOverlay}
@@ -1376,6 +1417,7 @@ function App(): JSX.Element {
         activeTool={activeTool}
         theme={theme}
         collapsed={sidebarCollapsed}
+        projectStatuses={sidebarProjectStatuses}
         onProjectChange={switchProject}
         onDatabaseConnectionChange={switchDatabaseConnection}
         onDatabaseConnect={connectDatabaseConnection}
@@ -1420,7 +1462,17 @@ function App(): JSX.Element {
               activeView={apiTesterView}
               onViewChange={setApiTesterView}
             />
-          ) : activeSection === "tools" ? null : (
+          ) : activeSection === "tools" && activeTool === "comparing" ? (
+            <CompareHeaderTabs
+              activeView={comparingView}
+              onViewChange={setComparingView}
+            />
+          ) : activeSection === "tools" && activeTool === "cryptographic" ? (
+            <CryptographicHeaderTabs
+              activeView={cryptoActiveTab}
+              onViewChange={setCryptoActiveTab}
+            />
+          ) : (
             <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
           )}
           {activeSection === "project" ? (
@@ -1455,9 +1507,33 @@ function App(): JSX.Element {
               {chatFeature}
             </div>
           ) : activeSection === "tools" && activeTool === "api-tester" ? (
-            <div className="main-header-actions">{chatFeature}</div>
+            <div className="main-header-actions">
+              <ApiTesterCookieButton
+                storageScopeId={selectedProject.id}
+                onClick={() => setCookieModalOpen(true)}
+              />
+              <FontSizeDropdown
+                value={fontSizeMode}
+                onChange={setFontSizeMode}
+              />
+              {chatFeature}
+            </div>
+          ) : activeSection === "tools" && activeTool === "cryptographic" ? (
+            <div className="main-header-actions">
+              <FontSizeDropdown
+                value={fontSizeMode}
+                onChange={setFontSizeMode}
+              />
+              {chatFeature}
+            </div>
           ) : (
-            <div className="main-header-actions">{chatFeature}</div>
+            <div className="main-header-actions">
+              <FontSizeDropdown
+                value={fontSizeMode}
+                onChange={setFontSizeMode}
+              />
+              {chatFeature}
+            </div>
           )}
         </header>
 
@@ -1493,8 +1569,12 @@ function App(): JSX.Element {
               onViewChange={setApiTesterView}
               onFeedback={showSnackbar}
             />
-          ) : (
+          ) : activeTool === "comparing" ? (
             <CompareTool />
+          ) : (
+            <CryptographicTool 
+              activeTab={cryptoActiveTab}
+            />
           )
         ) : activeSection === "project" ? (
           <>
@@ -1593,6 +1673,7 @@ function App(): JSX.Element {
       ) : null}
 
       {databaseConnectionDialog}
+      {cookieModal}
 
       {snackbar ? (
         <div
@@ -1901,6 +1982,44 @@ function formatBuildMiniElapsed(build: RecentBuildRecord, now: number): string {
   return formatAppElapsed(Math.max(0, Math.floor((now - startedAt) / 1000)));
 }
 
+function getSidebarProjectStatuses(
+  summaries: ProjectDashboardSummary[],
+  activeProjectState: ProjectRuntimeState | null,
+  activeProjectId: string | null,
+): Record<string, ServiceStatusRecord[]> {
+  const statusesByProjectId: Record<string, ServiceStatusRecord[]> = {};
+
+  summaries.forEach((summary) => {
+    statusesByProjectId[summary.project.id] = summary.statuses;
+  });
+
+  if (activeProjectId && activeProjectState) {
+    statusesByProjectId[activeProjectId] = activeProjectState.statuses;
+  }
+
+  return statusesByProjectId;
+}
+
+function getToolTitle(tool: ToolId): string {
+  if (tool === "api-tester") {
+    return "API Tester";
+  }
+  if (tool === "cryptographic") {
+    return "Cryptographic";
+  }
+  return "Comparing";
+}
+
+function getToolDescription(tool: ToolId): string {
+  if (tool === "api-tester") {
+    return "Simple REST client for testing endpoints and inspecting JSON responses";
+  }
+  if (tool === "cryptographic") {
+    return "Convert Base64, hash values, and translate Unicode code points.";
+  }
+  return "Compare two files or pasted text.";
+}
+
 function getBuildMiniPanelItems(
   summaries: ProjectDashboardSummary[],
   projects: Project[],
@@ -2018,6 +2137,31 @@ function applyDashboardEvent(
   return current;
 }
 
+function applyDashboardOverviewStatusEvent(
+  current: ProjectDashboardSummary[],
+  event: Extract<DashboardEvent, { type: "status" }>,
+): ProjectDashboardSummary[] {
+  let changed = false;
+  const next = current.map((summary) => {
+    if (summary.project.id !== event.projectId) {
+      return summary;
+    }
+
+    changed = true;
+    return {
+      ...summary,
+      statuses: [
+        ...summary.statuses.filter(
+          (status) => status.service !== event.status.service,
+        ),
+        event.status,
+      ],
+    };
+  });
+
+  return changed ? next : current;
+}
+
 function createLoadingProjectState(): ProjectRuntimeState {
   return {
     settings: {
@@ -2099,6 +2243,78 @@ function ApiTesterHeaderTabs({
         onClick={() => onViewChange("history")}
       >
         History
+      </button>
+    </div>
+  );
+}
+
+function CompareHeaderTabs({
+  activeView,
+  onViewChange,
+}: {
+  activeView: CompareView;
+  onViewChange: (view: CompareView) => void;
+}): JSX.Element {
+  return (
+    <div
+      className="tabs compare-header-tabs"
+      role="tablist"
+      aria-label="Compare sections"
+    >
+      <button
+        className={`tab${activeView === "compare" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeView === "compare"}
+        onClick={() => onViewChange("compare")}
+      >
+        Compare
+      </button>
+    </div>
+  );
+}
+
+function CryptographicHeaderTabs({
+  activeView,
+  onViewChange,
+}: {
+  activeView: CryptographicToolTab;
+  onViewChange: (view: CryptographicToolTab) => void;
+}): JSX.Element {
+  return (
+    <div
+      className="tabs cryptographic-header-tabs"
+      role="tablist"
+      aria-label="Cryptographic sections"
+    >
+      <button
+        className={`tab${activeView === "base64" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeView === "base64"}
+        onClick={() => onViewChange("base64")}
+      >
+        Base64
+      </button>
+
+      <button
+        className={`tab${activeView === "hashing" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeView === "hashing"}
+        onClick={() => onViewChange("hashing")}
+      >
+        Hash
+      </button>
+
+      <button
+        className={`tab${activeView === "unicode" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeView === "unicode"}
+        onClick={() => onViewChange("unicode")}
+      >
+        Unicode
       </button>
     </div>
   );

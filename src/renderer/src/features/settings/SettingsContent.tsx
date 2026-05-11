@@ -700,7 +700,7 @@ export function SettingsContent({
                 label="Project name"
                 value={projectNameDraft}
                 onChange={(value) => setProjectNameDraft(value)}
-                maxLength={20}
+                maxLength={16}
               />
               <FieldRow
                 label="Project tag"
