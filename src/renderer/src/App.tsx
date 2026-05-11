@@ -37,7 +37,10 @@ import {
   ApiTesterMockup,
 } from "./features/tools/ApiTesterMockup";
 import { CompareTool } from "./features/tools/CompareTool";
-import { CryptographicTool, CryptographicToolTab } from "./features/tools/ConversionTools";
+import {
+  CryptographicTool,
+  CryptographicToolTab,
+} from "./features/tools/ConversionTools";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import closeMouthLogo from "./assets/close-mouth-logo.png";
@@ -97,7 +100,8 @@ function App(): JSX.Element {
   const [activeTool, setActiveTool] = useState<ToolId>("comparing");
   const [apiTesterView, setApiTesterView] = useState<ApiTesterView>("test");
   const [comparingView, setComparingView] = useState<CompareView>("compare");
-  const [cryptoActiveTab, setCryptoActiveTab] = useState<CryptographicToolTab>("base64");
+  const [cryptoActiveTab, setCryptoActiveTab] =
+    useState<CryptographicToolTab>("base64");
   const [projects, setProjects] = useState<Project[]>([]);
   const [databaseConnections, setDatabaseConnections] = useState<
     DatabaseConnection[]
@@ -1348,6 +1352,7 @@ function App(): JSX.Element {
             ) : (
               <CryptographicTool
                 activeTab={cryptoActiveTab}
+                onFeedback={showSnackbar}
               />
             )
           ) : activeSection === "database" ? (
@@ -1572,8 +1577,9 @@ function App(): JSX.Element {
           ) : activeTool === "comparing" ? (
             <CompareTool />
           ) : (
-            <CryptographicTool 
+            <CryptographicTool
               activeTab={cryptoActiveTab}
+              onFeedback={showSnackbar}
             />
           )
         ) : activeSection === "project" ? (
@@ -1597,6 +1603,7 @@ function App(): JSX.Element {
                 <GitTerminalTab
                   projectId={selectedProject.id}
                   gitStatus={activeProjectState.gitStatus}
+                  onFeedback={showSnackbar}
                 />
               ) : (
                 <section className="resizable-panel-screen">

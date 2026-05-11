@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Copy } from "lucide-react";
 import { FindControls } from "../../components/common/FindControls";
 import type { GitStatusRecord } from "../../types";
+import {
+  copyTextToClipboard,
+  type CopyFeedback,
+} from "../../utils/copyToClipboard";
 
 type GitCommandHistoryItem = {
   id: number;
@@ -29,9 +33,11 @@ const quickGitCommands = [
 export function GitTerminalTab({
   projectId,
   gitStatus,
+  onFeedback,
 }: {
   projectId: string;
   gitStatus: GitStatusRecord;
+  onFeedback?: CopyFeedback;
 }): JSX.Element {
   const [command, setCommand] = useState("");
   const [output, setOutput] = useState<string[]>(gitStatus.lines);
@@ -190,7 +196,7 @@ export function GitTerminalTab({
   }
 
   function copyCommand(commandText: string): void {
-    void navigator.clipboard?.writeText(commandText).catch(() => undefined);
+    void copyTextToClipboard(commandText, onFeedback);
   }
 
   function navigateFind(direction: -1 | 1): void {

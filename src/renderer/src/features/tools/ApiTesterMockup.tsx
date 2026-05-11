@@ -35,6 +35,7 @@ import {
 } from "../../components/common/AppSelect";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Panel } from "../../components/common/Panel";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
 import type {
   ApiTesterRequest,
   ApiTesterResponse,
@@ -522,12 +523,15 @@ export function ApiTesterMockup({
     if (!text) {
       return;
     }
-    try {
-      await navigator.clipboard?.writeText(text);
-      onFeedback?.("Copied", "valid");
-    } catch {
-      onFeedback?.("Copy failed", "invalid");
+    await copyTextToClipboard(text, onFeedback);
+  }
+
+  async function copyPreparedUrl(): Promise<void> {
+    if (!preparedUrl.trim()) {
+      return;
     }
+
+    await copyTextToClipboard(preparedUrl, onFeedback);
   }
 
   useEffect(() => {
@@ -699,7 +703,7 @@ export function ApiTesterMockup({
             className="icon-button secondary"
             type="button"
             title="Copy full URL"
-            onClick={() => void navigator.clipboard?.writeText(preparedUrl)}
+            onClick={() => void copyPreparedUrl()}
             disabled={!preparedUrl.trim() || isSending}
           >
             <Copy size={15} />
@@ -1344,16 +1348,12 @@ function ApiTesterHistoryDetailPanel({
   onFeedback?: (message: string, tone: "valid" | "invalid" | "warning") => void;
   onClose: () => void;
 }): JSX.Element {
-  async function copyDetailText(text: string, label: string): Promise<void> {
+  async function copyDetailText(text: string): Promise<void> {
     if (!text) {
       return;
     }
-    try {
-      await navigator.clipboard?.writeText(text);
-      onFeedback?.(`${label} copied`, "valid");
-    } catch {
-      onFeedback?.("Copy failed", "invalid");
-    }
+
+    await copyTextToClipboard(text, onFeedback);
   }
 
   return (
@@ -1419,12 +1419,7 @@ function ApiTesterHistoryDetailPanel({
                 <CopyDetailButton
                   label="Copy request body"
                   disabled={!detail.requestBodyPreview}
-                  onClick={() =>
-                    void copyDetailText(
-                      detail.requestBodyPreview,
-                      "Request body",
-                    )
-                  }
+                  onClick={() => void copyDetailText(detail.requestBodyPreview)}
                 />
               }
             >
@@ -1442,7 +1437,6 @@ function ApiTesterHistoryDetailPanel({
                   onClick={() =>
                     void copyDetailText(
                       formatHeadersForClipboard(detail.requestHeaders),
-                      "Request headers",
                     )
                   }
                 />
@@ -1487,10 +1481,7 @@ function ApiTesterHistoryDetailPanel({
                     detail.binaryResponseBody || !detail.responseBodyPreview
                   }
                   onClick={() =>
-                    void copyDetailText(
-                      detail.responseBodyPreview,
-                      "Response body",
-                    )
+                    void copyDetailText(detail.responseBodyPreview)
                   }
                 />
               }
@@ -1522,7 +1513,6 @@ function ApiTesterHistoryDetailPanel({
                   onClick={() =>
                     void copyDetailText(
                       formatHeadersForClipboard(detail.responseHeaders),
-                      "Response headers",
                     )
                   }
                 />
@@ -1934,9 +1924,7 @@ export function ApiTesterCookieModal({
           <Panel
             title="Request Cookies"
             titleMeta={
-              <span className="api-cookie-count-badge">
-                {cookies.length}
-              </span>
+              <span className="api-cookie-count-badge">{cookies.length}</span>
             }
             action={
               <button

@@ -23,6 +23,10 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Modal } from "../../components/dialogs/Modal";
 import type { DatabaseQueryValue, DatabaseTable } from "../../types";
+import {
+  copyTextToClipboard,
+  type CopyFeedback,
+} from "../../utils/copyToClipboard";
 import { formatCompactTime } from "./databaseFormatters";
 import type {
   ResultColumn,
@@ -172,6 +176,12 @@ function ResultGrid({
     null,
   );
   const [snackbar, setSnackbar] = useState<ResultSnackbarState | null>(null);
+  const showSnackbar = (
+    message: string,
+    tone: ResultSnackbarState["tone"],
+  ): void => {
+    setSnackbar({ message, tone });
+  };
   const hasColumns = columns.length > 0;
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
@@ -428,30 +438,10 @@ function ResultGrid({
       return;
     }
 
-    try {
-      const writeText = navigator.clipboard?.writeText;
-      if (!writeText) {
-        throw new Error("Clipboard is not available.");
-      }
-
-      void writeText
-        .call(navigator.clipboard, JSON.stringify(rowContextMenu.row, null, 2))
-        .then(() => setSnackbar({ tone: "valid", message: "Copied JSON" }))
-        .catch((error) => {
-          console.error(error);
-          setSnackbar({
-            tone: "invalid",
-            message:
-              error instanceof Error ? error.message : "Copy JSON failed",
-          });
-        });
-    } catch (error) {
-      console.error(error);
-      setSnackbar({
-        tone: "invalid",
-        message: error instanceof Error ? error.message : "Copy JSON failed",
-      });
-    }
+    void copyTextToClipboard(
+      JSON.stringify(rowContextMenu.row, null, 2),
+      showSnackbar,
+    );
     setRowContextMenu(null);
   }
 
@@ -630,6 +620,7 @@ function ResultGrid({
                           row={row}
                           columns={columns}
                           metadataTables={metadataTables}
+                          onFeedback={showSnackbar}
                         />
                       </td>
                     </tr>
@@ -731,10 +722,12 @@ function ResultRowDetails({
   row,
   columns,
   metadataTables,
+  onFeedback,
 }: {
   row: ResultRow;
   columns: ResultColumn[];
   metadataTables: DatabaseTable[];
+  onFeedback?: CopyFeedback;
 }): JSX.Element {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [columnSortDirection, setColumnSortDirection] = useState<
@@ -754,16 +747,22 @@ function ResultRowDetails({
   }, [columnSortDirection, columns]);
 
   function copyValue(columnKey: string, value: DatabaseQueryValue): void {
-    void navigator.clipboard
-      ?.writeText(formatPlainResultValue(value))
-      .then(() => {
+    void copyTextToClipboard(formatPlainResultValue(value), onFeedback).then(
+      (copiedToClipboard) => {
+        if (!copiedToClipboard) {
+          return;
+        }
+
         setCopiedKey(columnKey);
         setTimeout(
-          () => setCopiedKey((k) => (k === columnKey ? null : k)),
+          () =>
+            setCopiedKey((currentKey) =>
+              currentKey === columnKey ? null : currentKey,
+            ),
           1500,
         );
-      })
-      .catch(() => undefined);
+      },
+    );
   }
 
   return (

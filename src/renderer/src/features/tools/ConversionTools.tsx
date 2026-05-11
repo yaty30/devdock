@@ -21,6 +21,10 @@ import {
   AppSelect,
   type AppSelectOption,
 } from "../../components/common/AppSelect";
+import {
+  copyTextToClipboard,
+  type CopyFeedback,
+} from "../../utils/copyToClipboard";
 
 type Base64Mode = "encode" | "decode";
 type Base64Payload = "string" | "media";
@@ -65,25 +69,31 @@ const B64_OPTIONS: Array<AppSelectOption<Base64Mode>> = [
 
 export function CryptographicTool({
   activeTab,
+  onFeedback,
 }: {
   activeTab: CryptographicToolTab;
+  onFeedback?: CopyFeedback;
 }): JSX.Element {
   return (
     <section className="tools-screen cryptographic-tool-screen">
       <div className="cryptographic-tool-body">
         {activeTab === "base64" ? (
-          <Base64Tool />
+          <Base64Tool onFeedback={onFeedback} />
         ) : activeTab === "hashing" ? (
-          <HashTool />
+          <HashTool onFeedback={onFeedback} />
         ) : (
-          <UnicodeTool />
+          <UnicodeTool onFeedback={onFeedback} />
         )}
       </div>
     </section>
   );
 }
 
-function Base64Tool(): JSX.Element {
+function Base64Tool({
+  onFeedback,
+}: {
+  onFeedback?: CopyFeedback;
+}): JSX.Element {
   const [mode, setMode] = useState<Base64Mode>("encode");
   const [payload, setPayload] = useState<Base64Payload>("string");
   const [input, setInput] = useState("");
@@ -158,7 +168,13 @@ function Base64Tool(): JSX.Element {
     if (!result.ok) {
       return;
     }
-    await navigator.clipboard?.writeText(result.value);
+    const copiedToClipboard = await copyTextToClipboard(
+      result.value,
+      onFeedback,
+    );
+    if (!copiedToClipboard) {
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
   }
@@ -233,15 +249,19 @@ function Base64Tool(): JSX.Element {
             icon={<Image size={14} />}
             onClick={() => setPayload("media")}
           />
-          <Base64MediaMetadataView
-            visible={payload === "media"}
-            fileName={fileName}
-            mimeType={resultMimeType}
-            input={input}
-            output={result.ok ? result.value : ""}
-            metadata={mediaMetadata}
-          />
         </ControlGroup>
+        {mediaMetadata && (
+          <ControlGroup label="Media details">
+            <Base64MediaMetadataView
+              visible={payload === "media"}
+              fileName={fileName}
+              mimeType={resultMimeType}
+              input={input}
+              output={result.ok ? result.value : ""}
+              metadata={mediaMetadata}
+            />
+          </ControlGroup>
+        )}
       </ToolControls>
 
       <div className="conversion-grid">
@@ -306,7 +326,11 @@ function Base64Tool(): JSX.Element {
   );
 }
 
-function UnicodeTool(): JSX.Element {
+function UnicodeTool({
+  onFeedback,
+}: {
+  onFeedback?: CopyFeedback;
+}): JSX.Element {
   const [mode, setMode] = useState<UnicodeMode>("value-to-unicode");
   const [input, setInput] = useState("");
   const [copied, setCopied] = useState(false);
@@ -316,7 +340,13 @@ function UnicodeTool(): JSX.Element {
     if (!result.ok) {
       return;
     }
-    await navigator.clipboard?.writeText(result.value);
+    const copiedToClipboard = await copyTextToClipboard(
+      result.value,
+      onFeedback,
+    );
+    if (!copiedToClipboard) {
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
   }
@@ -359,7 +389,7 @@ function UnicodeTool(): JSX.Element {
   );
 }
 
-function HashTool(): JSX.Element {
+function HashTool({ onFeedback }: { onFeedback?: CopyFeedback }): JSX.Element {
   const [input, setInput] = useState("");
   const [algorithm, setAlgorithm] = useState<HashAlgorithm>("SHA-256");
   const [output, setOutput] = useState("");
@@ -397,7 +427,10 @@ function HashTool(): JSX.Element {
     if (!output) {
       return;
     }
-    await navigator.clipboard?.writeText(output);
+    const copiedToClipboard = await copyTextToClipboard(output, onFeedback);
+    if (!copiedToClipboard) {
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
   }
@@ -542,7 +575,6 @@ function Base64MediaMetadataView({
       title={details.join(" | ")}
       aria-hidden={!visible || !hasDetails}
     >
-      <span className="base64-media-name">{label}</span>
       {details.map((detail) => (
         <span className="base64-media-detail" key={detail}>
           {detail}
@@ -577,17 +609,6 @@ function ToolTextPane({
           <strong>{title}</strong>
         </div>
         <div>
-          {onImport ? (
-            <button
-              className="icon-button secondary"
-              type="button"
-              aria-label="Import file"
-              title="Import file"
-              onClick={onImport}
-            >
-              <FileUp size={15} />
-            </button>
-          ) : null}
           <button
             className="icon-button secondary"
             type="button"

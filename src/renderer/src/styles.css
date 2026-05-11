@@ -103,15 +103,17 @@
   --border: #24262c;
   --text: #f9fafb;
   --muted: #a1a1aa;
-  --muted-soft: #cccccc;
+  --muted-soft: #2b2b2b;
   --accent: #8b8df8;
   --accent-soft: #2a2c40;
   --success: #4ade80;
+  --success-soft: #064e3b;
   --info: #60a5fa;
   --info-soft: #112d50;
   --warning: #fbbf24;
   --warning-soft: #725409;
   --error: #f87171;
+  --error-soft: #581c1c;
   --command: #e879f9;
   --muted: #e5e7eb;
   --change: #734a8f;
@@ -142,27 +144,33 @@
 }
 
 [data-theme="dark"] .status-pill.success {
-  background: rgba(74, 222, 128, 0.16);
+  color: var(--success);
+  background: var(--success-soft);
 }
 
 [data-theme="dark"] .status-pill.stopped {
-  background: rgba(245, 158, 11, 0.16);
+  background: var(--muted-soft);
+  color: var(--nav-text);
 }
 
 [data-theme="dark"] .status-pill.starting {
-  background: rgba(96, 165, 250, 0.16);
+  background: var(--info-soft);
+  color: var(--info);
 }
 
 [data-theme="dark"] .status-pill.stopping {
-  background: rgba(249, 115, 22, 0.16);
+  background: var(--warning-soft);
+  color: var(--warning);
 }
 
 [data-theme="dark"] .status-pill.failed {
-  background: rgba(248, 113, 113, 0.16);
+  background: var(--error-soft);
+  color: var(--error);
 }
 
 [data-theme="dark"] .status-pill.idle {
-  background: rgba(161, 161, 170, 0.16);
+  background: var(--muted-soft);
+  color: var(--nav-text);
 }
 
 [data-theme="dark"] .environment-pill.sit {
@@ -4652,8 +4660,8 @@ body {
 }
 
 .status-pill.stopped {
-  color: var(--warning);
-  background: #fef3c7;
+  color: var(--muted);
+  background: var(--muted-soft);
 }
 
 .status-pill.starting {
@@ -8237,12 +8245,13 @@ button.database-tree-item {
 }
 
 .crypto-controls-panel.panel.base64-controls-panel {
-  height: 96px;
+  height: fit-content;
 }
 
 .base64-controls-panel .crypto-control-group {
   width: 100%;
-  grid-template-columns: 86px minmax(0, 1fr);
+  grid-template-columns: 126px minmax(0, 1fr);
+  user-select: none;
 }
 
 .base64-controls-panel .crypto-control-fields {
@@ -8251,7 +8260,8 @@ button.database-tree-item {
 
 .crypto-control-group {
   display: grid;
-  grid-template-columns: 86px minmax(0, auto);
+  grid-template-columns: 126px minmax(0, auto);
+  user-select: none;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -8265,6 +8275,7 @@ button.database-tree-item {
   font-weight: 820;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 120px;
 }
 
 .crypto-control-fields {
@@ -8420,7 +8431,7 @@ button.database-tree-item {
 }
 
 .base64-media-metadata {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   flex: 1 1 auto;
