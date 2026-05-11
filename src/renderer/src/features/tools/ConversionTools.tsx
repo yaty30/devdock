@@ -250,9 +250,7 @@ function Base64Tool(): JSX.Element {
             title={fileName ?? "Media"}
             details={mediaInputPreviewDetails}
             onImport={() =>
-              mode === "encode" && payload === "media"
-                ? fileInputRef.current?.click()
-                : undefined
+              mode === "encode" ? fileInputRef.current?.click() : undefined
             }
             onPaste={() => void pasteFromClipboard()}
             onClear={clear}
@@ -264,9 +262,7 @@ function Base64Tool(): JSX.Element {
             placeholder={getBase64Placeholder(mode, payload)}
             onChange={setInput}
             onImport={() =>
-              mode === "encode" && payload === "media"
-                ? fileInputRef.current?.click()
-                : undefined
+              mode === "encode" ? fileInputRef.current?.click() : undefined
             }
             onPaste={() => void pasteFromClipboard()}
             onClear={clear}
@@ -631,7 +627,7 @@ function ToolMediaInputPane({
 }: {
   title: string;
   details: Base64MediaPreviewDetails | null;
-  onImport: () => void;
+  onImport?: () => void;
   onPaste: () => void;
   onClear: () => void;
 }): JSX.Element {
