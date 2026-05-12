@@ -2,13 +2,16 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useId,
   useRef,
   useState,
   type ClipboardEvent,
+  type ChangeEvent,
   type CSSProperties,
   type PointerEvent,
 } from "react";
 import { Modal } from "../../components/dialogs/Modal";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 import {
   AlertCircle,
@@ -18,6 +21,8 @@ import {
   Download,
   Eraser,
   FileUp,
+  FolderOpen,
+  FolderSearch,
   Redo2,
   LoaderCircle,
   Plus,
@@ -93,6 +98,10 @@ type ApiKeyValueRow = {
   key: string;
   value: string;
   enabled: boolean;
+  fileName?: string;
+  fileType?: string;
+  fileSize?: number;
+  fileBase64?: string;
 };
 
 export type ApiTesterCookieEntry = {
@@ -108,14 +117,13 @@ type SavedApiTesterRequest = {
   headers: ApiKeyValueRow[];
   body: string;
   bodyMode?: ApiBodyMode;
-  mediaFieldName?: string;
   mediaFields?: ApiKeyValueRow[];
   bearerToken: string;
 };
 
-type ApiTesterRequestSnapshot = SavedApiTesterRequest & {
-  mediaFile?: ApiTesterMediaFile | null;
-};
+export type ApiTesterDraftState = SavedApiTesterRequest;
+
+type ApiTesterRequestSnapshot = SavedApiTesterRequest;
 
 type ApiTesterMediaFile = {
   name: string;
@@ -148,6 +156,8 @@ type ApiTesterHistoryDetail = {
 const API_SPLITTER_WIDTH = 14;
 const API_PANEL_MIN_WIDTH = 320;
 const API_TESTER_STORAGE_KEY = "ivs-dashboard-api-tester-request";
+const API_TESTER_SAVED_REQUESTS_STORAGE_KEY =
+  "ivs-dashboard-api-tester-saved-requests";
 const API_TESTER_HISTORY_METADATA_STORAGE_KEY =
   "ivs-dashboard-api-tester-history-metadata";
 const API_TESTER_HISTORY_DETAIL_STORAGE_PREFIX =
@@ -159,6 +169,7 @@ const API_TESTER_HISTORY_LIMIT = 250;
 const API_TESTER_BODY_PREVIEW_LIMIT_BYTES = 100 * 1024;
 const API_TESTER_SEND_EVENT = "api-tester:send";
 const API_TESTER_SAVE_EVENT = "api-tester:save";
+const API_TESTER_OPEN_SAVED_PICKER_EVENT = "api-tester:open-saved-picker";
 const API_METHODS: ApiMethod[] = [
   "GET",
   "POST",
@@ -203,60 +214,56 @@ const API_HISTORY_COLUMNS: ApiHistoryColumn[] = [
   { key: "rerun", label: "Re-run", width: 88, minWidth: 76 },
 ];
 
-const DEFAULT_PARAMS: ApiKeyValueRow[] = [
-  createRow("expand", "profile", true),
-  createRow("fields", "id,name,email,created_at", true),
-];
+const DEFAULT_PARAMS: ApiKeyValueRow[] = [];
 
 const DEFAULT_HEADERS: ApiKeyValueRow[] = [
   createRow("Accept", "application/json", true),
 ];
 
-const DEFAULT_MEDIA_FIELDS: ApiKeyValueRow[] = [createRow()];
+const DEFAULT_MEDIA_FIELDS: ApiKeyValueRow[] = [createRow("", "", true)];
+
+type SavedApiRequestRecord = {
+  id: string;
+  name: string;
+  format: "json" | "yaml";
+  createdAt: string;
+  request: SavedApiTesterRequest;
+};
 
 export function ApiTesterMockup({
   view = "test",
   storageScopeId = "global",
   onViewChange,
   onFeedback,
+  initialState,
+  onStateChange,
 }: {
   view?: ApiTesterView;
   storageScopeId?: string;
   onViewChange?: (view: ApiTesterView) => void;
   onFeedback?: (message: string, tone: "valid" | "invalid" | "warning") => void;
+  initialState?: ApiTesterDraftState | null;
+  onStateChange?: (state: ApiTesterDraftState) => void;
 }): JSX.Element {
-  const savedRequest = useMemo(readSavedRequest, []);
+  const savedRequest = useMemo(
+    () => normalizeSavedRequest(initialState ?? readSavedRequest(storageScopeId)),
+    [initialState, storageScopeId],
+  );
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<ApiPanelDragState | null>(null);
+  const openRequestInputRef = useRef<HTMLInputElement>(null);
+  const saveDialogId = useId();
   const [builderWidth, setBuilderWidth] = useState<number | null>(null);
-  const [method, setMethod] = useState<ApiMethod>(
-    savedRequest?.method ?? "GET",
-  );
-  const [url, setUrl] = useState(
-    savedRequest?.url ?? "https://api.example.com/v1/users/123",
-  );
-  const [params, setParams] = useState<ApiKeyValueRow[]>(
-    savedRequest?.params ?? DEFAULT_PARAMS,
-  );
-  const [headers, setHeaders] = useState<ApiKeyValueRow[]>(
-    savedRequest?.headers ?? DEFAULT_HEADERS,
-  );
-  const [body, setBody] = useState(
-    savedRequest?.body ?? '{\n  "name": "Alex Morgan"\n}',
-  );
-  const [bodyMode, setBodyMode] = useState<ApiBodyMode>(
-    savedRequest?.bodyMode ?? "raw",
-  );
-  const [mediaFieldName, setMediaFieldName] = useState(
-    savedRequest?.mediaFieldName ?? "file",
-  );
+  const [method, setMethod] = useState<ApiMethod>(savedRequest.method);
+  const [url, setUrl] = useState(savedRequest.url);
+  const [params, setParams] = useState<ApiKeyValueRow[]>(savedRequest.params);
+  const [headers, setHeaders] = useState<ApiKeyValueRow[]>(savedRequest.headers);
+  const [body, setBody] = useState(savedRequest.body);
+  const [bodyMode, setBodyMode] = useState<ApiBodyMode>(savedRequest.bodyMode ?? "raw");
   const [mediaFields, setMediaFields] = useState<ApiKeyValueRow[]>(
-    savedRequest?.mediaFields ?? DEFAULT_MEDIA_FIELDS,
+    savedRequest.mediaFields ?? DEFAULT_MEDIA_FIELDS,
   );
-  const [mediaFile, setMediaFile] = useState<ApiTesterMediaFile | null>(null);
-  const [bearerToken, setBearerToken] = useState(
-    savedRequest?.bearerToken ?? "",
-  );
+  const [bearerToken, setBearerToken] = useState(savedRequest.bearerToken);
   const [activeBuilderTab, setActiveBuilderTab] =
     useState<ApiBuilderTab>("Params");
   const [activeResponseTab, setActiveResponseTab] =
@@ -265,6 +272,11 @@ export function ApiTesterMockup({
   const [requestError, setRequestError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [saveFileName, setSaveFileName] = useState("api-request");
+  const [saveFormat, setSaveFormat] = useState<"json" | "yaml">("json");
+  const [savedPickerOpen, setSavedPickerOpen] = useState(false);
+  const [savedRequests, setSavedRequests] = useState<SavedApiRequestRecord[]>([]);
   const [history, setHistory] = useState<ApiTesterHistoryMetadata[]>(() =>
     readHistoryMetadata(storageScopeId),
   );
@@ -296,21 +308,22 @@ export function ApiTesterMockup({
       headers,
       body,
       bodyMode,
-      mediaFieldName,
       mediaFields,
       bearerToken,
     };
     window.localStorage.setItem(
-      API_TESTER_STORAGE_KEY,
+      savedRequestStorageKey(storageScopeId),
       JSON.stringify(nextRequest),
     );
     setSavedAt(new Date().toLocaleTimeString());
+    onStateChange?.(nextRequest);
   }, [
+    storageScopeId,
+    onStateChange,
     bearerToken,
     body,
     bodyMode,
     headers,
-    mediaFieldName,
     mediaFields,
     method,
     params,
@@ -439,9 +452,7 @@ export function ApiTesterMockup({
       headers,
       body,
       bodyMode,
-      mediaFieldName,
       mediaFields,
-      mediaFile,
       bearerToken,
     });
   }, [
@@ -450,10 +461,31 @@ export function ApiTesterMockup({
     bodyMode,
     executeRequest,
     headers,
-    mediaFieldName,
     mediaFields,
-    mediaFile,
     method,
+    params,
+    url,
+  ]);
+
+  useEffect(() => {
+    onStateChange?.({
+      method,
+      url,
+      params,
+      headers,
+      body,
+      bodyMode,
+      mediaFields,
+      bearerToken,
+    });
+  }, [
+    bearerToken,
+    body,
+    bodyMode,
+    headers,
+    mediaFields,
+    method,
+    onStateChange,
     params,
     url,
   ]);
@@ -465,6 +497,33 @@ export function ApiTesterMockup({
   }, [activeBuilderTab, method]);
 
   function selectMethod(nextMethod: ApiMethod): void {
+    const methodCanHaveBody = canMethodSendBody(method);
+    const nextCanHaveBody = canMethodSendBody(nextMethod);
+
+    if (!methodCanHaveBody && nextCanHaveBody) {
+      const transferable = params.filter((row) => row.key.trim().length > 0);
+      if (transferable.length > 0) {
+        updateBodyParams(transferable.map((row) => ({ ...row })));
+        setParams([createRow()]);
+        setBodyMode("media");
+      }
+    }
+
+    if (methodCanHaveBody && !nextCanHaveBody) {
+      const transferable = mediaFields.filter((row) => row.key.trim().length > 0);
+      if (transferable.length > 0) {
+        setParams(
+          transferable.map((row) => ({
+            ...row,
+            fileBase64: undefined,
+            fileName: undefined,
+            fileSize: undefined,
+            fileType: undefined,
+          })),
+        );
+      }
+    }
+
     setMethod(nextMethod);
     if (!canMethodSendBody(nextMethod) && activeBuilderTab === "Body") {
       setActiveBuilderTab("Params");
@@ -506,9 +565,7 @@ export function ApiTesterMockup({
     setHeaders(nextHeaders);
     setBody(nextBody);
     setBodyMode("raw");
-    setMediaFieldName("file");
     setMediaFields(DEFAULT_MEDIA_FIELDS);
-    setMediaFile(null);
     setBearerToken("");
     if (!canMethodSendBody(record.method) && activeBuilderTab === "Body") {
       setActiveBuilderTab("Params");
@@ -554,14 +611,23 @@ export function ApiTesterMockup({
       void sendRequest();
     };
     const handleSave = (): void => saveRequest();
+    const handleSavedPickerOpen = (): void => {
+      setSavedRequests(readSavedRequests(storageScopeId));
+      setSavedPickerOpen(true);
+    };
 
     window.addEventListener(API_TESTER_SEND_EVENT, handleSend);
     window.addEventListener(API_TESTER_SAVE_EVENT, handleSave);
+    window.addEventListener(API_TESTER_OPEN_SAVED_PICKER_EVENT, handleSavedPickerOpen);
     return () => {
       window.removeEventListener(API_TESTER_SEND_EVENT, handleSend);
       window.removeEventListener(API_TESTER_SAVE_EVENT, handleSave);
+      window.removeEventListener(
+        API_TESTER_OPEN_SAVED_PICKER_EVENT,
+        handleSavedPickerOpen,
+      );
     };
-  }, [saveRequest, sendRequest]);
+  }, [saveRequest, sendRequest, storageScopeId]);
 
   const startResize = (event: PointerEvent<HTMLDivElement>): void => {
     event.preventDefault();
@@ -625,28 +691,147 @@ export function ApiTesterMockup({
     setHeaders(DEFAULT_HEADERS);
     setBody("");
     setBodyMode("raw");
-    setMediaFieldName("file");
     setMediaFields(DEFAULT_MEDIA_FIELDS);
-    setMediaFile(null);
     setBearerToken("");
     setResponse(null);
     setRequestError(null);
     setSavedAt(null);
   }
 
-  async function selectMediaFile(file: File | null): Promise<void> {
+  function updateBodyParams(nextRows: ApiKeyValueRow[]): void {
+    setMediaFields(nextRows);
+    setBody(formatBodyParamsRawBody(nextRows));
+  }
+
+  async function selectBodyParamFile(
+    rowId: string,
+    file: File | null,
+  ): Promise<void> {
     if (!file) {
-      setMediaFile(null);
+      updateBodyParams(
+        mediaFields.map((row) =>
+          row.id === rowId ? clearBodyParamFileAndValue(row) : row,
+        ),
+      );
       return;
     }
 
     try {
-      setMediaFile(await readMediaFile(file));
+      const media = await readMediaFile(file);
+      updateBodyParams(
+        mediaFields.map((row) =>
+          row.id === rowId
+            ? {
+                ...row,
+                value: media.name,
+                fileName: media.name,
+                fileType: media.type,
+                fileSize: media.size,
+                fileBase64: media.base64,
+              }
+            : row,
+        ),
+      );
     } catch (error) {
       console.error(error);
       onFeedback?.("File could not be loaded", "invalid");
-      setMediaFile(null);
     }
+  }
+
+  function getCurrentRequestState(): SavedApiTesterRequest {
+    return {
+      method,
+      url,
+      params,
+      headers,
+      body,
+      bodyMode,
+      mediaFields,
+      bearerToken,
+    };
+  }
+
+  function openSaveDialog(): void {
+    setSaveFileName("api-request");
+    setSaveFormat("json");
+    setSaveDialogOpen(true);
+  }
+
+  function saveRequestToFile(): void {
+    const state = getCurrentRequestState();
+    const normalized = normalizeSavedRequest(state);
+    const extension = saveFormat === "yaml" ? "yaml" : "json";
+    const safeFileName = sanitizeExportFileName(saveFileName || "api-request");
+    const text =
+      saveFormat === "yaml"
+        ? stringifyYaml(normalized)
+        : JSON.stringify(normalized, null, 2);
+
+    downloadTextFile(text, `${safeFileName}.${extension}`, saveFormat === "yaml" ? "text/yaml;charset=utf-8" : "application/json;charset=utf-8");
+    saveRequest();
+
+    const nextSaved = [
+      {
+        id: createSavedRequestId(),
+        name: safeFileName,
+        format: saveFormat,
+        createdAt: new Date().toISOString(),
+        request: normalized,
+      },
+      ...readSavedRequests(storageScopeId),
+    ].slice(0, 100);
+    writeSavedRequests(storageScopeId, nextSaved);
+    setSavedRequests(nextSaved);
+    setSaveDialogOpen(false);
+    onFeedback?.("Request saved", "valid");
+  }
+
+  async function openRequestFile(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const raw = parseRequestFile(text, file.name);
+      const parsed = normalizeSavedRequest(raw);
+      applySavedRequest(parsed);
+      window.localStorage.setItem(
+        savedRequestStorageKey(storageScopeId),
+        JSON.stringify(parsed),
+      );
+      setSavedAt(new Date().toLocaleTimeString());
+      onStateChange?.(parsed);
+      onFeedback?.("Request opened", "valid");
+    } catch (error) {
+      console.error(error);
+      onFeedback?.("Request file is invalid", "invalid");
+    }
+  }
+
+  function applySavedRequest(next: SavedApiTesterRequest): void {
+    setMethod(next.method);
+    setUrl(next.url);
+    setParams(next.params);
+    setHeaders(next.headers);
+    setBodyMode(next.bodyMode ?? "raw");
+    const nextBodyParams = next.mediaFields ?? DEFAULT_MEDIA_FIELDS;
+    setMediaFields(nextBodyParams);
+    setBody(
+      next.bodyMode === "media" ? formatBodyParamsRawBody(nextBodyParams) : next.body,
+    );
+    setBearerToken(next.bearerToken);
+    if (!canMethodSendBody(next.method) && activeBuilderTab === "Body") {
+      setActiveBuilderTab("Params");
+    }
+  }
+
+  function removeSavedRequest(id: string): void {
+    const next = readSavedRequests(storageScopeId).filter((item) => item.id !== id);
+    writeSavedRequests(storageScopeId, next);
+    setSavedRequests(next);
   }
 
   function downloadResponse(): void {
@@ -714,7 +899,45 @@ export function ApiTesterMockup({
           )}
           Send
         </button>
+        <button
+          className="icon-button secondary api-request-save-trigger"
+          type="button"
+          title="Save request"
+          aria-label="Save request"
+          disabled={isSending}
+          onClick={openSaveDialog}
+        >
+          <Save size={15} />
+        </button>
         <div className="api-request-utilities">
+          <button
+            className="button secondary compact"
+            type="button"
+            title="Save As"
+            onClick={openSaveDialog}
+            disabled={isSending}
+          >
+            Save As
+          </button>
+          <button
+            className="button secondary compact"
+            type="button"
+            title="Open"
+            onClick={() => openRequestInputRef.current?.click()}
+            disabled={isSending}
+          >
+            <FolderOpen size={14} />
+            Open
+          </button>
+          <input
+            ref={openRequestInputRef}
+            type="file"
+            accept=".json,.yaml,.yml,application/json,text/yaml,text/x-yaml"
+            className="api-open-request-input"
+            onChange={(event) => {
+              void openRequestFile(event);
+            }}
+          />
           <button
             className="icon-button secondary"
             type="button"
@@ -819,50 +1042,20 @@ export function ApiTesterMockup({
                   />
                 ) : (
                   <div className="api-media-upload-panel">
-                    <div className="api-media-upload-card">
-                      <FileUp size={18} />
-                      <div>
-                        <strong>
-                          {mediaFile ? mediaFile.name : "No media selected"}
-                        </strong>
-                        <span>
-                          {mediaFile
-                            ? `${mediaFile.type || "application/octet-stream"} - ${formatBytes(mediaFile.size)}`
-                            : "Choose an image, video, audio, or document to send as multipart/form-data."}
-                        </span>
-                      </div>
-                      <label className="button secondary compact">
-                        Choose File
-                        <input
-                          type="file"
-                          onChange={(event) =>
-                            void selectMediaFile(
-                              event.target.files?.[0] ?? null,
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-                    <label className="api-media-field-name">
-                      <span>File Field Name</span>
-                      <input
-                        value={mediaFieldName}
-                        placeholder="file"
-                        onChange={(event) =>
-                          setMediaFieldName(event.target.value)
-                        }
-                      />
-                    </label>
                     <div className="api-media-fields">
                       <div className="api-media-fields-title">
-                        Additional Form Fields
+                        Body Params
                       </div>
                       <ApiKeyValueEditor
                         rows={mediaFields}
                         keyLabel="Field"
                         valueLabel="Value"
-                        emptyLabel="No form fields"
-                        onRowsChange={setMediaFields}
+                        emptyLabel="No body params"
+                        showFilePicker={true}
+                        onFilePick={(rowId, file) =>
+                          void selectBodyParamFile(rowId, file)
+                        }
+                        onRowsChange={updateBodyParams}
                       />
                     </div>
                   </div>
@@ -993,6 +1186,122 @@ export function ApiTesterMockup({
           )}
         </section>
       </div>
+      <Modal
+        open={saveDialogOpen}
+        title="Save Request"
+        subtitle="API Test"
+        size="sm"
+        closeLabel="Close save request dialog"
+        onClose={() => setSaveDialogOpen(false)}
+      >
+        <div className="database-connection-form">
+          <section className="database-connection-section">
+            <label htmlFor={`${saveDialogId}-name`}>
+              <span>File Name</span>
+              <input
+                id={`${saveDialogId}-name`}
+                value={saveFileName}
+                placeholder="api-request"
+                onChange={(event) => setSaveFileName(event.target.value)}
+              />
+            </label>
+            <label htmlFor={`${saveDialogId}-format`}>
+              <span>Format</span>
+              <select
+                id={`${saveDialogId}-format`}
+                value={saveFormat}
+                onChange={(event) =>
+                  setSaveFormat(event.target.value === "yaml" ? "yaml" : "json")
+                }
+              >
+                <option value="json">JSON</option>
+                <option value="yaml">YAML</option>
+              </select>
+            </label>
+          </section>
+          <div className="dialog-actions">
+            <button
+              className="button secondary compact"
+              type="button"
+              onClick={() => setSaveDialogOpen(false)}
+            >
+              Cancel
+            </button>
+            <button
+              className="button primary compact"
+              type="button"
+              onClick={saveRequestToFile}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </Modal>
+      <Modal
+        open={savedPickerOpen}
+        title="Saved API Requests"
+        subtitle="API Test"
+        size="lg"
+        closeLabel="Close saved API requests"
+        onClose={() => setSavedPickerOpen(false)}
+      >
+        <div className="api-saved-requests-modal">
+          <div className="api-param-table-wrap">
+            <table className="api-param-table api-saved-requests-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Method</th>
+                  <th>URL</th>
+                  <th>Saved</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {savedRequests.length === 0 ? (
+                  <tr>
+                    <td colSpan={5}>No saved API requests.</td>
+                  </tr>
+                ) : null}
+                {savedRequests.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.name}</td>
+                    <td>
+                      <span className={`api-history-method ${item.request.method.toLowerCase()}`}>
+                        {item.request.method}
+                      </span>
+                    </td>
+                    <td title={item.request.url}>{item.request.url}</td>
+                    <td>{formatCompactDateTime(item.createdAt)}</td>
+                    <td className="api-saved-requests-actions">
+                      <button
+                        className="icon-button secondary"
+                        type="button"
+                        title="Open request"
+                        onClick={() => {
+                          applySavedRequest(item.request);
+                          setSavedPickerOpen(false);
+                          onFeedback?.("Request loaded", "valid");
+                        }}
+                      >
+                        <FolderSearch size={14} />
+                      </button>
+                      <button
+                        className="icon-button secondary"
+                        type="button"
+                        title="Remove saved request"
+                        onClick={() => removeSavedRequest(item.id)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Modal>
     </section>
   );
 }
@@ -1689,17 +1998,62 @@ function formatHistoryBodyValue(value: unknown): string {
   }
 }
 
+function formatBodyParamsRawBody(rows: ApiKeyValueRow[]): string {
+  const bodyParams = rows.filter((row) => row.enabled && row.key.trim());
+  if (bodyParams.length === 0) {
+    return "";
+  }
+
+  const payload = bodyParams.reduce<Record<string, string | string[]>>(
+    (bodyParamsPayload, row) => {
+      const key = row.key.trim();
+      const value = row.fileName ?? row.value;
+      const currentValue = bodyParamsPayload[key];
+
+      if (Array.isArray(currentValue)) {
+        currentValue.push(value);
+      } else if (typeof currentValue === "string") {
+        bodyParamsPayload[key] = [currentValue, value];
+      } else {
+        bodyParamsPayload[key] = value;
+      }
+
+      return bodyParamsPayload;
+    },
+    {},
+  );
+
+  return JSON.stringify(payload, null, 2);
+}
+
+function clearBodyParamFileAndValue(
+  row: ApiKeyValueRow,
+): ApiKeyValueRow {
+  return {
+    ...row,
+    value: "",
+    fileName: undefined,
+    fileType: undefined,
+    fileSize: undefined,
+    fileBase64: undefined,
+  };
+}
+
 function ApiKeyValueEditor({
   rows,
   keyLabel,
   valueLabel,
   emptyLabel,
+  showFilePicker = false,
+  onFilePick,
   onRowsChange,
 }: {
   rows: ApiKeyValueRow[];
   keyLabel: string;
   valueLabel: string;
   emptyLabel: string;
+  showFilePicker?: boolean;
+  onFilePick?: (rowId: string, file: File | null) => void;
   onRowsChange: (rows: ApiKeyValueRow[]) => void;
 }): JSX.Element {
   function updateRow(rowId: string, updates: Partial<ApiKeyValueRow>): void {
@@ -1725,52 +2079,101 @@ function ApiKeyValueEditor({
               <td colSpan={4}>{emptyLabel}</td>
             </tr>
           ) : null}
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <td>
-                <button
-                  className={`api-row-enabled${row.enabled ? " checked" : ""}`}
-                  type="button"
-                  aria-label={row.enabled ? "Disable row" : "Enable row"}
-                  onClick={() => updateRow(row.id, { enabled: !row.enabled })}
-                >
-                  {row.enabled ? <Check size={12} /> : null}
-                </button>
-              </td>
-              <td>
-                <input
-                  className="api-cell-input"
-                  value={row.key}
-                  aria-label={keyLabel}
-                  onChange={(event) =>
-                    updateRow(row.id, { key: event.target.value })
-                  }
-                />
-              </td>
-              <td>
-                <input
-                  className="api-cell-input"
-                  value={row.value}
-                  aria-label={valueLabel}
-                  onChange={(event) =>
-                    updateRow(row.id, { value: event.target.value })
-                  }
-                />
-              </td>
-              <td>
-                <button
-                  className="icon-button secondary api-row-delete"
-                  type="button"
-                  aria-label="Remove row"
-                  onClick={() =>
-                    onRowsChange(rows.filter((item) => item.id !== row.id))
-                  }
-                >
-                  <Trash2 size={14} />
-                </button>
-              </td>
-            </tr>
-          ))}
+          {rows.map((row) => {
+            const hasValue = Boolean(row.fileName || row.value);
+
+            return (
+              <tr key={row.id}>
+                <td>
+                  <button
+                    className={`api-row-enabled${row.enabled ? " checked" : ""}`}
+                    type="button"
+                    aria-label={row.enabled ? "Disable row" : "Enable row"}
+                    onClick={() => updateRow(row.id, { enabled: !row.enabled })}
+                  >
+                    {row.enabled ? <Check size={12} /> : null}
+                  </button>
+                </td>
+                <td>
+                  <input
+                    className="api-cell-input"
+                    value={row.key}
+                    aria-label={keyLabel}
+                    onChange={(event) =>
+                      updateRow(row.id, { key: event.target.value })
+                    }
+                  />
+                </td>
+                <td className={showFilePicker ? "api-value-cell" : undefined}>
+                  {showFilePicker ? (
+                    <div className="api-value-with-adornment">
+                      <input
+                        className="api-cell-input has-adornment"
+                        value={row.value}
+                        aria-label={valueLabel}
+                        onChange={(event) =>
+                          updateRow(row.id, {
+                            value: event.target.value,
+                            fileName: undefined,
+                            fileType: undefined,
+                            fileSize: undefined,
+                            fileBase64: undefined,
+                          })
+                        }
+                      />
+                      {hasValue ? (
+                        <button
+                          className="icon-button secondary api-value-adornment"
+                          type="button"
+                          aria-label="Clear value"
+                          title="Clear value"
+                          onClick={() => updateRow(row.id, clearBodyParamFileAndValue(row))}
+                        >
+                          <X size={13} />
+                        </button>
+                      ) : (
+                        <label
+                          className="icon-button secondary api-value-adornment api-value-upload"
+                          aria-label="Upload file"
+                          title="Upload file"
+                        >
+                          <FileUp size={13} />
+                          <input
+                            type="file"
+                            onChange={(event) => {
+                              onFilePick?.(row.id, event.target.files?.[0] ?? null);
+                              event.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  ) : (
+                    <input
+                      className="api-cell-input"
+                      value={row.value}
+                      aria-label={valueLabel}
+                      onChange={(event) =>
+                        updateRow(row.id, { value: event.target.value })
+                      }
+                    />
+                  )}
+                </td>
+                <td>
+                  <button
+                    className="icon-button secondary api-row-delete"
+                    type="button"
+                    aria-label="Remove row"
+                    onClick={() =>
+                      onRowsChange(rows.filter((item) => item.id !== row.id))
+                    }
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <button
@@ -1875,6 +2278,33 @@ export function ApiTesterCookieButton({
       {activeCookies.length > 0 ? (
         <span className="api-cookie-badge">{activeCookies.length}</span>
       ) : null}
+    </button>
+  );
+}
+
+export function ApiTesterSavedRequestsButton({
+  storageScopeId,
+  onClick,
+}: {
+  storageScopeId: string;
+  onClick: () => void;
+}): JSX.Element {
+  const savedCount = readSavedRequests(storageScopeId).length;
+
+  return (
+    <button
+      className="icon-button secondary header-settings-button api-cookie-trigger"
+      type="button"
+      aria-label="Open saved API requests"
+      title={
+        savedCount > 0
+          ? `Saved API requests (${savedCount})`
+          : "Open saved API requests"
+      }
+      onClick={onClick}
+    >
+      <FolderSearch size={18} />
+      {savedCount > 0 ? <span className="api-cookie-badge">{savedCount}</span> : null}
     </button>
   );
 }
@@ -2089,7 +2519,7 @@ function isApiTesterCookieEntry(value: unknown): value is ApiTesterCookieEntry {
 function createRow(
   key = "",
   value = "",
-  enabled = key.length > 0,
+  enabled = true,
 ): ApiKeyValueRow {
   return {
     id: `api-row-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -2099,20 +2529,162 @@ function createRow(
   };
 }
 
-function readSavedRequest(): SavedApiTesterRequest | null {
+function savedRequestStorageKey(scopeId: string): string {
+  return `${API_TESTER_STORAGE_KEY}:${sanitizeStorageScope(scopeId)}`;
+}
+
+function readSavedRequest(scopeId: string): SavedApiTesterRequest | null {
   try {
-    const raw = window.localStorage.getItem(API_TESTER_STORAGE_KEY);
+    const raw = window.localStorage.getItem(savedRequestStorageKey(scopeId));
     if (!raw) {
       return null;
     }
-    const parsed = JSON.parse(raw) as SavedApiTesterRequest;
-    if (!API_METHODS.includes(parsed.method)) {
-      return null;
-    }
-    return parsed;
+    const parsed = JSON.parse(raw);
+    return normalizeSavedRequest(parsed);
   } catch {
     return null;
   }
+}
+
+function normalizeSavedRequest(
+  value: unknown,
+): SavedApiTesterRequest {
+  const parsed = value as Partial<SavedApiTesterRequest> | null;
+  const method = API_METHODS.includes(parsed?.method as ApiMethod)
+    ? (parsed?.method as ApiMethod)
+    : "GET";
+
+  return {
+    method,
+    url: typeof parsed?.url === "string" && parsed.url.trim()
+      ? parsed.url
+      : "https://api.example.com/v1/users/123",
+    params: normalizeRows(parsed?.params, DEFAULT_PARAMS),
+    headers: normalizeRows(parsed?.headers, DEFAULT_HEADERS),
+    body:
+      typeof parsed?.body === "string"
+        ? parsed.body
+        : '',
+    bodyMode: parsed?.bodyMode === "media" ? "media" : "raw",
+    mediaFields: normalizeRows(parsed?.mediaFields, DEFAULT_MEDIA_FIELDS),
+    bearerToken: typeof parsed?.bearerToken === "string" ? parsed.bearerToken : "",
+  };
+}
+
+function normalizeRows(
+  rows: unknown,
+  fallback: ApiKeyValueRow[],
+): ApiKeyValueRow[] {
+  if (!Array.isArray(rows)) {
+    return fallback.map((row) => ({ ...row }));
+  }
+
+  const normalized = rows
+    .filter((row) => row && typeof row === "object")
+    .map((row) => {
+      const raw = row as Partial<ApiKeyValueRow>;
+      return {
+        id:
+          typeof raw.id === "string" && raw.id
+            ? raw.id
+            : `api-row-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        key: typeof raw.key === "string" ? raw.key : "",
+        value: typeof raw.value === "string" ? raw.value : "",
+        enabled: typeof raw.enabled === "boolean" ? raw.enabled : true,
+        fileName: typeof raw.fileName === "string" ? raw.fileName : undefined,
+        fileType: typeof raw.fileType === "string" ? raw.fileType : undefined,
+        fileSize: typeof raw.fileSize === "number" ? raw.fileSize : undefined,
+        fileBase64:
+          typeof raw.fileBase64 === "string" ? raw.fileBase64 : undefined,
+      } as ApiKeyValueRow;
+    });
+
+  return normalized.length > 0
+    ? normalized
+    : fallback.map((row) => ({ ...row }));
+}
+
+function parseRequestFile(text: string, fileName: string): unknown {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(".yaml") || lower.endsWith(".yml")) {
+    return parseYaml(text);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return parseYaml(text);
+  }
+}
+
+function sanitizeExportFileName(name: string): string {
+  return name
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/^-+|-+$/g, "") || "api-request";
+}
+
+function downloadTextFile(text: string, fileName: string, mimeType: string): void {
+  const blob = new Blob([text], { type: mimeType });
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
+function createSavedRequestId(): string {
+  return `api-saved-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function savedRequestsStorageKey(scopeId: string): string {
+  return `${API_TESTER_SAVED_REQUESTS_STORAGE_KEY}:${sanitizeStorageScope(scopeId)}`;
+}
+
+function readSavedRequests(scopeId: string): SavedApiRequestRecord[] {
+  try {
+    const raw = window.localStorage.getItem(savedRequestsStorageKey(scopeId));
+    if (!raw) {
+      return [];
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((item) => item && typeof item === "object")
+      .map((item) => {
+        const rawItem = item as Partial<SavedApiRequestRecord>;
+        return {
+          id:
+            typeof rawItem.id === "string" && rawItem.id
+              ? rawItem.id
+              : createSavedRequestId(),
+          name: typeof rawItem.name === "string" ? rawItem.name : "api-request",
+          format: rawItem.format === "yaml" ? "yaml" : "json",
+          createdAt:
+            typeof rawItem.createdAt === "string"
+              ? rawItem.createdAt
+              : new Date().toISOString(),
+          request: normalizeSavedRequest(rawItem.request),
+        } satisfies SavedApiRequestRecord;
+      });
+  } catch {
+    return [];
+  }
+}
+
+function writeSavedRequests(
+  scopeId: string,
+  requests: SavedApiRequestRecord[],
+): void {
+  window.localStorage.setItem(
+    savedRequestsStorageKey(scopeId),
+    JSON.stringify(requests),
+  );
 }
 
 function readHistoryMetadata(scopeId: string): ApiTesterHistoryMetadata[] {
@@ -2604,22 +3176,41 @@ function buildRequestBody(request: ApiTesterRequestSnapshot):
     }
   | undefined {
   if (request.bodyMode === "media") {
-    if (!request.mediaFile) {
-      throw new Error("Choose a media file before sending this request.");
-    }
-
     const boundary = `----ivs-dashboard-${Date.now()}-${Math.random()
       .toString(36)
       .slice(2)}`;
-    const fieldName = request.mediaFieldName?.trim() || "file";
     const parts: Uint8Array[] = [];
     const previewLines: string[] = [];
+    let hasBodyParam = false;
 
     (request.mediaFields ?? []).forEach((field) => {
       const key = field.key.trim();
       if (!field.enabled || !key) {
         return;
       }
+
+      hasBodyParam = true;
+
+      if (field.fileBase64 && field.fileName) {
+        parts.push(
+          utf8Bytes(
+            `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(
+              key,
+            )}"; filename="${escapeMultipartValue(
+              field.fileName,
+            )}"\r\nContent-Type: ${
+              field.fileType || "application/octet-stream"
+            }\r\n\r\n`,
+          ),
+          base64ToUint8Array(field.fileBase64),
+          utf8Bytes("\r\n"),
+        );
+        previewLines.push(
+          `${key}: ${field.fileName} (${field.fileType || "application/octet-stream"}${typeof field.fileSize === "number" ? `, ${formatBytes(field.fileSize)}` : ""})`,
+        );
+        return;
+      }
+
       parts.push(
         utf8Bytes(
           `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(
@@ -2630,24 +3221,11 @@ function buildRequestBody(request: ApiTesterRequestSnapshot):
       previewLines.push(`${key}: ${field.value}`);
     });
 
-    parts.push(
-      utf8Bytes(
-        `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(
-          fieldName,
-        )}"; filename="${escapeMultipartValue(
-          request.mediaFile.name,
-        )}"\r\nContent-Type: ${
-          request.mediaFile.type || "application/octet-stream"
-        }\r\n\r\n`,
-      ),
-      base64ToUint8Array(request.mediaFile.base64),
-      utf8Bytes(`\r\n--${boundary}--\r\n`),
-    );
-    previewLines.push(
-      `${fieldName}: ${request.mediaFile.name} (${request.mediaFile.type || "application/octet-stream"}, ${formatBytes(
-        request.mediaFile.size,
-      )})`,
-    );
+    if (!hasBodyParam) {
+      throw new Error("Add at least one Body Param before sending this request.");
+    }
+
+    parts.push(utf8Bytes(`--${boundary}--\r\n`));
 
     return {
       bodyBase64: uint8ArrayToBase64(concatUint8Arrays(parts)),

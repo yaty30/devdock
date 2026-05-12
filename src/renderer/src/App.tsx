@@ -34,6 +34,8 @@ import { SettingsContent } from "./features/settings/SettingsContent";
 import {
   ApiTesterCookieButton,
   ApiTesterCookieModal,
+  ApiTesterSavedRequestsButton,
+  type ApiTesterDraftState,
   ApiTesterMockup,
 } from "./features/tools/ApiTesterMockup";
 import { CompareTool } from "./features/tools/CompareTool";
@@ -99,6 +101,9 @@ function App(): JSX.Element {
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [activeTool, setActiveTool] = useState<ToolId>("comparing");
   const [apiTesterView, setApiTesterView] = useState<ApiTesterView>("test");
+  const [apiTesterDraftStateByScope, setApiTesterDraftStateByScope] = useState<
+    Record<string, ApiTesterDraftState>
+  >({});
   const [comparingView, setComparingView] = useState<CompareView>("compare");
   const [cryptoActiveTab, setCryptoActiveTab] =
     useState<CryptographicToolTab>("base64");
@@ -1317,6 +1322,12 @@ function App(): JSX.Element {
                   storageScopeId="global"
                   onClick={() => setCookieModalOpen(true)}
                 />
+                <ApiTesterSavedRequestsButton
+                  storageScopeId="global"
+                  onClick={() =>
+                    window.dispatchEvent(new Event("api-tester:open-saved-picker"))
+                  }
+                />
                 <FontSizeDropdown
                   value={fontSizeMode}
                   onChange={setFontSizeMode}
@@ -1346,6 +1357,13 @@ function App(): JSX.Element {
                 storageScopeId="global"
                 onViewChange={setApiTesterView}
                 onFeedback={showSnackbar}
+                initialState={apiTesterDraftStateByScope.global ?? null}
+                onStateChange={(next) =>
+                  setApiTesterDraftStateByScope((current) => ({
+                    ...current,
+                    global: next,
+                  }))
+                }
               />
             ) : activeTool === "comparing" ? (
               <CompareTool />
@@ -1517,6 +1535,12 @@ function App(): JSX.Element {
                 storageScopeId={selectedProject.id}
                 onClick={() => setCookieModalOpen(true)}
               />
+              <ApiTesterSavedRequestsButton
+                storageScopeId={selectedProject.id}
+                onClick={() =>
+                  window.dispatchEvent(new Event("api-tester:open-saved-picker"))
+                }
+              />
               <FontSizeDropdown
                 value={fontSizeMode}
                 onChange={setFontSizeMode}
@@ -1573,6 +1597,13 @@ function App(): JSX.Element {
               storageScopeId={selectedProject.id}
               onViewChange={setApiTesterView}
               onFeedback={showSnackbar}
+              initialState={apiTesterDraftStateByScope[selectedProject.id] ?? null}
+              onStateChange={(next) =>
+                setApiTesterDraftStateByScope((current) => ({
+                  ...current,
+                  [selectedProject.id]: next,
+                }))
+              }
             />
           ) : activeTool === "comparing" ? (
             <CompareTool />

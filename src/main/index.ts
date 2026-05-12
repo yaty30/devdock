@@ -933,11 +933,14 @@ function createBuildNotificationFallbackOptions(
   build: RecentBuildRecord,
   projectName: string,
 ): NotificationConstructorOptions {
-  const statusLabel = `Build ${build.status}`;
+  const statusLabel = `🚀 Build ${build.status}`;
   const detailLines = [
-    `${build.profile} on ${build.branch}`,
-    `${build.commit}/${build.commitCleanliness}`,
-    `Duration ${build.duration}`,
+    `=============================================`,
+    `🦘 Profile:  ${build.profile}`,
+    `🌳 Branch:   ${build.branch}`,
+    `🔖 Commit:   @${build.commit}/${build.commitCleanliness}`,
+    `🕑 Duration: ${build.duration}`,
+    `=============================================`
   ];
 
   return {

@@ -730,9 +730,9 @@ body {
 }
 
 .project-service-dot.running {
-  background: var(--info);
+  background: var(--success);
   opacity: 1;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--info) 18%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--success) 18%, transparent);
 }
 
 .project-service-dot.starting {
@@ -889,8 +889,8 @@ body {
 }
 
 .service-status-tooltip-state.running {
-  color: var(--info);
-  background: color-mix(in srgb, var(--info) 10%, transparent);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
 }
 
 .service-status-tooltip-state.starting {
@@ -2108,8 +2108,8 @@ body {
 }
 
 .service-status-dot.running {
-  background: var(--info);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 14%, transparent);
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 14%, transparent);
 }
 
 .service-status-dot.starting {
@@ -4613,8 +4613,8 @@ body {
 }
 
 .status-pill.running {
-  color: var(--info);
-  background: color-mix(in srgb, var(--info) 14%, transparent);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
 .status-pill.idle {
@@ -8565,12 +8565,21 @@ button.database-tree-item {
 
 .api-request-bar {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr) auto auto;
+  grid-template-columns: max-content minmax(0, 1fr) auto auto auto;
   gap: 8px;
   align-items: center;
   min-height: 54px;
   padding: 10px;
   min-width: 0;
+}
+
+.api-request-save-trigger {
+  width: 34px;
+  height: 34px;
+}
+
+.api-open-request-input {
+  display: none;
 }
 
 .api-format-select {
@@ -8789,6 +8798,14 @@ button.database-tree-item {
   padding: 0 8px;
 }
 
+.api-key-value-table td:last-child,
+.database-history-table td:last-child {
+  padding-top: 4px;
+  padding-bottom: 4px;
+  text-align: center;
+  vertical-align: middle;
+}
+
 .api-cell-input {
   width: 100%;
   min-width: 0;
@@ -8804,6 +8821,53 @@ button.database-tree-item {
 
 .api-cell-input:focus {
   border-color: var(--accent);
+}
+
+.api-value-cell {
+  min-width: 220px;
+}
+
+.api-value-with-adornment {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+}
+
+.api-cell-input.has-adornment {
+  height: 34px;
+  padding-right: 38px;
+}
+
+.api-value-adornment {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  z-index: 1;
+  width: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 5px;
+  line-height: 1;
+  transform: translateY(-50%);
+}
+
+.api-value-adornment svg {
+  flex: 0 0 auto;
+}
+
+.api-value-upload {
+  cursor: pointer;
+}
+
+.api-value-upload input[type="file"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .api-row-enabled {
@@ -8824,8 +8888,10 @@ button.database-tree-item {
 }
 
 .api-row-delete {
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
 }
 
 .api-param-table th {
@@ -8949,6 +9015,29 @@ button.database-tree-item {
 
 .api-media-upload-card input[type="file"] {
   display: none;
+}
+
+.api-saved-requests-modal {
+  display: grid;
+  min-height: 0;
+  gap: 10px;
+}
+
+.api-saved-requests-table {
+  min-width: 760px;
+}
+
+.api-saved-requests-table th:last-child,
+.api-saved-requests-table td:last-child {
+  width: 96px;
+  padding-right: 8px;
+}
+
+.api-saved-requests-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .api-media-field-name {
@@ -10311,7 +10400,9 @@ button.database-tree-item {
 
 .database-history-rerun {
   width: 28px;
+  min-width: 28px;
   height: 28px;
+  min-height: 28px;
 }
 
 .database-result-tabs-region {

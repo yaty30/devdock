@@ -1,6 +1,6 @@
 {
   "name": "ivs-dashboard-electron",
-  "version": "0.9.4",
+  "version": "0.10.0",
   "description": "Static Electron React TypeScript prototype for an IVS Dashboard.",
   "main": "build/main/index.js",
   "productName": "IVS Dashboard",
@@ -42,7 +42,8 @@
     "mysql2": "^3.22.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.11.1",
