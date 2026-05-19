@@ -488,6 +488,8 @@ function BuildStatusPanel({
   const now = useNow(latestBuild?.status === "Running" ? 1000 : null);
   const elapsed = latestBuild ? buildElapsed(latestBuild, now) : "--:--";
   const buildStatusLabel = latestBuild?.status ?? "Idle";
+  const sourceBranch = latestBuild?.branch ?? projectState.gitStatus.branch;
+  const sourceCommit = latestBuild?.commit ?? projectState.gitStatus.commit;
   const buildLines = useLogViewport(projectId, "build").lines;
   const stages = buildStagesFromLatest(
     latestBuild?.status,
@@ -500,7 +502,7 @@ function BuildStatusPanel({
       title="Build Status"
       titleMeta={
         <div className="build-status-title-meta">
-          <span className={`status-pill ${buildStatusClass(buildStatusLabel)}`}>
+          <span className={`status-pill build-status ${buildStatusClass(buildStatusLabel)}`}>
             {buildStatusLabel}
           </span>
           <span className="elapsed-pill">{elapsed}</span>
@@ -526,11 +528,11 @@ function BuildStatusPanel({
         </div>
         <div className="branch-row">
           <span>Source</span>
-          <strong>{projectState.gitStatus.branch}</strong>
+          <strong>{sourceBranch}</strong>
         </div>
         <div className="branch-row">
           <span>Commit</span>
-          <strong>@{projectState.gitStatus.commit}</strong>
+          <strong>@{sourceCommit}</strong>
         </div>
       </div>
       <div className="timeline">
@@ -831,6 +833,7 @@ function DatabaseStatusRow({
   const status = databaseConnectionStatus(connection.status);
   const databaseName = connection.database || connection.schema || "Not set";
   const target = formatDatabaseTarget(connection);
+  const serverDetails = getDatabaseServerDetails(connection);
 
   return (
     <article className="dashboard-project-card dashboard-database-card">
@@ -886,12 +889,11 @@ function DatabaseStatusRow({
             <Layers3 size={18} />
             <h3>Server</h3>
           </header>
-          <DashboardDetailRow label="Host">
-            <strong>{connection.host || "Not set"}</strong>
-          </DashboardDetailRow>
-          <DashboardDetailRow label="Port">
-            <strong>{connection.port || "--"}</strong>
-          </DashboardDetailRow>
+          {serverDetails.map((detail) => (
+            <DashboardDetailRow label={detail.label} key={detail.label}>
+              <strong>{detail.value}</strong>
+            </DashboardDetailRow>
+          ))}
         </section>
 
         <section className="dashboard-project-detail">
@@ -1115,6 +1117,15 @@ function databaseStatusPill(status: DatabaseConnection["status"]): JSX.Element {
 }
 
 function formatDatabaseTarget(connection: DatabaseConnection): string {
+  if (connection.type === "Oracle") {
+    if (connection.connectionMode === "tnsAlias") {
+      return connection.networkAlias?.trim() || connection.schema || "Not set";
+    }
+    if (connection.connectionMode === "connectString") {
+      return connection.connectString?.trim() || "Not set";
+    }
+  }
+
   const host = connection.host.trim();
   const port = connection.port.trim();
   if (!host && !port) {
@@ -1127,6 +1138,36 @@ function formatDatabaseTarget(connection: DatabaseConnection): string {
     return port;
   }
   return `${host}:${port}`;
+}
+
+function getDatabaseServerDetails(
+  connection: DatabaseConnection,
+): Array<{ label: string; value: string }> {
+  if (connection.type === "Oracle" && connection.connectionMode === "tnsAlias") {
+    return [
+      {
+        label: "Network Alias",
+        value: connection.networkAlias?.trim() || connection.schema || "Not set",
+      },
+    ];
+  }
+
+  if (
+    connection.type === "Oracle" &&
+    connection.connectionMode === "connectString"
+  ) {
+    return [
+      {
+        label: "Connect String",
+        value: connection.connectString?.trim() || "Not set",
+      },
+    ];
+  }
+
+  return [
+    { label: "Host", value: connection.host || "Not set" },
+    { label: "Port", value: connection.port || "--" },
+  ];
 }
 
 function projectOverallStatus(summary: ProjectDashboardSummary): {

@@ -73,6 +73,59 @@ import {
   RUNNING_SERVER_LIMIT_MESSAGE,
 } from "../shared/appLimits";
 
+type OracleDbModule = {
+  OUT_FORMAT_OBJECT: number;
+  SYSASM: number;
+  SYSBACKUP: number;
+  SYSDBA: number;
+  SYSDG: number;
+  SYSKM: number;
+  SYSOPER: number;
+  SYSRAC: number;
+  getConnection: (options: OracleConnectionOptions) => Promise<OracleConnection>;
+};
+
+type OracleConnectionOptions = {
+  user: string;
+  password?: string;
+  connectString: string;
+  connectTimeout?: number;
+  configDir?: string;
+  privilege?: number;
+};
+
+type OracleExecuteOptions = {
+  outFormat?: number;
+  autoCommit?: boolean;
+  fetchArraySize?: number;
+};
+
+type OracleColumnMetadata = {
+  name?: string;
+  dbTypeName?: string;
+  fetchType?: unknown;
+  precision?: number;
+  scale?: number;
+  maxSize?: number;
+};
+
+type OracleExecuteResult = {
+  rows?: Array<Record<string, unknown>> | unknown[][];
+  metaData?: OracleColumnMetadata[];
+  rowsAffected?: number;
+};
+
+type OracleConnection = {
+  execute: (
+    statement: string,
+    binds?: unknown[] | Record<string, unknown>,
+    options?: OracleExecuteOptions,
+  ) => Promise<OracleExecuteResult>;
+  close: () => Promise<void>;
+};
+
+const oracleDriver = require("oracledb") as OracleDbModule;
+
 type ServiceProcess = {
   child: ChildProcessWithoutNullStreams;
   startedAt: string;
@@ -491,14 +544,35 @@ export class DashboardBackend {
   async testDatabaseConnection(
     connection: DatabaseConnection,
   ): Promise<DatabaseConnectionTestResult> {
-    if (connection.type !== "MySQL") {
-      return {
-        success: false,
-        message: `${connection.type} connections are not supported yet.`,
-      };
+    const startedAt = performance.now();
+    if (connection.type === "Oracle") {
+      let oracleConnection: OracleConnection | null = null;
+      try {
+        oracleConnection = await createOracleConnection(connection);
+        await oracleConnection.execute("SELECT 1 AS HEALTH_CHECK FROM DUAL", [], {
+          outFormat: oracleDriver.OUT_FORMAT_OBJECT,
+        });
+        const latency = `${Math.max(1, performance.now() - startedAt).toFixed(1)} ms`;
+        return {
+          success: true,
+          message: `Connected to ${formatOracleConnectionTarget(connection)}.`,
+          latency,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Database connection test failed.",
+        };
+      } finally {
+        if (oracleConnection) {
+          await oracleConnection.close().catch(() => undefined);
+        }
+      }
     }
 
-    const startedAt = performance.now();
     let mysqlConnection: Awaited<
       ReturnType<typeof createMysqlConnection>
     > | null = null;
@@ -531,8 +605,8 @@ export class DashboardBackend {
   async getDatabaseMetadata(
     connection: DatabaseConnection,
   ): Promise<DatabaseMetadata> {
-    if (connection.type !== "MySQL") {
-      throw new Error(`${connection.type} metadata is not supported yet.`);
+    if (connection.type === "Oracle") {
+      return this.getOracleDatabaseMetadata(connection);
     }
 
     const mysqlConnection = await createMysqlConnection(
@@ -786,12 +860,250 @@ export class DashboardBackend {
     }
   }
 
+  private async getOracleDatabaseMetadata(
+    connection: DatabaseConnection,
+  ): Promise<DatabaseMetadata> {
+    const oracleConnection = await createOracleConnection(connection);
+    try {
+      const schemaRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT USERNAME AS SCHEMA_NAME
+         FROM ALL_USERS
+         ORDER BY USERNAME`,
+      );
+      const schemas = schemaRows.map((row) => String(row.SCHEMA_NAME));
+      const relevantSchemas = selectRelevantOracleSchemas(schemas, connection);
+
+      if (relevantSchemas.length === 0) {
+        return createEmptyDatabaseMetadata(schemas);
+      }
+
+      const schemaFilter = createOracleInPredicate("OWNER", relevantSchemas);
+      const tableOwnerFilter = createOracleInPredicate(
+        "TABLE_OWNER",
+        relevantSchemas,
+      );
+      const tableRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT OWNER AS TABLE_SCHEMA,
+                TABLE_NAME AS TABLE_NAME,
+                NUM_ROWS AS ROW_COUNT
+         FROM ALL_TABLES
+         WHERE ${schemaFilter.sql}
+           AND NESTED = 'NO'
+         ORDER BY OWNER, TABLE_NAME`,
+        schemaFilter.binds,
+      );
+      const viewRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT OWNER AS VIEW_SCHEMA,
+                VIEW_NAME AS VIEW_NAME
+         FROM ALL_VIEWS
+         WHERE ${schemaFilter.sql}
+         ORDER BY OWNER, VIEW_NAME`,
+        schemaFilter.binds,
+      );
+      const objectRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT OWNER AS OBJECT_SCHEMA,
+                OBJECT_NAME AS OBJECT_NAME,
+                OBJECT_TYPE AS OBJECT_TYPE
+         FROM ALL_OBJECTS
+         WHERE ${schemaFilter.sql}
+           AND OBJECT_TYPE IN ('PROCEDURE', 'FUNCTION')
+         ORDER BY OWNER, OBJECT_TYPE, OBJECT_NAME`,
+        schemaFilter.binds,
+      );
+      const columnRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT OWNER AS TABLE_SCHEMA,
+                TABLE_NAME AS TABLE_NAME,
+                COLUMN_NAME AS COLUMN_NAME,
+                DATA_TYPE AS DATA_TYPE,
+                DATA_LENGTH AS DATA_LENGTH,
+                CHAR_LENGTH AS CHAR_LENGTH,
+                DATA_PRECISION AS DATA_PRECISION,
+                DATA_SCALE AS DATA_SCALE,
+                NULLABLE AS NULLABLE,
+                DATA_DEFAULT AS DATA_DEFAULT
+         FROM ALL_TAB_COLUMNS
+         WHERE ${schemaFilter.sql}
+         ORDER BY OWNER, TABLE_NAME, COLUMN_ID`,
+        schemaFilter.binds,
+      );
+      const indexRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT IC.TABLE_OWNER AS TABLE_SCHEMA,
+                IC.TABLE_NAME AS TABLE_NAME,
+                IC.INDEX_NAME AS INDEX_NAME,
+                IC.COLUMN_NAME AS COLUMN_NAME,
+                IX.INDEX_TYPE AS INDEX_TYPE,
+                IC.COLUMN_POSITION AS COLUMN_POSITION
+         FROM ALL_IND_COLUMNS IC
+         JOIN ALL_INDEXES IX
+           ON IX.OWNER = IC.INDEX_OWNER
+          AND IX.INDEX_NAME = IC.INDEX_NAME
+         WHERE ${tableOwnerFilter.sql}
+         ORDER BY IC.TABLE_OWNER, IC.TABLE_NAME, IC.INDEX_NAME, IC.COLUMN_POSITION`,
+        tableOwnerFilter.binds,
+      );
+      const triggerRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT OWNER AS TRIGGER_SCHEMA,
+                TABLE_NAME AS TABLE_NAME,
+                TRIGGER_NAME AS TRIGGER_NAME,
+                TRIGGER_TYPE AS TRIGGER_TYPE,
+                TRIGGERING_EVENT AS TRIGGERING_EVENT
+         FROM ALL_TRIGGERS
+         WHERE ${schemaFilter.sql}
+         ORDER BY OWNER, TABLE_NAME, TRIGGER_NAME`,
+        schemaFilter.binds,
+      );
+      const partitionRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT TABLE_OWNER AS TABLE_SCHEMA,
+                TABLE_NAME AS TABLE_NAME,
+                PARTITION_NAME AS PARTITION_NAME,
+                PARTITION_POSITION AS PARTITION_POSITION
+         FROM ALL_TAB_PARTITIONS
+         WHERE ${tableOwnerFilter.sql}
+         ORDER BY TABLE_OWNER, TABLE_NAME, PARTITION_POSITION`,
+        tableOwnerFilter.binds,
+      );
+
+      const columnsByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["columns"]
+      >();
+      const indexAccumulator = new Map<
+        string,
+        Map<string, { name: string; columns: string[]; type: string }>
+      >();
+      const triggersByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["triggers"]
+      >();
+      const partitionsByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["partitions"]
+      >();
+      const estimatedRowCountsByTableKey = new Map<string, number | null>();
+
+      for (const row of tableRows) {
+        const tableSchema = String(row.TABLE_SCHEMA);
+        const tableName = String(row.TABLE_NAME);
+        const rowCount = row.ROW_COUNT;
+        const oracleRowCount =
+          rowCount === null || rowCount === undefined ? null : Number(rowCount);
+        const cacheKey = createEstimatedRowCountCacheKey(
+          connection,
+          tableSchema,
+          tableName,
+        );
+        const estimatedRowCount =
+          this.estimatedRowCountOverrides.get(cacheKey) ?? oracleRowCount;
+        estimatedRowCountsByTableKey.set(
+          `${tableSchema}.${tableName}`,
+          estimatedRowCount,
+        );
+        this.estimatedRowCountSnapshots.set(cacheKey, estimatedRowCount);
+      }
+
+      for (const row of columnRows) {
+        const tableKey = `${row.TABLE_SCHEMA}.${row.TABLE_NAME}`;
+        const columns = columnsByTable.get(tableKey) ?? [];
+        columns.push({
+          name: String(row.COLUMN_NAME),
+          metadata: createOracleColumnMetadata(row),
+        });
+        columnsByTable.set(tableKey, columns);
+      }
+
+      for (const row of indexRows) {
+        const tableKey = `${row.TABLE_SCHEMA}.${row.TABLE_NAME}`;
+        const indexes = indexAccumulator.get(tableKey) ?? new Map();
+        const indexName = String(row.INDEX_NAME);
+        const index = indexes.get(indexName) ?? {
+          name: indexName,
+          columns: [],
+          type: String(row.INDEX_TYPE || "INDEX").toUpperCase(),
+        };
+        if (row.COLUMN_NAME !== null && row.COLUMN_NAME !== undefined) {
+          index.columns.push(String(row.COLUMN_NAME));
+        }
+        indexes.set(indexName, index);
+        indexAccumulator.set(tableKey, indexes);
+      }
+
+      for (const row of triggerRows) {
+        const tableKey = `${row.TRIGGER_SCHEMA}.${row.TABLE_NAME}`;
+        const triggers = triggersByTable.get(tableKey) ?? [];
+        triggers.push({
+          name: String(row.TRIGGER_NAME),
+          timing: String(row.TRIGGER_TYPE || ""),
+          event: String(row.TRIGGERING_EVENT || ""),
+        });
+        triggersByTable.set(tableKey, triggers);
+      }
+
+      for (const row of partitionRows) {
+        const tableKey = `${row.TABLE_SCHEMA}.${row.TABLE_NAME}`;
+        const partitions = partitionsByTable.get(tableKey) ?? [];
+        partitions.push({
+          name: String(row.PARTITION_NAME),
+          description:
+            row.PARTITION_POSITION === null || row.PARTITION_POSITION === undefined
+              ? undefined
+              : `Position ${String(row.PARTITION_POSITION)}`,
+        });
+        partitionsByTable.set(tableKey, partitions);
+      }
+
+      return {
+        schemas,
+        tables: tableRows.map((row) => ({
+          schema: String(row.TABLE_SCHEMA),
+          name: String(row.TABLE_NAME),
+          estimatedRowCount: estimatedRowCountsByTableKey.get(
+            `${row.TABLE_SCHEMA}.${row.TABLE_NAME}`,
+          ),
+          columns:
+            columnsByTable.get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`) ?? [],
+          indexes: Array.from(
+            indexAccumulator
+              .get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`)
+              ?.values() ?? [],
+          ),
+          triggers:
+            triggersByTable.get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`) ?? [],
+          partitions:
+            partitionsByTable.get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`) ?? [],
+        })),
+        views: viewRows.map((row) =>
+          qualifyDatabaseObject(row.VIEW_SCHEMA, row.VIEW_NAME),
+        ),
+        procedures: objectRows
+          .filter((row) => String(row.OBJECT_TYPE).toUpperCase() === "PROCEDURE")
+          .map((row) =>
+            qualifyDatabaseObject(row.OBJECT_SCHEMA, row.OBJECT_NAME),
+          ),
+        functions: objectRows
+          .filter((row) => String(row.OBJECT_TYPE).toUpperCase() === "FUNCTION")
+          .map((row) =>
+            qualifyDatabaseObject(row.OBJECT_SCHEMA, row.OBJECT_NAME),
+          ),
+      };
+    } finally {
+      await oracleConnection.close().catch(() => undefined);
+    }
+  }
+
   async executeDatabaseStatements(
     connection: DatabaseConnection,
     statements: string[],
   ): Promise<DatabaseExecutionBatchResult> {
-    if (connection.type !== "MySQL") {
-      throw new Error(`${connection.type} execution is not supported yet.`);
+    if (connection.type === "Oracle") {
+      return this.executeOracleDatabaseStatements(connection, statements);
     }
 
     const mysqlConnection = await createMysqlConnection(
@@ -856,6 +1168,79 @@ export class DashboardBackend {
       }
     } finally {
       await mysqlConnection.end().catch(() => undefined);
+    }
+
+    return { results };
+  }
+
+  private async executeOracleDatabaseStatements(
+    connection: DatabaseConnection,
+    statements: string[],
+  ): Promise<DatabaseExecutionBatchResult> {
+    const oracleConnection = await createOracleConnection(connection);
+    const results: DatabaseStatementExecutionResult[] = [];
+    try {
+      for (const statement of statements) {
+        const trimmedStatement = statement.trim();
+        if (!trimmedStatement) {
+          continue;
+        }
+
+        const startedAt = performance.now();
+        try {
+          const executionResult = await oracleConnection.execute(
+            trimmedStatement,
+            [],
+            {
+              outFormat: oracleDriver.OUT_FORMAT_OBJECT,
+              autoCommit: true,
+            },
+          );
+          const durationMs = Math.max(1, performance.now() - startedAt);
+          const rowArray = Array.isArray(executionResult.rows)
+            ? executionResult.rows
+            : [];
+          const normalizedRows = rowArray.map((row) => normalizeOracleRow(row));
+          const result: DatabaseStatementExecutionResult = {
+            statement: trimmedStatement,
+            columns: (executionResult.metaData ?? []).map((field) => ({
+              key: field.name ?? "",
+              label: field.name ?? "",
+              type: formatOracleResultColumnType(field),
+            })),
+            rows: normalizedRows,
+            status: "success",
+            durationMs,
+            rowsFetched: normalizedRows.length,
+            rowsAffected: executionResult.rowsAffected,
+          };
+          if (executionResult.rowsAffected !== undefined) {
+            this.updateEstimatedRowCountOverride(
+              connection,
+              trimmedStatement,
+              executionResult.rowsAffected,
+            );
+          }
+          this.recordDatabaseExecution(connection, result);
+          results.push(result);
+        } catch (error) {
+          const result: DatabaseStatementExecutionResult = {
+            statement: trimmedStatement,
+            columns: [],
+            rows: [],
+            status: "error",
+            errorMessage:
+              error instanceof Error ? error.message : "Statement failed.",
+            durationMs: Math.max(1, performance.now() - startedAt),
+            rowsFetched: 0,
+          };
+          this.recordDatabaseExecution(connection, result);
+          results.push(result);
+          break;
+        }
+      }
+    } finally {
+      await oracleConnection.close().catch(() => undefined);
     }
 
     return { results };
@@ -3430,6 +3815,7 @@ function normalizeDatabaseConnection(
     database ||
     connection.serviceName?.trim() ||
     connection.sid?.trim() ||
+    connection.networkAlias?.trim() ||
     connection.connectString?.trim() ||
     "";
 
@@ -3439,7 +3825,9 @@ function normalizeDatabaseConnection(
     type: connection.type ?? "MySQL",
     status: connection.status ?? "disconnected",
     host: connection.host?.trim() ?? "",
-    port: String(connection.port ?? "").trim() || "3306",
+    port:
+      String(connection.port ?? "").trim() ||
+      (connection.type === "Oracle" ? "1521" : "3306"),
     user: connection.user?.trim() ?? "",
     schema,
     password: connection.password,
@@ -3452,6 +3840,7 @@ function normalizeDatabaseConnection(
     serviceName: connection.serviceName?.trim() ?? "",
     sid: connection.sid?.trim() ?? "",
     connectString: connection.connectString?.trim() ?? "",
+    networkAlias: connection.networkAlias?.trim() ?? "",
     role: connection.role?.trim() ?? "",
     walletPath: connection.walletPath?.trim() ?? "",
     latency: connection.latency || "Not tested",
@@ -3593,6 +3982,124 @@ function toMysqlConnectionOptions(
   };
 }
 
+async function createOracleConnection(
+  connection: DatabaseConnection,
+): Promise<OracleConnection> {
+  return oracleDriver.getConnection(toOracleConnectionOptions(connection));
+}
+
+function toOracleConnectionOptions(
+  connection: DatabaseConnection,
+): OracleConnectionOptions {
+  const options: OracleConnectionOptions = {
+    user: connection.user.trim(),
+    password: connection.password ?? "",
+    connectString: createOracleConnectString(connection),
+    connectTimeout: Math.max(
+      1,
+      Math.ceil((connection.connectionTimeoutMs ?? 10000) / 1000),
+    ),
+  };
+  const walletPath = connection.walletPath?.trim();
+  if (walletPath) {
+    options.configDir = walletPath;
+  }
+  const privilege = resolveOraclePrivilege(connection.role);
+  if (privilege !== undefined) {
+    options.privilege = privilege;
+  }
+  return options;
+}
+
+function createOracleConnectString(connection: DatabaseConnection): string {
+  if (connection.connectionMode === "connectString") {
+    return connection.connectString?.trim() ?? "";
+  }
+
+  if (connection.connectionMode === "tnsAlias") {
+    return connection.networkAlias?.trim() || connection.schema.trim();
+  }
+
+  const host = connection.host.trim();
+  const port = Number(connection.port) || 1521;
+  if (connection.connectionMode === "sid") {
+    const sid = connection.sid?.trim() || connection.schema.trim();
+    return `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=${host})(PORT=${port}))(CONNECT_DATA=(SID=${sid})))`;
+  }
+
+  const serviceName =
+    connection.serviceName?.trim() ||
+    connection.database?.trim() ||
+    connection.schema.trim();
+  return `${host}:${port}/${serviceName}`;
+}
+
+function formatOracleConnectionTarget(connection: DatabaseConnection): string {
+  if (connection.connectionMode === "tnsAlias") {
+    return connection.networkAlias?.trim() || connection.schema.trim() || "Oracle";
+  }
+
+  return connection.connectionMode === "connectString"
+    ? (connection.connectString?.trim() ?? "Oracle")
+    : `${connection.host.trim()}:${Number(connection.port) || 1521}`;
+}
+
+function resolveOraclePrivilege(role?: string): number | undefined {
+  const normalizedRole = role?.trim().toUpperCase();
+  if (!normalizedRole) {
+    return undefined;
+  }
+  const privileges: Record<string, number> = {
+    SYSASM: oracleDriver.SYSASM,
+    SYSBACKUP: oracleDriver.SYSBACKUP,
+    SYSDBA: oracleDriver.SYSDBA,
+    SYSDG: oracleDriver.SYSDG,
+    SYSKM: oracleDriver.SYSKM,
+    SYSOPER: oracleDriver.SYSOPER,
+    SYSRAC: oracleDriver.SYSRAC,
+  };
+  const privilege = privileges[normalizedRole];
+  if (privilege === undefined) {
+    throw new Error(
+      "Oracle role must be one of SYSDBA, SYSOPER, SYSASM, SYSBACKUP, SYSDG, SYSKM, or SYSRAC.",
+    );
+  }
+  return privilege;
+}
+
+function oracleSelectOptions(): OracleExecuteOptions {
+  return {
+    outFormat: oracleDriver.OUT_FORMAT_OBJECT,
+    fetchArraySize: 200,
+  };
+}
+
+async function executeOracleRows(
+  connection: OracleConnection,
+  statement: string,
+  binds: unknown[] = [],
+): Promise<Array<Record<string, unknown>>> {
+  const result = await connection.execute(
+    statement,
+    binds,
+    oracleSelectOptions(),
+  );
+  return (Array.isArray(result.rows) ? result.rows : []).map((row) =>
+    normalizeOracleObjectRow(row),
+  );
+}
+
+function createOracleInPredicate(
+  columnName: string,
+  values: string[],
+): { sql: string; binds: string[] } {
+  const placeholders = values.map((_, index) => `:${index + 1}`).join(", ");
+  return {
+    sql: `${columnName} IN (${placeholders})`,
+    binds: values,
+  };
+}
+
 function selectRelevantSchemas(
   schemas: string[],
   connection: DatabaseConnection,
@@ -3607,6 +4114,58 @@ function selectRelevantSchemas(
       !["information_schema", "mysql", "performance_schema", "sys"].includes(
         schema.toLowerCase(),
       ),
+  );
+}
+
+function selectRelevantOracleSchemas(
+  schemas: string[],
+  connection: DatabaseConnection,
+): string[] {
+  const selected = (
+    connection.database ||
+    connection.schema ||
+    connection.serviceName ||
+    connection.sid ||
+    ""
+  )
+    .trim()
+    .toUpperCase();
+  if (selected && schemas.includes(selected)) {
+    return [selected];
+  }
+
+  const userSchema = connection.user.trim().toUpperCase();
+  if (userSchema && schemas.includes(userSchema)) {
+    return [userSchema];
+  }
+
+  return schemas.filter(
+    (schema) =>
+      ![
+        "ANONYMOUS",
+        "APEX_PUBLIC_USER",
+        "APPQOSSYS",
+        "AUDSYS",
+        "CTXSYS",
+        "DBSNMP",
+        "DIP",
+        "GGSYS",
+        "GSMADMIN_INTERNAL",
+        "MDSYS",
+        "OJVMSYS",
+        "OLAPSYS",
+        "ORDDATA",
+        "ORDSYS",
+        "OUTLN",
+        "SYS",
+        "SYSBACKUP",
+        "SYSDG",
+        "SYSKM",
+        "SYSRAC",
+        "SYSTEM",
+        "WMSYS",
+        "XDB",
+      ].includes(schema.toUpperCase()),
   );
 }
 
@@ -3647,6 +4206,101 @@ function createColumnMetadata(row: RowDataPacket): Array<{
     { label: "Comment", value: String(row.columnComment || "No comment") },
     ...(row.extra ? [{ label: "Extra", value: String(row.extra) }] : []),
   ].filter((item) => item.value !== "");
+}
+
+function createOracleColumnMetadata(row: Record<string, unknown>): Array<{
+  label: string;
+  value: string;
+}> {
+  return [
+    { label: "Type", value: formatOracleDataType(row) },
+    {
+      label: "Null",
+      value:
+        String(row.NULLABLE).toUpperCase() === "Y"
+          ? "Nullable"
+          : "Not nullable",
+    },
+    {
+      label: "Default",
+      value: row.DATA_DEFAULT == null ? "None" : String(row.DATA_DEFAULT),
+    },
+  ].filter((item) => item.value !== "");
+}
+
+function formatOracleDataType(row: Record<string, unknown>): string {
+  const dataType = String(row.DATA_TYPE ?? "");
+  const precision = row.DATA_PRECISION;
+  const scale = row.DATA_SCALE;
+  const charLength = row.CHAR_LENGTH;
+  const dataLength = row.DATA_LENGTH;
+  if (["CHAR", "NCHAR", "VARCHAR2", "NVARCHAR2"].includes(dataType)) {
+    const length = charLength ?? dataLength;
+    return length ? `${dataType}(${String(length)})` : dataType;
+  }
+  if (dataType === "NUMBER" && precision !== null && precision !== undefined) {
+    return scale !== null && scale !== undefined
+      ? `NUMBER(${String(precision)},${String(scale)})`
+      : `NUMBER(${String(precision)})`;
+  }
+  if (["FLOAT", "RAW"].includes(dataType) && dataLength) {
+    return `${dataType}(${String(dataLength)})`;
+  }
+  return dataType;
+}
+
+function normalizeOracleObjectRow(
+  row: Record<string, unknown> | unknown[],
+): Record<string, unknown> {
+  return Array.isArray(row) ? {} : row;
+}
+
+function normalizeOracleRow(
+  row: Record<string, unknown> | unknown[],
+): Record<string, DatabaseQueryValue> {
+  if (Array.isArray(row)) {
+    return {};
+  }
+  const normalized: Record<string, DatabaseQueryValue> = {};
+  for (const [key, value] of Object.entries(row)) {
+    normalized[key] = normalizeOracleValue(value);
+  }
+  return normalized;
+}
+
+function normalizeOracleValue(value: unknown): DatabaseQueryValue {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Buffer.isBuffer(value)) {
+    return `0x${value.toString("hex")}`;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return JSON.stringify(value);
+}
+
+function formatOracleResultColumnType(
+  field: OracleColumnMetadata,
+): string | undefined {
+  if (field.dbTypeName) {
+    return field.dbTypeName;
+  }
+  if (field.fetchType) {
+    return String(field.fetchType);
+  }
+  return undefined;
 }
 
 function normalizeMysqlRow(

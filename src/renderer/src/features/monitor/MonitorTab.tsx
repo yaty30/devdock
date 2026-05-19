@@ -380,7 +380,7 @@ function RecentBuildsPanel({
                 <td>{build.profile}</td>
                 <td>
                   <span
-                    className={`status-pill ${buildStatusClass(build.status)}`}
+                    className={`status-pill build-status ${buildStatusClass(build.status)}`}
                   >
                     {build.status}
                   </span>

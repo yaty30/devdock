@@ -3,6 +3,8 @@ out/
 dist/
 *.tsbuildinfo
 *.log
+playwright-report/
+test-results/
 
 dummy/**/node_modules/
 dummy/**/dist/

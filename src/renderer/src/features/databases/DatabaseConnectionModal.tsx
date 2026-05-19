@@ -32,6 +32,7 @@ type DatabaseConnectionDraft = {
   serviceName: string;
   sid: string;
   connectString: string;
+  networkAlias: string;
   role: string;
   walletPath: string;
 };
@@ -63,6 +64,7 @@ const ORACLE_CONNECTION_MODES: Array<AppSelectOption<OracleConnectionMode>> = [
   { value: "serviceName", label: "Service name" },
   { value: "sid", label: "SID" },
   { value: "connectString", label: "Connection string" },
+  { value: "tnsAlias", label: "TNS alias" },
 ];
 
 export function DatabaseConnectionModal({
@@ -145,6 +147,7 @@ export function DatabaseConnectionModal({
       serviceName: type === "Oracle" ? current.serviceName || "XEPDB1" : "",
       sid: type === "Oracle" ? current.sid : "",
       connectString: type === "Oracle" ? current.connectString : "",
+      networkAlias: type === "Oracle" ? current.networkAlias : "",
       role: type === "Oracle" ? current.role : "",
       walletPath: type === "Oracle" ? current.walletPath : "",
     }));
@@ -231,8 +234,7 @@ export function DatabaseConnectionModal({
     }
   }
 
-  const isOracleConnectString =
-    draft.type === "Oracle" && draft.connectionMode === "connectString";
+  const isOracleIndirectTarget = isOracleIndirectConnection(draft);
 
   return (
     <Modal
@@ -278,27 +280,31 @@ export function DatabaseConnectionModal({
         <section className="database-connection-section">
           <h3 className="database-connection-section-title">Server</h3>
           <div className="database-connection-form-grid">
-            <ConnectionField label="Host" error={errors.host}>
-              <input
-                type="text"
-                value={draft.host}
-                disabled={isOracleConnectString}
-                placeholder={
-                  isOracleConnectString
-                    ? "Using connection string"
-                    : "localhost"
-                }
-                onChange={(event) => updateDraft("host", event.target.value)}
-              />
-            </ConnectionField>
-            <ConnectionField label="Port" error={errors.port}>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={draft.port}
-                onChange={(event) => updateDraft("port", event.target.value)}
-              />
-            </ConnectionField>
+            {!isOracleIndirectTarget ? (
+              <>
+                <ConnectionField label="Host" error={errors.host}>
+                  <input
+                    type="text"
+                    value={draft.host}
+                    placeholder="localhost"
+                    onChange={(event) =>
+                      updateDraft("host", event.target.value)
+                    }
+                  />
+                </ConnectionField>
+                <ConnectionField label="Port" error={errors.port}>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={draft.port}
+                    placeholder="1521"
+                    onChange={(event) =>
+                      updateDraft("port", event.target.value)
+                    }
+                  />
+                </ConnectionField>
+              </>
+            ) : null}
             <ConnectionField label="Username" error={errors.user}>
               <input
                 type="text"
@@ -444,6 +450,21 @@ export function DatabaseConnectionModal({
                   />
                 </ConnectionField>
               ) : null}
+              {draft.connectionMode === "tnsAlias" ? (
+                <ConnectionField
+                  label="Network alias"
+                  error={errors.networkAlias}
+                >
+                  <input
+                    type="text"
+                    value={draft.networkAlias}
+                    placeholder="ORCLPDB1"
+                    onChange={(event) =>
+                      updateDraft("networkAlias", event.target.value)
+                    }
+                  />
+                </ConnectionField>
+              ) : null}
               <ConnectionField label="Role">
                 <input
                   type="text"
@@ -571,6 +592,11 @@ function createConnectionDraft(
       serviceName: connection.serviceName ?? connection.schema ?? "",
       sid: connection.sid ?? "",
       connectString: connection.connectString ?? "",
+      networkAlias:
+        connection.networkAlias ??
+        (connection.connectionMode === "tnsAlias"
+          ? connection.connectString ?? connection.schema ?? ""
+          : ""),
       role: connection.role ?? "",
       walletPath: connection.walletPath ?? "",
     };
@@ -592,6 +618,7 @@ function createConnectionDraft(
     serviceName: "XEPDB1",
     sid: "",
     connectString: "",
+    networkAlias: "",
     role: "",
     walletPath: "",
   };
@@ -617,6 +644,7 @@ function areConnectionDraftsEqual(
     "serviceName",
     "sid",
     "connectString",
+    "networkAlias",
     "role",
     "walletPath",
   ];
@@ -647,16 +675,16 @@ function validateConnectionDraft(
     errors.type = "Required";
   }
 
-  if (!(draft.type === "Oracle" && draft.connectionMode === "connectString")) {
+  if (!isOracleIndirectConnection(draft)) {
     if (!draft.host.trim()) {
       errors.host = "Required";
     }
-  }
 
-  if (!draft.port.trim()) {
-    errors.port = "Required";
-  } else if (!/^\d+$/.test(draft.port.trim())) {
-    errors.port = "Use numbers only";
+    if (!draft.port.trim()) {
+      errors.port = "Required";
+    } else if (!/^\d+$/.test(draft.port.trim())) {
+      errors.port = "Use numbers only";
+    }
   }
 
   if (!draft.user.trim()) {
@@ -684,6 +712,9 @@ function validateConnectionDraft(
     ) {
       errors.connectString = "Required";
     }
+    if (draft.connectionMode === "tnsAlias" && !draft.networkAlias.trim()) {
+      errors.networkAlias = "Required";
+    }
   }
 
   return errors;
@@ -703,7 +734,9 @@ function createConnectionFromDraft(
         ? draft.sid.trim()
         : draft.connectionMode === "connectString"
           ? draft.connectString.trim()
-          : draft.serviceName.trim();
+          : draft.connectionMode === "tnsAlias"
+            ? draft.networkAlias.trim()
+            : draft.serviceName.trim();
 
   // TODO: store saved passwords in secure Electron/OS credential storage.
   return {
@@ -728,10 +761,19 @@ function createConnectionFromDraft(
     serviceName: draft.serviceName.trim(),
     sid: draft.sid.trim(),
     connectString: draft.connectString.trim(),
+    networkAlias: draft.networkAlias.trim(),
     role: draft.role.trim(),
     walletPath: draft.walletPath.trim(),
     latency: existing?.latency ?? "Not tested",
     uptime: existing?.uptime ?? "Session",
     activeSessions: existing?.activeSessions ?? 1,
   };
+}
+
+function isOracleIndirectConnection(draft: DatabaseConnectionDraft): boolean {
+  return (
+    draft.type === "Oracle" &&
+    (draft.connectionMode === "connectString" ||
+      draft.connectionMode === "tnsAlias")
+  );
 }

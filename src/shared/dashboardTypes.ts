@@ -204,7 +204,11 @@ export type BrowsePathOptions = {
 export type DatabaseConnectionStatus = "connected" | "disconnected" | "error";
 export type DatabaseConnectionType = "MySQL" | "Oracle";
 export type DatabaseSslMode = "disabled" | "preferred" | "required";
-export type OracleConnectionMode = "serviceName" | "sid" | "connectString";
+export type OracleConnectionMode =
+  | "serviceName"
+  | "sid"
+  | "connectString"
+  | "tnsAlias";
 
 export type DatabaseConnection = {
   id: string;
@@ -225,6 +229,7 @@ export type DatabaseConnection = {
   serviceName?: string;
   sid?: string;
   connectString?: string;
+  networkAlias?: string;
   role?: string;
   walletPath?: string;
   latency: string;
@@ -370,7 +375,16 @@ export type ApiTesterRequest = {
   body?: string;
   bodyBase64?: string;
   bodyEncoding?: "utf8" | "base64";
+  bodyFormData?: ApiTesterFormDataPart[];
   timeoutMs?: number;
+};
+
+export type ApiTesterFormDataPart = {
+  name: string;
+  value?: string;
+  fileName?: string;
+  fileType?: string;
+  fileBase64?: string;
 };
 
 export type ApiTesterResponseHeader = {
@@ -387,6 +401,9 @@ export type ApiTesterResponse = {
   sizeBytes: number;
   headers: ApiTesterResponseHeader[];
   body: string;
+  bodyBase64?: string;
+  bodyEncoding?: "utf8" | "base64";
+  binary?: boolean;
 };
 
 export type DashboardEvent =
@@ -430,6 +447,10 @@ export type DashboardEvent =
 
 export type DashboardApi = {
   getFeatureFlags: () => Promise<{ chatEnabled: boolean }>;
+  isWindowMaximized: () => Promise<boolean>;
+  minimizeWindow: () => Promise<void>;
+  toggleMaximizeWindow: () => Promise<void>;
+  closeWindow: () => Promise<void>;
   sendApiTesterRequest: (
     request: ApiTesterRequest,
   ) => Promise<ApiTesterResponse>;
@@ -556,4 +577,5 @@ export type DashboardApi = {
     listener: (projectId: string, service: ServiceName) => void,
   ) => () => void;
   onChatOpenRequest: (listener: (conversationId: string) => void) => () => void;
+  onWindowMaximizedChange: (listener: (maximized: boolean) => void) => () => void;
 };

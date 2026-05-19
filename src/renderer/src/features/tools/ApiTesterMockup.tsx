@@ -43,6 +43,7 @@ import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Panel } from "../../components/common/Panel";
 import { copyTextToClipboard } from "../../utils/copyToClipboard";
 import type {
+  ApiTesterFormDataPart,
   ApiTesterRequest,
   ApiTesterResponse,
   ApiTesterResponseHeader,
@@ -57,7 +58,7 @@ type ApiMethod =
   | "HEAD"
   | "OPTIONS";
 
-type ApiBuilderTab = "Params" | "Headers" | "Body" | "Auth";
+type ApiBuilderTab = "Params" | "Headers" | "Body" | "Auth" | "Settings";
 type ApiBodyMode = "raw" | "media";
 type ApiResponseTab = "Pretty" | "Raw" | "Headers" | "Cookies";
 type ApiTesterView = "test" | "history";
@@ -117,8 +118,10 @@ type SavedApiTesterRequest = {
   headers: ApiKeyValueRow[];
   body: string;
   bodyMode?: ApiBodyMode;
+  rawContentType?: string;
   mediaFields?: ApiKeyValueRow[];
   bearerToken: string;
+  timeoutMs?: number;
 };
 
 export type ApiTesterDraftState = SavedApiTesterRequest;
@@ -145,6 +148,7 @@ type ApiTesterHistoryMetadata = {
 
 type ApiTesterHistoryDetail = {
   id: string;
+  requestSnapshot?: SavedApiTesterRequest;
   requestHeaders: ApiTesterResponseHeader[];
   requestBodyPreview: string;
   responseHeaders: ApiTesterResponseHeader[];
@@ -221,6 +225,8 @@ const DEFAULT_HEADERS: ApiKeyValueRow[] = [
 ];
 
 const DEFAULT_MEDIA_FIELDS: ApiKeyValueRow[] = [createRow("", "", true)];
+const DEFAULT_RAW_CONTENT_TYPE = "application/json";
+const DEFAULT_TIMEOUT_MS = 60000;
 
 type SavedApiRequestRecord = {
   id: string;
@@ -260,10 +266,14 @@ export function ApiTesterMockup({
   const [headers, setHeaders] = useState<ApiKeyValueRow[]>(savedRequest.headers);
   const [body, setBody] = useState(savedRequest.body);
   const [bodyMode, setBodyMode] = useState<ApiBodyMode>(savedRequest.bodyMode ?? "raw");
+  const [rawContentType, setRawContentType] = useState(
+    savedRequest.rawContentType ?? DEFAULT_RAW_CONTENT_TYPE,
+  );
   const [mediaFields, setMediaFields] = useState<ApiKeyValueRow[]>(
     savedRequest.mediaFields ?? DEFAULT_MEDIA_FIELDS,
   );
   const [bearerToken, setBearerToken] = useState(savedRequest.bearerToken);
+  const [timeoutMs, setTimeoutMs] = useState(savedRequest.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const [activeBuilderTab, setActiveBuilderTab] =
     useState<ApiBuilderTab>("Params");
   const [activeResponseTab, setActiveResponseTab] =
@@ -308,8 +318,10 @@ export function ApiTesterMockup({
       headers,
       body,
       bodyMode,
+      rawContentType,
       mediaFields,
       bearerToken,
+      timeoutMs,
     };
     window.localStorage.setItem(
       savedRequestStorageKey(storageScopeId),
@@ -326,7 +338,9 @@ export function ApiTesterMockup({
     headers,
     mediaFields,
     method,
+    rawContentType,
     params,
+    timeoutMs,
     url,
   ]);
 
@@ -360,13 +374,19 @@ export function ApiTesterMockup({
         const requestBody = canMethodSendBody(snapshot.method)
           ? buildRequestBody(snapshot)
           : undefined;
+        const headerBody = requestBody?.bodyFormData
+          ? ""
+          : requestBody?.textPreview ?? snapshot.body;
         const requestHeaders = buildRequestHeaders(
           snapshot.headers,
           snapshot.bearerToken,
           snapshot.method,
-          requestBody?.textPreview ?? snapshot.body,
+          headerBody,
           requestBody?.contentType,
         );
+        if (requestBody?.bodyFormData) {
+          deleteHeader(requestHeaders, "content-type");
+        }
         const historySnapshot = {
           ...snapshot,
           body: requestBody?.textPreview ?? snapshot.body,
@@ -388,7 +408,8 @@ export function ApiTesterMockup({
           body: requestBody?.body,
           bodyBase64: requestBody?.bodyBase64,
           bodyEncoding: requestBody?.bodyEncoding,
-          timeoutMs: 60000,
+          bodyFormData: requestBody?.bodyFormData,
+          timeoutMs: snapshot.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         });
         setResponse(nextResponse);
         setActiveResponseTab("Pretty");
@@ -452,8 +473,10 @@ export function ApiTesterMockup({
       headers,
       body,
       bodyMode,
+      rawContentType,
       mediaFields,
       bearerToken,
+      timeoutMs,
     });
   }, [
     bearerToken,
@@ -463,21 +486,30 @@ export function ApiTesterMockup({
     headers,
     mediaFields,
     method,
+    rawContentType,
     params,
+    timeoutMs,
     url,
   ]);
 
   useEffect(() => {
-    onStateChange?.({
+    const nextRequest: SavedApiTesterRequest = {
       method,
       url,
       params,
       headers,
       body,
       bodyMode,
+      rawContentType,
       mediaFields,
       bearerToken,
-    });
+      timeoutMs,
+    };
+    window.localStorage.setItem(
+      savedRequestStorageKey(storageScopeId),
+      JSON.stringify(nextRequest),
+    );
+    onStateChange?.(nextRequest);
   }, [
     bearerToken,
     body,
@@ -486,7 +518,10 @@ export function ApiTesterMockup({
     mediaFields,
     method,
     onStateChange,
+    rawContentType,
     params,
+    storageScopeId,
+    timeoutMs,
     url,
   ]);
 
@@ -547,11 +582,13 @@ export function ApiTesterMockup({
   async function rerunHistoryRecord(
     record: ApiTesterHistoryMetadata,
   ): Promise<ApiTesterHistoryMetadata | null> {
-    if (!isSuccessfulApiHistoryRecord(record)) {
-      return null;
+    const detail = readHistoryDetail(storageScopeId, record.id);
+    if (detail?.requestSnapshot) {
+      const nextRequest = normalizeSavedRequest(detail.requestSnapshot);
+      applySavedRequest(nextRequest);
+      return executeRequest(nextRequest);
     }
 
-    const detail = readHistoryDetail(storageScopeId, record.id);
     const nextHeaders = detail
       ? detail.requestHeaders.map((header) =>
           createRow(header.name, header.value, true),
@@ -565,8 +602,10 @@ export function ApiTesterMockup({
     setHeaders(nextHeaders);
     setBody(nextBody);
     setBodyMode("raw");
+    setRawContentType(DEFAULT_RAW_CONTENT_TYPE);
     setMediaFields(DEFAULT_MEDIA_FIELDS);
     setBearerToken("");
+    setTimeoutMs(DEFAULT_TIMEOUT_MS);
     if (!canMethodSendBody(record.method) && activeBuilderTab === "Body") {
       setActiveBuilderTab("Params");
     }
@@ -576,7 +615,10 @@ export function ApiTesterMockup({
       params: [],
       headers: nextHeaders,
       body: nextBody,
+      bodyMode: "raw",
+      rawContentType: DEFAULT_RAW_CONTENT_TYPE,
       bearerToken: "",
+      timeoutMs: DEFAULT_TIMEOUT_MS,
     });
   }
 
@@ -691,8 +733,10 @@ export function ApiTesterMockup({
     setHeaders(DEFAULT_HEADERS);
     setBody("");
     setBodyMode("raw");
+    setRawContentType(DEFAULT_RAW_CONTENT_TYPE);
     setMediaFields(DEFAULT_MEDIA_FIELDS);
     setBearerToken("");
+    setTimeoutMs(DEFAULT_TIMEOUT_MS);
     setResponse(null);
     setRequestError(null);
     setSavedAt(null);
@@ -701,6 +745,16 @@ export function ApiTesterMockup({
   function updateBodyParams(nextRows: ApiKeyValueRow[]): void {
     setMediaFields(nextRows);
     setBody(formatBodyParamsRawBody(nextRows));
+  }
+
+  function switchBodyMode(nextMode: ApiBodyMode): void {
+    if (nextMode === "media") {
+      const derivedRows = createBodyParamsFromRawBody(body);
+      setMediaFields((current) =>
+        bodyMode === "raw" || !hasBodyParamRows(current) ? derivedRows : current,
+      );
+    }
+    setBodyMode(nextMode);
   }
 
   async function selectBodyParamFile(
@@ -746,8 +800,10 @@ export function ApiTesterMockup({
       headers,
       body,
       bodyMode,
+      rawContentType,
       mediaFields,
       bearerToken,
+      timeoutMs,
     };
   }
 
@@ -817,12 +873,20 @@ export function ApiTesterMockup({
     setParams(next.params);
     setHeaders(next.headers);
     setBodyMode(next.bodyMode ?? "raw");
-    const nextBodyParams = next.mediaFields ?? DEFAULT_MEDIA_FIELDS;
+    setRawContentType(next.rawContentType ?? DEFAULT_RAW_CONTENT_TYPE);
+    const savedBodyParams = next.mediaFields ?? DEFAULT_MEDIA_FIELDS;
+    const nextBodyParams =
+      next.bodyMode === "raw"
+        ? createBodyParamsFromRawBody(next.body)
+        : hasBodyParamRows(savedBodyParams)
+          ? savedBodyParams
+          : createBodyParamsFromRawBody(next.body);
     setMediaFields(nextBodyParams);
     setBody(
       next.bodyMode === "media" ? formatBodyParamsRawBody(nextBodyParams) : next.body,
     );
     setBearerToken(next.bearerToken);
+    setTimeoutMs(next.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     if (!canMethodSendBody(next.method) && activeBuilderTab === "Body") {
       setActiveBuilderTab("Params");
     }
@@ -839,12 +903,17 @@ export function ApiTesterMockup({
       return;
     }
 
-    const text = getResponseClipboardText(response, activeResponseTab);
-    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const blob = response.binary && response.bodyBase64
+      ? new Blob([base64ToArrayBuffer(response.bodyBase64)], {
+          type: getResponseContentType(response) ?? "application/octet-stream",
+        })
+      : new Blob([getResponseClipboardText(response, activeResponseTab)], {
+          type: "text/plain;charset=utf-8",
+        });
     const objectUrl = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = objectUrl;
-    anchor.download = `api-response-${Date.now()}.txt`;
+    anchor.download = `api-response-${Date.now()}${response.binary ? ".bin" : ".txt"}`;
     anchor.click();
     URL.revokeObjectURL(objectUrl);
   }
@@ -856,6 +925,7 @@ export function ApiTesterMockup({
         storageScopeId={storageScopeId}
         onFeedback={onFeedback}
         onRerun={rerunHistoryRecord}
+        onOpenTest={() => onViewChange?.("test")}
         onClearHistory={clearHistory}
       />
     );
@@ -874,6 +944,7 @@ export function ApiTesterMockup({
           minDropdownWidth={110}
         />
         <input
+          data-testid="api-request-url"
           type="url"
           value={url}
           placeholder="https://api.example.com/v1/resource"
@@ -889,6 +960,7 @@ export function ApiTesterMockup({
         <button
           className="button primary compact"
           type="button"
+          data-testid="api-send-button"
           disabled={isSending || !url.trim()}
           onClick={() => void sendRequest()}
         >
@@ -902,10 +974,11 @@ export function ApiTesterMockup({
         <button
           className="icon-button secondary api-request-save-trigger"
           type="button"
-          title="Save request"
-          aria-label="Save request"
+          data-testid="api-save-draft-button"
+          title="Save draft"
+          aria-label="Save draft"
           disabled={isSending}
-          onClick={openSaveDialog}
+          onClick={saveRequest}
         >
           <Save size={15} />
         </button>
@@ -913,6 +986,7 @@ export function ApiTesterMockup({
           <button
             className="button secondary compact"
             type="button"
+            data-testid="api-save-as-button"
             title="Save As"
             onClick={openSaveDialog}
             disabled={isSending}
@@ -922,6 +996,7 @@ export function ApiTesterMockup({
           <button
             className="button secondary compact"
             type="button"
+            data-testid="api-open-request-button"
             title="Open"
             onClick={() => openRequestInputRef.current?.click()}
             disabled={isSending}
@@ -971,7 +1046,7 @@ export function ApiTesterMockup({
       >
         <section className="api-request-builder panel">
           <div className="api-tabs" role="tablist" aria-label="Request builder">
-            {(["Params", "Headers", "Body", "Auth"] as const).map((tab) => (
+            {(["Params", "Headers", "Body", "Auth", "Settings"] as const).map((tab) => (
               <button
                 className={tab === activeBuilderTab ? "active" : undefined}
                 type="button"
@@ -1015,31 +1090,45 @@ export function ApiTesterMockup({
                   <button
                     className={bodyMode === "raw" ? "active" : undefined}
                     type="button"
+                    data-testid="api-body-raw-tab"
                     role="tab"
                     aria-selected={bodyMode === "raw"}
-                    onClick={() => setBodyMode("raw")}
+                    onClick={() => switchBodyMode("raw")}
                   >
                     Raw
                   </button>
                   <button
                     className={bodyMode === "media" ? "active" : undefined}
                     type="button"
+                    data-testid="api-body-form-data-tab"
                     role="tab"
                     aria-selected={bodyMode === "media"}
-                    onClick={() => setBodyMode("media")}
+                    onClick={() => switchBodyMode("media")}
                   >
-                    Media
+                    Form Data
                   </button>
                 </div>
                 {bodyMode === "raw" ? (
-                  <textarea
-                    className="api-body-editor"
-                    value={body}
-                    spellCheck={false}
-                    aria-label="Request body"
-                    placeholder="Request body"
-                    onChange={(event) => setBody(event.target.value)}
-                  />
+                  <div className="api-raw-body-panel">
+                    <label className="api-content-type-field">
+                      <span>Content-Type</span>
+                      <input
+                        value={rawContentType}
+                        aria-label="Raw body content type"
+                        placeholder="application/json"
+                        onChange={(event) => setRawContentType(event.target.value)}
+                      />
+                    </label>
+                    <textarea
+                      className="api-body-editor"
+                      data-testid="api-request-body"
+                      value={body}
+                      spellCheck={false}
+                      aria-label="Request body"
+                      placeholder="Request body"
+                      onChange={(event) => setBody(event.target.value)}
+                    />
+                  </div>
                 ) : (
                   <div className="api-media-upload-panel">
                     <div className="api-media-fields">
@@ -1069,8 +1158,33 @@ export function ApiTesterMockup({
                   <input
                     type="password"
                     value={bearerToken}
+                    aria-label="Bearer token"
                     placeholder="Paste token"
                     onChange={(event) => setBearerToken(event.target.value)}
+                  />
+                </label>
+              </div>
+            ) : null}
+            {activeBuilderTab === "Settings" ? (
+              <div className="api-auth-panel">
+                <label>
+                  <span>Timeout (ms)</span>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={300000}
+                    step={1000}
+                    value={timeoutMs}
+                    aria-label="Request timeout in milliseconds"
+                    onChange={(event) =>
+                      setTimeoutMs(
+                        clamp(
+                          Number(event.target.value) || DEFAULT_TIMEOUT_MS,
+                          1000,
+                          300000,
+                        ),
+                      )
+                    }
                   />
                 </label>
               </div>
@@ -1098,6 +1212,7 @@ export function ApiTesterMockup({
               <h2>Response</h2>
               <div className="api-response-badges">
                 <span
+                  data-testid="api-response-status"
                   className={response?.ok ? "success" : response ? "error" : ""}
                 >
                   {isSending
@@ -1114,6 +1229,8 @@ export function ApiTesterMockup({
               <button
                 className="icon-button secondary"
                 type="button"
+                title="Pretty response"
+                aria-label="Pretty response"
                 disabled={!response}
                 onClick={() => setActiveResponseTab("Pretty")}
               >
@@ -1122,6 +1239,8 @@ export function ApiTesterMockup({
               <button
                 className="icon-button secondary"
                 type="button"
+                title="Copy response"
+                aria-label="Copy response"
                 disabled={!response}
                 onClick={() => void copyCurrentResponse()}
               >
@@ -1130,6 +1249,8 @@ export function ApiTesterMockup({
               <button
                 className="icon-button secondary"
                 type="button"
+                title="Download response"
+                aria-label="Download response"
                 disabled={!response}
                 onClick={downloadResponse}
               >
@@ -1311,6 +1432,7 @@ function ApiTesterHistoryView({
   storageScopeId,
   onFeedback,
   onRerun,
+  onOpenTest,
   onClearHistory,
 }: {
   history: ApiTesterHistoryMetadata[];
@@ -1319,6 +1441,7 @@ function ApiTesterHistoryView({
   onRerun: (
     record: ApiTesterHistoryMetadata,
   ) => Promise<ApiTesterHistoryMetadata | null>;
+  onOpenTest: () => void;
   onClearHistory: () => void;
 }): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1391,13 +1514,8 @@ function ApiTesterHistoryView({
   async function rerunHistoryEntry(
     entry: ApiTesterHistoryMetadata,
   ): Promise<void> {
-    const nextMetadata = await onRerun(entry);
-    if (!nextMetadata) {
-      return;
-    }
-
-    setSelectedId(nextMetadata.id);
-    setSelectedDetail(readHistoryDetail(storageScopeId, nextMetadata.id));
+    onOpenTest();
+    await onRerun(entry);
   }
 
   function startHistoryColumnResize(
@@ -1550,7 +1668,7 @@ function ApiTesterHistoryView({
             </thead>
             <tbody>
               {history.map((entry) => {
-                const canRerun = isSuccessfulApiHistoryRecord(entry);
+                const canRerun = true;
 
                 return (
                   <tr
@@ -1605,7 +1723,7 @@ function ApiTesterHistoryView({
                         title={
                           canRerun
                             ? "Re-run API test"
-                            : "Only successful API tests can be re-run"
+                            : "API test cannot be re-run"
                         }
                         disabled={!canRerun}
                         onClick={(event) => {
@@ -1648,7 +1766,7 @@ function ApiTesterHistoryView({
       {clearHistoryConfirmOpen ? (
         <ConfirmDialog
           title="Clear API Test History?"
-          message="Clearing API test history is irreversible and will remove every saved request and response detail."
+          message="Clearing API test history is irreversible and will remove every stored request and response detail from history."
           confirmLabel="Continue"
           onClose={() => setClearHistoryConfirmOpen(false)}
           onConfirm={() => {
@@ -2026,6 +2144,42 @@ function formatBodyParamsRawBody(rows: ApiKeyValueRow[]): string {
   return JSON.stringify(payload, null, 2);
 }
 
+function hasBodyParamRows(rows: ApiKeyValueRow[]): boolean {
+  return rows.some(
+    (row) =>
+      row.key.trim() ||
+      row.value.trim() ||
+      Boolean(row.fileName || row.fileBase64),
+  );
+}
+
+function createBodyParamsFromRawBody(body: string): ApiKeyValueRow[] {
+  const trimmedBody = body.trim();
+  if (!trimmedBody) {
+    return [createRow()];
+  }
+
+  try {
+    const parsed = JSON.parse(trimmedBody) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.map((value, index) =>
+        createRow(String(index), formatHistoryBodyValue(value), true),
+      );
+    }
+
+    if (parsed && typeof parsed === "object") {
+      const rows = Object.entries(parsed as Record<string, unknown>).map(
+        ([key, value]) => createRow(key, formatHistoryBodyValue(value), true),
+      );
+      return rows.length > 0 ? rows : [createRow()];
+    }
+
+    return [createRow("Body", formatHistoryBodyValue(parsed), true)];
+  } catch {
+    return [createRow("Body", body, true)];
+  }
+}
+
 function clearBodyParamFileAndValue(
   row: ApiKeyValueRow,
 ): ApiKeyValueRow {
@@ -2221,7 +2375,9 @@ function ResponseCookiesTable({
   response: ApiTesterResponse;
 }): JSX.Element {
   const cookies = response.headers.filter((header) =>
-    header.name.toLowerCase().includes("cookie"),
+    ["cookie", "set-cookie", "set-cookie2"].includes(
+      header.name.toLowerCase(),
+    ),
   );
 
   return (
@@ -2558,7 +2714,7 @@ function normalizeSavedRequest(
     method,
     url: typeof parsed?.url === "string" && parsed.url.trim()
       ? parsed.url
-      : "https://api.example.com/v1/users/123",
+      : "https://httpbin.org/get",
     params: normalizeRows(parsed?.params, DEFAULT_PARAMS),
     headers: normalizeRows(parsed?.headers, DEFAULT_HEADERS),
     body:
@@ -2566,8 +2722,16 @@ function normalizeSavedRequest(
         ? parsed.body
         : '',
     bodyMode: parsed?.bodyMode === "media" ? "media" : "raw",
+    rawContentType:
+      typeof parsed?.rawContentType === "string"
+        ? parsed.rawContentType
+        : DEFAULT_RAW_CONTENT_TYPE,
     mediaFields: normalizeRows(parsed?.mediaFields, DEFAULT_MEDIA_FIELDS),
     bearerToken: typeof parsed?.bearerToken === "string" ? parsed.bearerToken : "",
+    timeoutMs:
+      typeof parsed?.timeoutMs === "number" && Number.isFinite(parsed.timeoutMs)
+        ? clamp(Math.round(parsed.timeoutMs), 1000, 300000)
+        : DEFAULT_TIMEOUT_MS,
   };
 }
 
@@ -2916,6 +3080,8 @@ function isApiTesterHistoryDetail(
   const detail = value as Partial<ApiTesterHistoryDetail>;
   return (
     typeof detail.id === "string" &&
+    (detail.requestSnapshot === undefined ||
+      typeof detail.requestSnapshot === "object") &&
     Array.isArray(detail.requestHeaders) &&
     typeof detail.requestBodyPreview === "string" &&
     Array.isArray(detail.responseHeaders) &&
@@ -2938,6 +3104,7 @@ function createHistoryDetail(
 
   return {
     id,
+    requestSnapshot: normalizeSavedRequest(request),
     requestHeaders: maskHeaders(headersRecordToList(requestHeaders)),
     requestBodyPreview: canMethodSendBody(request.method)
       ? createBodyPreview(request.body).preview
@@ -2956,6 +3123,7 @@ function createErrorHistoryDetail(
 ): ApiTesterHistoryDetail {
   return {
     id,
+    requestSnapshot: normalizeSavedRequest(request),
     requestHeaders: maskHeaders(
       headersRecordToList(
         buildRequestHeaders(
@@ -2998,8 +3166,7 @@ function maskHeaders(
   return headers.map((header) => ({
     name: header.name,
     value: isSensitiveHeader(header.name)
-      ? // "[masked]"
-        header.value
+      ? "[masked]"
       : header.value,
   }));
 }
@@ -3022,6 +3189,14 @@ function headersRecordToList(
 
 function formatHeadersForClipboard(headers: ApiTesterResponseHeader[]): string {
   return headers.map((header) => `${header.name}: ${header.value}`).join("\n");
+}
+
+function getResponseContentType(
+  response: ApiTesterResponse,
+): string | undefined {
+  return response.headers.find(
+    (header) => header.name.toLowerCase() === "content-type",
+  )?.value;
 }
 
 function isBinaryResponse(headers: ApiTesterResponseHeader[]): boolean {
@@ -3063,31 +3238,82 @@ async function sendApiTesterRequestInRenderer(
 ): Promise<ApiTesterResponse> {
   const method = request.method.trim().toUpperCase();
   const canHaveBody = method !== "GET" && method !== "HEAD";
-  const requestBody =
-    canHaveBody && request.bodyEncoding === "base64" && request.bodyBase64
-      ? base64ToArrayBuffer(request.bodyBase64)
-      : request.body;
+  const requestBody = createRendererApiTesterRequestBody(request, canHaveBody);
+  const requestHeaders = { ...request.headers };
+  if (canHaveBody && request.bodyFormData?.length) {
+    deleteHeader(requestHeaders, "content-type");
+  }
   const startedAt = performance.now();
   const response = await fetch(request.url, {
     method,
-    headers: request.headers,
+    headers: requestHeaders,
     body: canHaveBody ? requestBody : undefined,
     redirect: "follow",
   });
-  const body = await response.text();
+  const headers = Array.from(response.headers.entries()).map(([name, value]) => ({
+    name,
+    value,
+  }));
+  const responseBytes = new Uint8Array(await response.arrayBuffer());
+  const binary = isBinaryResponse(headers);
+  const body = binary ? "" : new TextDecoder().decode(responseBytes);
   return {
     ok: response.ok,
     status: response.status,
     statusText: response.statusText,
     url: response.url,
     durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-    sizeBytes: new TextEncoder().encode(body).byteLength,
-    headers: Array.from(response.headers.entries()).map(([name, value]) => ({
-      name,
-      value,
-    })),
+    sizeBytes: responseBytes.byteLength,
+    headers,
     body,
+    bodyBase64: binary ? uint8ArrayToBase64(responseBytes) : undefined,
+    bodyEncoding: binary ? "base64" : "utf8",
+    binary,
   };
+}
+
+function createRendererApiTesterRequestBody(
+  request: ApiTesterRequest,
+  canHaveBody: boolean,
+): BodyInit | undefined {
+  if (!canHaveBody) {
+    return undefined;
+  }
+
+  if (request.bodyFormData?.length) {
+    return createRendererApiTesterFormData(request.bodyFormData);
+  }
+
+  if (request.bodyEncoding === "base64" && request.bodyBase64) {
+    return base64ToArrayBuffer(request.bodyBase64);
+  }
+
+  return request.body;
+}
+
+function createRendererApiTesterFormData(
+  parts: ApiTesterFormDataPart[],
+): FormData {
+  const formData = new FormData();
+
+  parts.forEach((part) => {
+    const name = part.name.trim();
+    if (!name) {
+      return;
+    }
+
+    if (part.fileBase64 && part.fileName) {
+      const blob = new Blob([base64ToArrayBuffer(part.fileBase64)], {
+        type: part.fileType || "application/octet-stream",
+      });
+      formData.append(name, blob, part.fileName);
+      return;
+    }
+
+    formData.append(name, part.value ?? "");
+  });
+
+  return formData;
 }
 
 function isMissingApiTesterBridgeError(error: unknown): boolean {
@@ -3104,7 +3330,7 @@ function buildRequestUrl(url: string, params: ApiKeyValueRow[]): string {
   params.forEach((param) => {
     const key = param.key.trim();
     if (param.enabled && key) {
-      parsed.searchParams.set(key, param.value);
+      parsed.searchParams.append(key, param.value);
     }
   });
   return parsed.toString();
@@ -3166,20 +3392,27 @@ function buildRequestHeaders(
   return headers;
 }
 
+function deleteHeader(headers: Record<string, string>, name: string): void {
+  const normalizedName = name.toLowerCase();
+  Object.keys(headers).forEach((key) => {
+    if (key.toLowerCase() === normalizedName) {
+      delete headers[key];
+    }
+  });
+}
+
 function buildRequestBody(request: ApiTesterRequestSnapshot):
   | {
       body?: string;
       bodyBase64?: string;
       bodyEncoding?: "utf8" | "base64";
+      bodyFormData?: ApiTesterFormDataPart[];
       contentType?: string;
       textPreview: string;
     }
   | undefined {
   if (request.bodyMode === "media") {
-    const boundary = `----ivs-dashboard-${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2)}`;
-    const parts: Uint8Array[] = [];
+    const bodyFormData: ApiTesterFormDataPart[] = [];
     const previewLines: string[] = [];
     let hasBodyParam = false;
 
@@ -3192,32 +3425,19 @@ function buildRequestBody(request: ApiTesterRequestSnapshot):
       hasBodyParam = true;
 
       if (field.fileBase64 && field.fileName) {
-        parts.push(
-          utf8Bytes(
-            `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(
-              key,
-            )}"; filename="${escapeMultipartValue(
-              field.fileName,
-            )}"\r\nContent-Type: ${
-              field.fileType || "application/octet-stream"
-            }\r\n\r\n`,
-          ),
-          base64ToUint8Array(field.fileBase64),
-          utf8Bytes("\r\n"),
-        );
+        bodyFormData.push({
+          name: key,
+          fileName: field.fileName,
+          fileType: field.fileType || "application/octet-stream",
+          fileBase64: field.fileBase64,
+        });
         previewLines.push(
           `${key}: ${field.fileName} (${field.fileType || "application/octet-stream"}${typeof field.fileSize === "number" ? `, ${formatBytes(field.fileSize)}` : ""})`,
         );
         return;
       }
 
-      parts.push(
-        utf8Bytes(
-          `--${boundary}\r\nContent-Disposition: form-data; name="${escapeMultipartValue(
-            key,
-          )}"\r\n\r\n${field.value}\r\n`,
-        ),
-      );
+      bodyFormData.push({ name: key, value: field.value });
       previewLines.push(`${key}: ${field.value}`);
     });
 
@@ -3225,18 +3445,17 @@ function buildRequestBody(request: ApiTesterRequestSnapshot):
       throw new Error("Add at least one Body Param before sending this request.");
     }
 
-    parts.push(utf8Bytes(`--${boundary}--\r\n`));
-
     return {
-      bodyBase64: uint8ArrayToBase64(concatUint8Arrays(parts)),
-      bodyEncoding: "base64",
-      contentType: `multipart/form-data; boundary=${boundary}`,
+      bodyFormData,
       textPreview: [`multipart/form-data`, ...previewLines].join("\n"),
     };
   }
 
   return {
     body: request.body,
+    contentType: request.body.trim()
+      ? request.rawContentType?.trim() || DEFAULT_RAW_CONTENT_TYPE
+      : undefined,
     textPreview: request.body,
   };
 }
@@ -3307,6 +3526,9 @@ function getDisplayedResponseBody(
   if (!response || tab === "Headers" || tab === "Cookies") {
     return "";
   }
+  if (response.binary) {
+    return "Binary response body is not displayed. Use Download to save it.";
+  }
   if (tab === "Raw") {
     return response.body;
   }
@@ -3335,7 +3557,11 @@ function getResponseClipboardText(
   }
   if (tab === "Cookies") {
     return response.headers
-      .filter((header) => header.name.toLowerCase().includes("cookie"))
+      .filter((header) =>
+        ["cookie", "set-cookie", "set-cookie2"].includes(
+          header.name.toLowerCase(),
+        ),
+      )
       .map((header) => `${header.name}: ${header.value}`)
       .join("\n");
   }

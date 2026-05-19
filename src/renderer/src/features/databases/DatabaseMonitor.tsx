@@ -38,6 +38,42 @@ function HistoryQueryCell({
     </div>
   );
 }
+
+function HistoryMessageCell({
+  message,
+  expanded,
+  onToggle,
+}: {
+  message: string;
+  expanded: boolean;
+  onToggle: () => void;
+}): JSX.Element {
+  const showToggle = message.length > 100 || /\s/.test(message.slice(100));
+  const preview =
+    message.length > 100 ? `${message.slice(0, 100).trimEnd()}...` : message;
+
+  if (!showToggle) {
+    return <span className="database-query-preview">{message}</span>;
+  }
+
+  return (
+    <div className={`database-history-message${expanded ? " expanded" : ""}`}>
+      {expanded ? (
+        <pre>{message}</pre>
+      ) : (
+        <span className="database-query-preview">{preview}</span>
+      )}
+      <button
+        className="database-query-toggle"
+        type="button"
+        onClick={onToggle}
+      >
+        {expanded ? "Show less" : "Show more"}
+      </button>
+    </div>
+  );
+}
+
 export function DatabaseMonitor({
   connection,
   executionHistory,
@@ -54,12 +90,14 @@ export function DatabaseMonitor({
   const [expandedQueryIds, setExpandedQueryIds] = useState<Set<string>>(
     () => new Set(),
   );
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const summaryItems = [
     { label: "Connection", value: connection.name },
     { label: "Database Type", value: connection.type },
     { label: "Status", value: <StatusPill status={connection.status} /> },
-    { label: "Host", value: connection.host },
-    { label: "Port", value: connection.port },
+    ...getConnectionTargetSummary(connection),
     { label: "Current User", value: connection.user },
     { label: "Current Schema", value: connection.schema },
     { label: "Last Refresh", value: formatCompactTime(lastRefreshTime) },
@@ -72,6 +110,18 @@ export function DatabaseMonitor({
 
   function toggleExpandedQuery(entryId: string): void {
     setExpandedQueryIds((current) => {
+      const next = new Set(current);
+      if (next.has(entryId)) {
+        next.delete(entryId);
+      } else {
+        next.add(entryId);
+      }
+      return next;
+    });
+  }
+
+  function toggleExpandedMessage(entryId: string): void {
+    setExpandedMessageIds((current) => {
       const next = new Set(current);
       if (next.has(entryId)) {
         next.delete(entryId);
@@ -144,7 +194,11 @@ export function DatabaseMonitor({
                     className="database-history-message-cell"
                     title={entry.message ?? entry.errorMessage ?? ""}
                   >
-                    {entry.message ?? entry.errorMessage ?? ""}
+                    <HistoryMessageCell
+                      message={entry.message ?? entry.errorMessage ?? ""}
+                      expanded={expandedMessageIds.has(entry.id)}
+                      onToggle={() => toggleExpandedMessage(entry.id)}
+                    />
                   </td>
                   <td>{entry.rows}</td>
                   <td>
@@ -177,6 +231,36 @@ export function DatabaseMonitor({
       </Panel>
     </div>
   );
+}
+
+function getConnectionTargetSummary(
+  connection: DatabaseConnection,
+): Array<{ label: string; value: string }> {
+  if (connection.type === "Oracle" && connection.connectionMode === "tnsAlias") {
+    return [
+      {
+        label: "Network Alias",
+        value: connection.networkAlias?.trim() || connection.schema || "Not set",
+      },
+    ];
+  }
+
+  if (
+    connection.type === "Oracle" &&
+    connection.connectionMode === "connectString"
+  ) {
+    return [
+      {
+        label: "Connect String",
+        value: connection.connectString?.trim() || "Not set",
+      },
+    ];
+  }
+
+  return [
+    { label: "Host", value: connection.host || "Not set" },
+    { label: "Port", value: connection.port || "--" },
+  ];
 }
 
 export function StatusPill({

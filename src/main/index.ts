@@ -36,7 +36,9 @@ import type {
   LogChannel,
   SheetUpdate,
   ApiTesterRequest,
+  ApiTesterFormDataPart,
   ApiTesterResponse,
+  ApiTesterResponseHeader,
   RecentBuildRecord,
 } from "../shared/dashboardTypes";
 import type {
@@ -103,6 +105,35 @@ function registerIpc(): void {
     withLoggedErrors("dashboard:getFeatureFlags", () => ({
       chatEnabled: CHAT_ENABLED,
     })),
+  );
+  ipcMain.handle("window:isMaximized", (event) =>
+    withLoggedErrors("window:isMaximized", () =>
+      BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false,
+    ),
+  );
+  ipcMain.handle("window:minimize", (event) =>
+    withLoggedErrors("window:minimize", () => {
+      BrowserWindow.fromWebContents(event.sender)?.minimize();
+    }),
+  );
+  ipcMain.handle("window:toggleMaximize", (event) =>
+    withLoggedErrors("window:toggleMaximize", () => {
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (!window) {
+        return;
+      }
+
+      if (window.isMaximized()) {
+        window.unmaximize();
+      } else {
+        window.maximize();
+      }
+    }),
+  );
+  ipcMain.handle("window:close", (event) =>
+    withLoggedErrors("window:close", () => {
+      BrowserWindow.fromWebContents(event.sender)?.close();
+    }),
   );
   ipcMain.handle(
     API_TESTER_REQUEST_CHANNEL,
@@ -506,10 +537,10 @@ async function sendApiTesterRequest(
     }
   });
   const canHaveBody = method !== "GET" && method !== "HEAD";
-  const requestBody =
-    canHaveBody && request.bodyEncoding === "base64" && request.bodyBase64
-      ? Buffer.from(request.bodyBase64, "base64")
-      : request.body;
+  const requestBody = createApiTesterRequestBody(request, canHaveBody);
+  if (canHaveBody && request.bodyFormData?.length) {
+    headers.delete("Content-Type");
+  }
   const startedAt = performance.now();
 
   try {
@@ -520,19 +551,27 @@ async function sendApiTesterRequest(
       redirect: "follow",
       signal: controller.signal,
     });
-    const body = await response.text();
+    const responseHeaders = Array.from(response.headers.entries()).map(
+      ([name, value]) => ({
+        name,
+        value,
+      }),
+    );
+    const responseBytes = Buffer.from(await response.arrayBuffer());
+    const binary = isBinaryApiTesterResponse(responseHeaders);
+    const body = binary ? "" : responseBytes.toString("utf8");
     return {
       ok: response.ok,
       status: response.status,
       statusText: response.statusText,
       url: response.url,
       durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
-      sizeBytes: Buffer.byteLength(body, "utf8"),
-      headers: Array.from(response.headers.entries()).map(([name, value]) => ({
-        name,
-        value,
-      })),
+      sizeBytes: responseBytes.byteLength,
+      headers: responseHeaders,
       body,
+      bodyBase64: binary ? responseBytes.toString("base64") : undefined,
+      bodyEncoding: binary ? "base64" : "utf8",
+      binary,
     };
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
@@ -542,6 +581,72 @@ async function sendApiTesterRequest(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function createApiTesterRequestBody(
+  request: ApiTesterRequest,
+  canHaveBody: boolean,
+): string | ArrayBuffer | FormData | undefined {
+  if (!canHaveBody) {
+    return undefined;
+  }
+
+  if (request.bodyFormData?.length) {
+    return createApiTesterFormData(request.bodyFormData);
+  }
+
+  if (request.bodyEncoding === "base64" && request.bodyBase64) {
+    return bufferToArrayBuffer(Buffer.from(request.bodyBase64, "base64"));
+  }
+
+  return request.body;
+}
+
+function bufferToArrayBuffer(buffer: Buffer): ArrayBuffer {
+  return buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength,
+  ) as ArrayBuffer;
+}
+
+function createApiTesterFormData(parts: ApiTesterFormDataPart[]): FormData {
+  const formData = new FormData();
+
+  parts.forEach((part) => {
+    const name = part.name.trim();
+    if (!name) {
+      return;
+    }
+
+    if (part.fileBase64 && part.fileName) {
+      const fileBytes = Buffer.from(part.fileBase64, "base64");
+      formData.append(
+        name,
+        new Blob([new Uint8Array(fileBytes)], {
+          type: part.fileType || "application/octet-stream",
+        }),
+        part.fileName,
+      );
+      return;
+    }
+
+    formData.append(name, part.value ?? "");
+  });
+
+  return formData;
+}
+
+function isBinaryApiTesterResponse(headers: ApiTesterResponseHeader[]): boolean {
+  const contentType = headers
+    .find((header) => header.name.toLowerCase() === "content-type")
+    ?.value.toLowerCase();
+  if (!contentType) {
+    return false;
+  }
+
+  return !/^(text\/)|json|xml|javascript|x-www-form-urlencoded|graphql/.test(
+    contentType,
+  );
 }
 
 function loadEnvironmentFile(): void {
@@ -933,14 +1038,11 @@ function createBuildNotificationFallbackOptions(
   build: RecentBuildRecord,
   projectName: string,
 ): NotificationConstructorOptions {
-  const statusLabel = `🚀 Build ${build.status}`;
+  const statusLabel = `🚀 Build ${build.status} 🕑: ${build.duration}`;
   const detailLines = [
-    `=============================================`,
-    `🦘 Profile:  ${build.profile}`,
-    `🌳 Branch:   ${build.branch}`,
-    `🔖 Commit:   @${build.commit}/${build.commitCleanliness}`,
-    `🕑 Duration: ${build.duration}`,
-    `=============================================`
+    `🦘 Profile: ${build.profile}`,
+    `🌳 Branch: ${build.branch}`,
+    `🔖 Commit: @${build.commit}/${build.commitCleanliness}`,
   ];
 
   return {
@@ -955,7 +1057,7 @@ function createBuildNotificationIconOptions(): NotificationConstructorOptions {
   return iconPath ? { icon: iconPath } : {};
 }
 
-const MAX_TOAST_IMAGE_BYTES = 200 * 1024;
+const MAX_TOAST_IMAGE_BYTES = 400 * 1024;
 
 function resolveNotificationIconPath(): string | null {
   const candidates = [
@@ -1017,6 +1119,7 @@ const createWindow = (): void => {
     height: 900,
     minWidth: 1280,
     minHeight: 800,
+    frame: false,
     title: "IVS Dashboard",
     backgroundColor: "#f3f4f6",
     show: false,
@@ -1028,6 +1131,18 @@ const createWindow = (): void => {
       nodeIntegration: false,
     },
   });
+
+  const emitMaximizedState = (): void => {
+    mainWindow?.webContents.send(
+      "window:maximized-changed",
+      mainWindow?.isMaximized() ?? false,
+    );
+  };
+
+  mainWindow.on("maximize", emitMaximizedState);
+  mainWindow.on("unmaximize", emitMaximizedState);
+  mainWindow.on("enter-full-screen", emitMaximizedState);
+  mainWindow.on("leave-full-screen", emitMaximizedState);
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;

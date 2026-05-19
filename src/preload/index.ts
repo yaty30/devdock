@@ -14,6 +14,10 @@ import type { ChatNativeNotification } from "../shared/chatTypes";
 
 const api: DashboardApi = {
   getFeatureFlags: () => ipcRenderer.invoke("dashboard:getFeatureFlags"),
+  isWindowMaximized: () => ipcRenderer.invoke("window:isMaximized"),
+  minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
+  toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggleMaximize"),
+  closeWindow: () => ipcRenderer.invoke("window:close"),
   sendApiTesterRequest: (request) =>
     ipcRenderer.invoke("apiTester:sendRequest", request),
   getSnapshot: () => ipcRenderer.invoke("dashboard:getSnapshot"),
@@ -152,6 +156,14 @@ const api: DashboardApi = {
     ) => listener(conversationId);
     ipcRenderer.on("chat:open-conversation", handler);
     return () => ipcRenderer.off("chat:open-conversation", handler);
+  },
+  onWindowMaximizedChange: (listener: (maximized: boolean) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      maximized: boolean,
+    ) => listener(maximized);
+    ipcRenderer.on("window:maximized-changed", handler);
+    return () => ipcRenderer.off("window:maximized-changed", handler);
   },
 };
 

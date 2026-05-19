@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   ChefHat,
@@ -11,13 +11,13 @@ import {
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
 import { Modal } from "./components/dialogs/Modal";
+import { AppHeader } from "./components/layout/AppHeader";
 import {
   FontSizeDropdown,
   HeaderActions,
   HeaderUtilityActions,
 } from "./components/layout/HeaderActions";
 import { Sidebar } from "./components/layout/Sidebar";
-import { SegmentedTabs } from "./components/navigation/SegmentedTabs";
 import {
   DatabaseConnectionModal,
   DatabaseWorkspace,
@@ -562,15 +562,30 @@ function App(): JSX.Element {
         (entry) => entry.connectionId === selectedDatabaseConnection.id,
       )
     : [];
-  const runningBuildItems = getBuildMiniPanelItems(
-    dashboardOverview,
-    projects,
-    dismissedBuildMiniRecordKeys,
-    buildMiniPanelSessionStartedAtRef.current,
+  const runningBuildItems = useMemo(
+    () =>
+      getBuildMiniPanelItems(
+        dashboardOverview,
+        projects,
+        dismissedBuildMiniRecordKeys,
+        buildMiniPanelSessionStartedAtRef.current,
+      ),
+    [dashboardOverview, dismissedBuildMiniRecordKeys, projects],
   );
-  const runningBuildKey = runningBuildItems
-    .map((item) => `${item.project.id}:${item.build.id}`)
-    .join("|");
+  const runningBuildKey = useMemo(
+    () =>
+      runningBuildItems
+        .map((item) => `${item.project.id}:${item.build.id}`)
+        .join("|"),
+    [runningBuildItems],
+  );
+  const completedBuildMiniRecordKeys = useMemo(
+    () =>
+      runningBuildItems
+        .filter((item) => item.build.status !== "Running")
+        .map(getBuildMiniRecordKey),
+    [runningBuildItems],
+  );
 
   useEffect(() => {
     if (buildMiniPanelBuildIdRef.current === runningBuildKey) {
@@ -578,10 +593,32 @@ function App(): JSX.Element {
     }
 
     buildMiniPanelBuildIdRef.current = runningBuildKey;
-    if (runningBuildKey) {
+    if (runningBuildKey && activeSection !== "project") {
       setBuildMiniPanelMinimized(false);
     }
-  }, [runningBuildKey]);
+  }, [activeSection, runningBuildKey]);
+
+  useEffect(() => {
+    if (activeSection !== "project") {
+      return;
+    }
+
+    if (completedBuildMiniRecordKeys.length === 0) {
+      return;
+    }
+
+    setDismissedBuildMiniRecordKeys((current) => {
+      let changed = false;
+      const next = new Set(current);
+      completedBuildMiniRecordKeys.forEach((key) => {
+        if (!next.has(key)) {
+          next.add(key);
+          changed = true;
+        }
+      });
+      return changed ? next : current;
+    });
+  }, [activeSection, completedBuildMiniRecordKeys]);
 
   useEffect(() => {
     if (splashSequenceStartedRef.current) {
@@ -1209,11 +1246,19 @@ function App(): JSX.Element {
         minimized={buildMiniPanelMinimized}
         onMinimize={() => setBuildMiniPanelMinimized(true)}
         onRestore={() => setBuildMiniPanelMinimized(false)}
+        onClearCompleted={() => {
+          setDismissedBuildMiniRecordKeys((current) => {
+            const next = new Set(current);
+            runningBuildItems.forEach((item) => {
+              next.add(getBuildMiniRecordKey(item));
+            });
+            return next;
+          });
+        }}
         onOpenProject={openProjectDashboard}
         onDismissRecord={dismissBuildMiniRecord}
       />
     ) : null;
-
   if (!selectedProject && !initialStateLoaded) {
     return (
       <div
@@ -1223,13 +1268,8 @@ function App(): JSX.Element {
         data-font-size={fontSizeMode}
       >
         <main className="main-content project-loading">
-          <header className="main-header">
-            <div>
-              <h1>IVS Dashboard</h1>
-              <p>Loading project configuration.</p>
-            </div>
-            <div className="main-header-actions">{chatFeature}</div>
-          </header>
+          <AppHeader actions={chatFeature} />
+          <p className="database-empty-state">Loading project configuration.</p>
         </main>
         {splashOverlay}
       </div>
@@ -1269,20 +1309,64 @@ function App(): JSX.Element {
           }
         />
         <main className="main-content">
-          <header className="main-header">
+          <AppHeader
+            actions={
+              <>
+                {activeSection === "tools" && activeTool === "api-tester" ? (
+                  <>
+                    {apiTesterView === "test" ? (
+                      <button
+                        className="button primary compact"
+                        type="button"
+                        onClick={() =>
+                          window.dispatchEvent(new Event("api-tester:send"))
+                        }
+                      >
+                        <Send size={15} />
+                        Send
+                      </button>
+                    ) : null}
+                    <ApiTesterCookieButton
+                      storageScopeId="global"
+                      onClick={() => setCookieModalOpen(true)}
+                    />
+                    <ApiTesterSavedRequestsButton
+                      storageScopeId="global"
+                      onClick={() =>
+                        window.dispatchEvent(
+                          new Event("api-tester:open-saved-picker"),
+                        )
+                      }
+                    />
+                    <FontSizeDropdown
+                      value={fontSizeMode}
+                      onChange={setFontSizeMode}
+                    />
+                  </>
+                ) : activeSection === "tools" ? (
+                  <FontSizeDropdown
+                    value={fontSizeMode}
+                    onChange={setFontSizeMode}
+                  />
+                ) : activeSection === "database" && selectedDatabaseConnection ? (
+                  <DatabaseHeaderActions
+                    connection={selectedDatabaseConnection}
+                    databaseStatus={databaseRuntimeStatus}
+                    fontSizeMode={fontSizeMode}
+                    onFontSizeChange={setFontSizeMode}
+                    onSettingsClick={openDatabaseConnectionSettings}
+                  />
+                ) : null}
+                {chatFeature}
+              </>
+            }
+          >
             {activeSection === "database" && selectedDatabaseConnection ? (
-              <div className="database-header-title">
-                <DatabaseWorkspaceTabs
-                  connectionName={selectedDatabaseConnection.name}
-                  activeTab={activeDatabaseTab}
-                  onTabChange={setActiveDatabaseTab}
-                />
-              </div>
-            ) : activeSection === "database" ? (
-              <div>
-                <h1>Databases</h1>
-                <p>Create a connection to browse objects and run SQL.</p>
-              </div>
+              <DatabaseWorkspaceTabs
+                connectionName={selectedDatabaseConnection.name}
+                activeTab={activeDatabaseTab}
+                onTabChange={setActiveDatabaseTab}
+              />
             ) : activeSection === "tools" && activeTool === "api-tester" ? (
               <ApiTesterHeaderTabs
                 activeView={apiTesterView}
@@ -1298,57 +1382,8 @@ function App(): JSX.Element {
                 activeView={cryptoActiveTab}
                 onViewChange={setCryptoActiveTab}
               />
-            ) : (
-              <div>
-                <h1>Overview</h1>
-                <p>All project server status and last build results.</p>
-              </div>
-            )}
-            {activeSection === "tools" && activeTool === "api-tester" ? (
-              <div className="main-header-actions">
-                {apiTesterView === "test" ? (
-                  <button
-                    className="button primary compact"
-                    type="button"
-                    onClick={() =>
-                      window.dispatchEvent(new Event("api-tester:send"))
-                    }
-                  >
-                    <Send size={15} />
-                    Send
-                  </button>
-                ) : null}
-                <ApiTesterCookieButton
-                  storageScopeId="global"
-                  onClick={() => setCookieModalOpen(true)}
-                />
-                <ApiTesterSavedRequestsButton
-                  storageScopeId="global"
-                  onClick={() =>
-                    window.dispatchEvent(new Event("api-tester:open-saved-picker"))
-                  }
-                />
-                <FontSizeDropdown
-                  value={fontSizeMode}
-                  onChange={setFontSizeMode}
-                />
-                {chatFeature}
-              </div>
-            ) : (
-              <div className="main-header-actions">
-                {activeSection === "database" && selectedDatabaseConnection ? (
-                  <DatabaseHeaderActions
-                    connection={selectedDatabaseConnection}
-                    databaseStatus={databaseRuntimeStatus}
-                    fontSizeMode={fontSizeMode}
-                    onFontSizeChange={setFontSizeMode}
-                    onSettingsClick={openDatabaseConnectionSettings}
-                  />
-                ) : null}
-                {chatFeature}
-              </div>
-            )}
-          </header>
+            ) : null}
+          </AppHeader>
 
           {activeSection === "tools" ? (
             activeTool === "api-tester" ? (
@@ -1461,25 +1496,67 @@ function App(): JSX.Element {
             : ""
         }`}
       >
-        <header className="main-header">
-          {activeSection === "dashboard" ? (
-            <div>
-              <h1>Overview</h1>
-              <p>All project server status and last build results.</p>
-            </div>
-          ) : activeSection === "database" && selectedDatabaseConnection ? (
-            <div className="database-header-title">
-              <DatabaseWorkspaceTabs
-                connectionName={selectedDatabaseConnection.name}
-                activeTab={activeDatabaseTab}
-                onTabChange={setActiveDatabaseTab}
-              />
-            </div>
-          ) : activeSection === "database" ? (
-            <div>
-              <h1>Databases</h1>
-              <p>Create a connection to browse objects and run SQL.</p>
-            </div>
+        <AppHeader
+          activeTab={activeSection === "project" ? activeTab : undefined}
+          onTabChange={activeSection === "project" ? setActiveTab : undefined}
+          actions={
+            <>
+              {activeSection === "project" && activeProjectState ? (
+                <HeaderActions
+                  disabled={projectLoading}
+                  projectId={selectedProject.id}
+                  settings={activeProjectState.settings}
+                  statuses={activeProjectState.statuses}
+                  recentBuilds={activeProjectState.recentBuilds}
+                  gitStatus={activeProjectState.gitStatus}
+                  fontSizeMode={fontSizeMode}
+                  onFontSizeChange={setFontSizeMode}
+                  onSettingsClick={() => setSettingsOpen(true)}
+                  onServiceWarning={(message) =>
+                    showSnackbar(message, "invalid")
+                  }
+                />
+              ) : activeSection === "database" && selectedDatabaseConnection ? (
+                <DatabaseHeaderActions
+                  connection={selectedDatabaseConnection}
+                  databaseStatus={databaseRuntimeStatus}
+                  fontSizeMode={fontSizeMode}
+                  onFontSizeChange={setFontSizeMode}
+                  onSettingsClick={openDatabaseConnectionSettings}
+                />
+              ) : activeSection === "tools" && activeTool === "api-tester" ? (
+                <>
+                  <ApiTesterCookieButton
+                    storageScopeId={selectedProject.id}
+                    onClick={() => setCookieModalOpen(true)}
+                  />
+                  <ApiTesterSavedRequestsButton
+                    storageScopeId={selectedProject.id}
+                    onClick={() =>
+                      window.dispatchEvent(new Event("api-tester:open-saved-picker"))
+                    }
+                  />
+                  <FontSizeDropdown
+                    value={fontSizeMode}
+                    onChange={setFontSizeMode}
+                  />
+                </>
+              ) : activeSection === "tools" || activeSection === "dashboard" ? (
+                <FontSizeDropdown
+                  value={fontSizeMode}
+                  onChange={setFontSizeMode}
+                />
+              ) : null}
+              {chatFeature}
+            </>
+          }
+        >
+          {activeSection === "database" && selectedDatabaseConnection ? (
+            <DatabaseWorkspaceTabs
+              connectionName={selectedDatabaseConnection.name}
+              activeTab={activeDatabaseTab}
+              onTabChange={setActiveDatabaseTab}
+            />
           ) : activeSection === "tools" && activeTool === "api-tester" ? (
             <ApiTesterHeaderTabs
               activeView={apiTesterView}
@@ -1495,76 +1572,8 @@ function App(): JSX.Element {
               activeView={cryptoActiveTab}
               onViewChange={setCryptoActiveTab}
             />
-          ) : (
-            <SegmentedTabs activeTab={activeTab} onTabChange={setActiveTab} />
-          )}
-          {activeSection === "project" ? (
-            <div className="main-header-actions">
-              {activeProjectState ? (
-                <HeaderActions
-                  disabled={projectLoading}
-                  projectId={selectedProject.id}
-                  settings={activeProjectState.settings}
-                  statuses={activeProjectState.statuses}
-                  recentBuilds={activeProjectState.recentBuilds}
-                  gitStatus={activeProjectState.gitStatus}
-                  fontSizeMode={fontSizeMode}
-                  onFontSizeChange={setFontSizeMode}
-                  onSettingsClick={() => setSettingsOpen(true)}
-                  onServiceWarning={(message) =>
-                    showSnackbar(message, "invalid")
-                  }
-                />
-              ) : null}
-              {chatFeature}
-            </div>
-          ) : activeSection === "database" && selectedDatabaseConnection ? (
-            <div className="main-header-actions">
-              <DatabaseHeaderActions
-                connection={selectedDatabaseConnection}
-                databaseStatus={databaseRuntimeStatus}
-                fontSizeMode={fontSizeMode}
-                onFontSizeChange={setFontSizeMode}
-                onSettingsClick={openDatabaseConnectionSettings}
-              />
-              {chatFeature}
-            </div>
-          ) : activeSection === "tools" && activeTool === "api-tester" ? (
-            <div className="main-header-actions">
-              <ApiTesterCookieButton
-                storageScopeId={selectedProject.id}
-                onClick={() => setCookieModalOpen(true)}
-              />
-              <ApiTesterSavedRequestsButton
-                storageScopeId={selectedProject.id}
-                onClick={() =>
-                  window.dispatchEvent(new Event("api-tester:open-saved-picker"))
-                }
-              />
-              <FontSizeDropdown
-                value={fontSizeMode}
-                onChange={setFontSizeMode}
-              />
-              {chatFeature}
-            </div>
-          ) : activeSection === "tools" && activeTool === "cryptographic" ? (
-            <div className="main-header-actions">
-              <FontSizeDropdown
-                value={fontSizeMode}
-                onChange={setFontSizeMode}
-              />
-              {chatFeature}
-            </div>
-          ) : (
-            <div className="main-header-actions">
-              <FontSizeDropdown
-                value={fontSizeMode}
-                onChange={setFontSizeMode}
-              />
-              {chatFeature}
-            </div>
-          )}
-        </header>
+          ) : null}
+        </AppHeader>
 
         {activeSection === "dashboard" ? (
           <DashboardContent
@@ -1845,6 +1854,7 @@ function BuildMiniPanel({
   minimized,
   onMinimize,
   onRestore,
+  onClearCompleted,
   onOpenProject,
   onDismissRecord,
 }: {
@@ -1852,6 +1862,7 @@ function BuildMiniPanel({
   minimized: boolean;
   onMinimize: () => void;
   onRestore: () => void;
+  onClearCompleted: () => void;
   onOpenProject: (project: ProjectRecord) => void;
   onDismissRecord: (item: BuildMiniPanelItem) => void;
 }): JSX.Element {
@@ -1860,6 +1871,7 @@ function BuildMiniPanel({
   const runningCount = items.filter(
     (item) => item.build.status === "Running",
   ).length;
+  const showClearCompleted = buildCount > 0 && runningCount === 0;
   const restoreStatus = getBuildMiniRestoreStatus(items);
 
   return (
@@ -1885,15 +1897,26 @@ function BuildMiniPanel({
             <h2>{runningCount > 0 ? "Build Running" : "Build Complete"}</h2>
             <p>{getBuildMiniSummary(buildCount, runningCount)}</p>
           </div>
-          <button
-            className="build-mini-minimize"
-            type="button"
-            aria-label="Minimize build progress"
-            title="Minimize"
-            onClick={onMinimize}
-          >
-            <Minimize2 size={15} />
-          </button>
+          <div className="build-mini-actions">
+            {showClearCompleted ? (
+              <button
+                className="build-mini-clear"
+                type="button"
+                onClick={onClearCompleted}
+              >
+                Clear
+              </button>
+            ) : null}
+            <button
+              className="build-mini-minimize"
+              type="button"
+              aria-label="Minimize build progress"
+              title="Minimize"
+              onClick={onMinimize}
+            >
+              <Minimize2 size={15} />
+            </button>
+          </div>
         </header>
         <div className="build-mini-list">
           {items.map((item) => {

@@ -754,6 +754,7 @@ function ConnectionActionWorkspace({
   const persistedWorksheetTimerRef = useRef<number | null>(null);
   const handledRerunRequestIdRef = useRef<string | null>(null);
   const metadataLoadStartedRef = useRef<Set<string>>(new Set());
+  const activeMetadataLoadKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     setSheetStateByConnection((current) => {
@@ -866,6 +867,11 @@ function ConnectionActionWorkspace({
         metadataLoadStartedRef.current.delete(key);
       }
     }
+    if (
+      activeMetadataLoadKeyRef.current?.startsWith(`${deletedConnectionId}:`)
+    ) {
+      activeMetadataLoadKeyRef.current = null;
+    }
   }, [deletedConnectionId]);
 
   useEffect(() => {
@@ -913,8 +919,8 @@ function ConnectionActionWorkspace({
       return;
     }
 
-    let cancelled = false;
     metadataLoadStartedRef.current.add(metadataLoadKey);
+    activeMetadataLoadKeyRef.current = metadataLoadKey;
     setMetadataStateByConnection((current) => ({
       ...current,
       [connection.id]: createLoadingMetadataState(
@@ -924,7 +930,7 @@ function ConnectionActionWorkspace({
 
     void fetchDatabaseMetadata(effectiveConnection)
       .then((metadataResult) => {
-        if (cancelled) {
+        if (activeMetadataLoadKeyRef.current !== metadataLoadKey) {
           return;
         }
         setMetadataStateByConnection((current) => ({
@@ -933,7 +939,7 @@ function ConnectionActionWorkspace({
         }));
       })
       .catch((error: unknown) => {
-        if (cancelled) {
+        if (activeMetadataLoadKeyRef.current !== metadataLoadKey) {
           return;
         }
         setMetadataStateByConnection((current) => ({
@@ -948,10 +954,6 @@ function ConnectionActionWorkspace({
           },
         }));
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [connection.id, databaseStatus, effectiveConnection, selectedSchema]);
 
   useEffect(() => {
@@ -968,6 +970,9 @@ function ConnectionActionWorkspace({
       if (key.startsWith(`${connection.id}:`)) {
         metadataLoadStartedRef.current.delete(key);
       }
+    }
+    if (activeMetadataLoadKeyRef.current?.startsWith(`${connection.id}:`)) {
+      activeMetadataLoadKeyRef.current = null;
     }
   }, [connection.id, databaseStatus]);
 
@@ -1220,6 +1225,7 @@ function ConnectionActionWorkspace({
 
     const metadataLoadKey = `${connection.id}:${selectedSchema}`;
     metadataLoadStartedRef.current.add(metadataLoadKey);
+    activeMetadataLoadKeyRef.current = metadataLoadKey;
     setMetadataStateByConnection((current) => ({
       ...current,
       [connection.id]: createLoadingMetadataState(
@@ -1229,6 +1235,9 @@ function ConnectionActionWorkspace({
 
     void fetchDatabaseMetadata(effectiveConnection)
       .then((metadataResult) => {
+        if (activeMetadataLoadKeyRef.current !== metadataLoadKey) {
+          return;
+        }
         setMetadataStateByConnection((current) => ({
           ...current,
           [connection.id]: { status: "loaded", metadata: metadataResult },
@@ -1236,6 +1245,9 @@ function ConnectionActionWorkspace({
         onRefresh();
       })
       .catch((error: unknown) => {
+        if (activeMetadataLoadKeyRef.current !== metadataLoadKey) {
+          return;
+        }
         setMetadataStateByConnection((current) => ({
           ...current,
           [connection.id]: {
@@ -1266,6 +1278,7 @@ function ConnectionActionWorkspace({
         : createIdleMetadataState(),
     }));
     metadataLoadStartedRef.current.delete(`${connection.id}:${schema}`);
+    activeMetadataLoadKeyRef.current = `${connection.id}:${schema}`;
   }
 
   function createNewSheet(): void {

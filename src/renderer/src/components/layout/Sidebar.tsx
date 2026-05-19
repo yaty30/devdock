@@ -509,15 +509,28 @@ function getConnectionDisplayName(connection: DatabaseConnection): string {
 function formatDatabaseConnectionTooltip(
   connection: DatabaseConnection,
 ): string {
-  const hostPort = [connection.host, connection.port].filter(Boolean).join(":");
+  const target = formatDatabaseConnectionTarget(connection);
   return [
     getConnectionDisplayName(connection),
     connection.type,
     connection.status,
-    hostPort,
+    target,
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function formatDatabaseConnectionTarget(connection: DatabaseConnection): string {
+  if (connection.type === "Oracle") {
+    if (connection.connectionMode === "tnsAlias") {
+      return connection.networkAlias?.trim() || connection.schema || "";
+    }
+    if (connection.connectionMode === "connectString") {
+      return connection.connectString?.trim() || "";
+    }
+  }
+
+  return [connection.host, connection.port].filter(Boolean).join(":");
 }
 
 function getServiceState(
