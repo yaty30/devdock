@@ -239,7 +239,41 @@ export function Sidebar({
     >
       <div className="brand">
         <div className="brand-mark">
-          <Atom size={27} strokeWidth={2.2} />
+          {/* <Atom size={27} strokeWidth={2.2} />
+           */}
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="27"
+            height="27"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="url(#cheeseGradient)"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            className="lucide lucide-cheese-icon lucide-cheese"
+          >
+            <defs>
+              <linearGradient
+                id="cheeseGradient"
+                x1="0"
+                y1="0"
+                x2="24"
+                y2="24"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0%" stop-color="#facc15" />
+                <stop offset="50%" stop-color="#f59e0b" />
+                <stop offset="100%" stop-color="#fb923c" />
+              </linearGradient>
+            </defs>
+
+            <path d="M21 19v-7c-1-6-7-9-7-9l-2.1 1.5a2 2 0 0 1-3 2.2L3 11v9c0 .6.4 1 1 1h3a2 2 0 0 1 4 0h8" />
+            <path d="M9 12H3" />
+            <path d="M9 12c0-.8 1.3-1.5 3-1.5s3 .7 3 1.5a3 3 0 1 1-6 0" />
+            <path d="M21 12h-6" />
+            <circle cx="19" cy="19" r="2" />
+          </svg>
         </div>
         <span className="brand-label">IVS Dashboard</span>
       </div>
@@ -990,9 +1024,7 @@ function DatabaseConnectionFlyoutInfo({
       {target ? (
         <span className="sidebar-flyout-service-row sidebar-database-info-target-row">
           <span>Target</span>
-          <span className="sidebar-database-info-target">
-            {target}
-          </span>
+          <span className="sidebar-database-info-target">{target}</span>
         </span>
       ) : null}
     </div>

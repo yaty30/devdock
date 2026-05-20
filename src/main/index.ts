@@ -1384,6 +1384,15 @@ function escapeXmlAttribute(value: string): string {
 
 const MAX_TOAST_IMAGE_BYTES = 400 * 1024;
 
+function resolveAppIconPath(): string | undefined {
+  const candidates = [
+    join(process.resourcesPath, "icon.ico"),
+    join(app.getAppPath(), "src", "renderer", "src", "assets", "icon.ico"),
+  ];
+
+  return candidates.find((candidate) => existsSync(candidate));
+}
+
 function resolveNotificationIconPath(): string | null {
   const candidates = [
     join(process.resourcesPath, "toast-icon.png"),
@@ -1455,6 +1464,7 @@ const createWindow = (): void => {
     minHeight: 800,
     frame: false,
     title: "IVS Dashboard",
+    icon: resolveAppIconPath(),
     backgroundColor: "#f3f4f6",
     show: false,
     autoHideMenuBar: true,
