@@ -31,6 +31,10 @@ import type {
 } from "../../types";
 
 type ActiveFlyout = "projects" | "databases" | "tools" | null;
+type DatabaseInfoFlyoutState = {
+  connection: DatabaseConnection;
+  top: number;
+} | null;
 
 export function Sidebar({
   projects,
@@ -41,6 +45,7 @@ export function Sidebar({
   activeTool,
   theme,
   collapsed,
+  debugEnabled = false,
   projectStatuses = {},
   onProjectChange,
   onDatabaseConnectionChange,
@@ -52,6 +57,7 @@ export function Sidebar({
   onAddDatabaseConnection,
   onCollapseToggle,
   onThemeToggle,
+  onDebugBuildNotification,
 }: {
   projects: Project[];
   databaseConnections: DatabaseConnection[];
@@ -61,6 +67,7 @@ export function Sidebar({
   activeTool: ToolId;
   theme: Theme;
   collapsed: boolean;
+  debugEnabled?: boolean;
   projectStatuses?: Record<string, ServiceStatusRecord[]>;
   onProjectChange: (project: Project) => void;
   onDatabaseConnectionChange: (connection: DatabaseConnection) => void;
@@ -72,14 +79,18 @@ export function Sidebar({
   onAddDatabaseConnection: () => void;
   onCollapseToggle: () => void;
   onThemeToggle: () => void;
+  onDebugBuildNotification?: () => void;
 }): JSX.Element {
   const sidebarRef = useRef<HTMLElement>(null);
   const flyoutCloseTimerRef = useRef<number | null>(null);
+  const databaseInfoFlyoutCloseTimerRef = useRef<number | null>(null);
   const [projectsOpen, setProjectsOpen] = useState(true);
   const [databasesOpen, setDatabasesOpen] = useState(true);
   const [toolsOpen, setToolsOpen] = useState(true);
   const [activeFlyout, setActiveFlyout] = useState<ActiveFlyout>(null);
   const [activeFlyoutTop, setActiveFlyoutTop] = useState(78);
+  const [databaseInfoFlyout, setDatabaseInfoFlyout] =
+    useState<DatabaseInfoFlyoutState>(null);
   const [databaseContextMenu, setDatabaseContextMenu] = useState<{
     connection: DatabaseConnection;
     x: number;
@@ -89,6 +100,8 @@ export function Sidebar({
   useEffect(() => {
     if (!collapsed) {
       setActiveFlyout(null);
+    } else {
+      setDatabaseInfoFlyout(null);
     }
   }, [collapsed]);
 
@@ -147,6 +160,9 @@ export function Sidebar({
       if (flyoutCloseTimerRef.current !== null) {
         window.clearTimeout(flyoutCloseTimerRef.current);
       }
+      if (databaseInfoFlyoutCloseTimerRef.current !== null) {
+        window.clearTimeout(databaseInfoFlyoutCloseTimerRef.current);
+      }
     };
   }, []);
 
@@ -180,6 +196,37 @@ export function Sidebar({
     flyoutCloseTimerRef.current = window.setTimeout(() => {
       setActiveFlyout(null);
       flyoutCloseTimerRef.current = null;
+    }, 140);
+  }
+
+  function clearDatabaseInfoFlyoutCloseTimer(): void {
+    if (databaseInfoFlyoutCloseTimerRef.current !== null) {
+      window.clearTimeout(databaseInfoFlyoutCloseTimerRef.current);
+      databaseInfoFlyoutCloseTimerRef.current = null;
+    }
+  }
+
+  function openDatabaseInfoFlyout(
+    connection: DatabaseConnection,
+    anchor: HTMLElement,
+  ): void {
+    if (collapsed || !sidebarRef.current) {
+      return;
+    }
+    clearDatabaseInfoFlyoutCloseTimer();
+    const sidebarRect = sidebarRef.current.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    setDatabaseInfoFlyout({
+      connection,
+      top: anchorRect.top - sidebarRect.top,
+    });
+  }
+
+  function scheduleDatabaseInfoFlyoutClose(): void {
+    clearDatabaseInfoFlyoutCloseTimer();
+    databaseInfoFlyoutCloseTimerRef.current = window.setTimeout(() => {
+      setDatabaseInfoFlyout(null);
+      databaseInfoFlyoutCloseTimerRef.current = null;
     }, 140);
   }
 
@@ -385,8 +432,15 @@ export function Sidebar({
                         : ""
                     }`}
                     key={connection.id}
-                    title={formatDatabaseConnectionTooltip(connection)}
-                    aria-label={formatDatabaseConnectionTooltip(connection)}
+                    aria-label={formatDatabaseConnectionAriaLabel(connection)}
+                    onMouseEnter={(event) =>
+                      openDatabaseInfoFlyout(connection, event.currentTarget)
+                    }
+                    onMouseLeave={scheduleDatabaseInfoFlyoutClose}
+                    onFocus={(event) =>
+                      openDatabaseInfoFlyout(connection, event.currentTarget)
+                    }
+                    onBlur={scheduleDatabaseInfoFlyoutClose}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       setDatabaseContextMenu({
@@ -560,6 +614,20 @@ export function Sidebar({
           </>
         )}
       </nav>
+
+      {!collapsed && databaseInfoFlyout ? (
+        <SidebarFlyout
+          title={getConnectionDisplayName(databaseInfoFlyout.connection)}
+          top={databaseInfoFlyout.top}
+          className="sidebar-database-info-flyout"
+          onMouseEnter={clearDatabaseInfoFlyoutCloseTimer}
+          onMouseLeave={scheduleDatabaseInfoFlyoutClose}
+        >
+          <DatabaseConnectionFlyoutInfo
+            connection={databaseInfoFlyout.connection}
+          />
+        </SidebarFlyout>
+      ) : null}
 
       {collapsed && activeFlyout === "projects" ? (
         <SidebarFlyout
@@ -770,7 +838,19 @@ export function Sidebar({
 
       <div className="sidebar-footer">
         {!collapsed ? (
-          <span className="sidebar-version">v{APP_VERSION}</span>
+          debugEnabled ? (
+            <button
+              className="sidebar-version sidebar-version-button"
+              type="button"
+              onClick={onDebugBuildNotification}
+              title="Show debug build notification"
+              aria-label="Show debug build notification"
+            >
+              v{APP_VERSION}
+            </button>
+          ) : (
+            <span className="sidebar-version">v{APP_VERSION}</span>
+          )
         ) : null}
         <button
           className="theme-toggle sidebar-icon-button"
@@ -855,21 +935,29 @@ function SidebarFlyout({
   children,
   footerAction,
   top,
+  className,
+  onMouseEnter,
+  onMouseLeave,
 }: {
   title: string;
   children: ReactNode;
   footerAction?: ReactNode;
   top: number;
+  className?: string;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 }): JSX.Element {
   const style: CSSProperties = { top };
 
   return (
     <section
-      className="sidebar-flyout"
+      className={`sidebar-flyout${className ? ` ${className}` : ""}`}
       role="dialog"
       aria-label={title}
       tabIndex={-1}
       style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
       <div className="sidebar-flyout-header">{title}</div>
       <div className="sidebar-flyout-body">{children}</div>
@@ -877,6 +965,37 @@ function SidebarFlyout({
         <div className="sidebar-flyout-footer">{footerAction}</div>
       ) : null}
     </section>
+  );
+}
+
+function DatabaseConnectionFlyoutInfo({
+  connection,
+}: {
+  connection: DatabaseConnection;
+}): JSX.Element {
+  const target = formatDatabaseConnectionTarget(connection);
+
+  return (
+    <div className="sidebar-database-info-list">
+      <span className="sidebar-flyout-service-row">
+        <span>Type</span>
+        <span className="sidebar-flyout-row-meta">{connection.type}</span>
+      </span>
+      <span className="sidebar-flyout-service-row">
+        <span>Status</span>
+        <span className={`sidebar-flyout-status ${connection.status}`}>
+          {formatStatusLabel(connection.status)}
+        </span>
+      </span>
+      {target ? (
+        <span className="sidebar-flyout-service-row sidebar-database-info-target-row">
+          <span>Target</span>
+          <span className="sidebar-database-info-target">
+            {target}
+          </span>
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -942,7 +1061,7 @@ function getConnectionDisplayName(connection: DatabaseConnection): string {
   return connection.name.trim() || connection.id.trim() || "Database";
 }
 
-function formatDatabaseConnectionTooltip(
+function formatDatabaseConnectionAriaLabel(
   connection: DatabaseConnection,
 ): string {
   const target = formatDatabaseConnectionTarget(connection);

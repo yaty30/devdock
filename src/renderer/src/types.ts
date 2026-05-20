@@ -4,6 +4,7 @@ export type {
   ActivityRecord,
   ActivityTone,
   ApiTesterRequest,
+  ApiTesterSavedRequestRecord,
   ApiTesterFormDataPart,
   ApiTesterResponse,
   ApiTesterResponseHeader,

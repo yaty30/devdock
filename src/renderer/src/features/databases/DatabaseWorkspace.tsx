@@ -126,6 +126,7 @@ import {
   createIdleMetadataState,
   createInitialSheetState,
   createInsertTemplate,
+  limitSelectTemplate,
   createLoadingMetadataState,
   createQuerySheet,
   createResultTabs,
@@ -221,6 +222,15 @@ export type ResultMeta = {
   rowsAffected?: number;
 };
 
+export type ResultPaginationState = {
+  baseSql: string;
+  nextOffset: number;
+  pageSize: number;
+  hasMore: boolean;
+  loading: boolean;
+  errorMessage?: string;
+};
+
 export type MessageEntry = {
   id: string;
   tone: "success" | "error";
@@ -289,6 +299,7 @@ export type ResultTab = {
   page: number;
   pageSize: number;
   columnWidths: Partial<Record<ResultColumnKey, number>>;
+  pagination?: ResultPaginationState;
 };
 
 export type DatabaseCompletionData = {
@@ -307,6 +318,7 @@ const DEFAULT_EDITOR_HEIGHT = 260;
 const DATABASE_EDITOR_MIN_HEIGHT = 160;
 const DATABASE_OUTPUT_MIN_HEIGHT = 160;
 const DATABASE_EDITOR_SPLITTER_SIZE = 14;
+const SELECT_INCREMENTAL_PAGE_SIZE = 50;
 const databaseSheetStateCache: Record<string, SheetConnectionState> = {};
 
 export function DatabaseWorkspaceTabs({
@@ -400,14 +412,25 @@ function normalizeIdentifier(value: string): string {
   return trimmed;
 }
 
-function quoteSqlIdentifier(value: string): string {
+function quoteSqlIdentifier(
+  value: string,
+  connectionType: DatabaseConnectionType,
+): string {
+  if (connectionType === "Oracle") {
+    return `"${value.replace(/"/g, "\"\"")}"`;
+  }
+
   return `\`${value.replace(/`/g, "``")}\``;
 }
 
-function formatQualifiedIdentifier(schema: string, name: string): string {
+function formatQualifiedIdentifier(
+  schema: string,
+  name: string,
+  connectionType: DatabaseConnectionType,
+): string {
   return schema
-    ? `${quoteSqlIdentifier(schema)}.${quoteSqlIdentifier(name)}`
-    : quoteSqlIdentifier(name);
+    ? `${quoteSqlIdentifier(schema, connectionType)}.${quoteSqlIdentifier(name, connectionType)}`
+    : quoteSqlIdentifier(name, connectionType);
 }
 
 function formatObjectEditorName(
@@ -432,13 +455,14 @@ function formatObjectEditorName(
 
 function createObjectTemplate(
   objectType: DatabaseObjectType,
+  connectionType: DatabaseConnectionType,
   table?: DatabaseTable,
 ): string {
   const tableName = table
-    ? formatQualifiedIdentifier(table.schema, table.name)
+    ? formatQualifiedIdentifier(table.schema, table.name, connectionType)
     : "table_name";
   const templates: Record<DatabaseObjectType, string> = {
-    table: `SELECT *\nFROM ${tableName}\nLIMIT 100;`,
+    table: limitSelectTemplate(`SELECT *\nFROM ${tableName};`, connectionType, 100),
     view: "CREATE OR REPLACE VIEW __object_name__\nAS\nSELECT *\nFROM table_name;",
     procedure:
       "DELIMITER //\n\nCREATE PROCEDURE __object_name__()\nBEGIN\n\nEND //\n\nDELIMITER ;",
@@ -461,10 +485,10 @@ function findCreateStatement(
   const preferredKeys: Record<DatabaseObjectType, string[]> = {
     table: [],
     index: [],
-    view: ["Create View"],
-    procedure: ["Create Procedure"],
-    function: ["Create Function"],
-    trigger: ["SQL Original Statement", "Create Trigger"],
+    view: ["DDL", "Create View"],
+    procedure: ["DDL", "Create Procedure"],
+    function: ["DDL", "Create Function"],
+    trigger: ["DDL", "SQL Original Statement", "Create Trigger"],
   };
   const entries = Object.entries(row);
   for (const preferredKey of preferredKeys[objectType]) {
@@ -476,7 +500,7 @@ function findCreateStatement(
     }
   }
 
-  const fallback = entries.find(([key]) => /create|statement/i.test(key));
+  const fallback = entries.find(([key]) => /create|statement|ddl/i.test(key));
   return fallback?.[1] ? String(fallback[1]) : "";
 }
 
@@ -504,9 +528,10 @@ function applyObjectNameToTemplate(
   objectType: DatabaseObjectType,
   schema: string,
   name: string,
+  connectionType: DatabaseConnectionType,
 ): string {
-  const qualifiedName = formatQualifiedIdentifier(schema, name);
-  const localName = quoteSqlIdentifier(name);
+  const qualifiedName = formatQualifiedIdentifier(schema, name, connectionType);
+  const localName = quoteSqlIdentifier(name, connectionType);
   const replacement = objectType === "index" ? localName : qualifiedName;
   const placeholderPatterns: Record<DatabaseObjectType, RegExp[]> = {
     table: [],
@@ -527,12 +552,17 @@ function createObjectSaveSql(
   binding: ObjectBinding,
   sql: string,
   isNew: boolean,
+  connectionType: DatabaseConnectionType,
 ): string {
   if (isNew || binding.objectType === "view") {
     return sql;
   }
 
-  const qualifiedName = formatQualifiedIdentifier(binding.schema, binding.name);
+  const qualifiedName = formatQualifiedIdentifier(
+    binding.schema,
+    binding.name,
+    connectionType,
+  );
   if (binding.objectType === "procedure" || binding.objectType === "function") {
     return `DROP ${binding.objectType.toUpperCase()} IF EXISTS ${qualifiedName};\n${sql}`;
   }
@@ -543,12 +573,14 @@ function createObjectSaveSql(
     const qualifiedTable = formatQualifiedIdentifier(
       binding.schema,
       binding.tableName,
+      connectionType,
     );
     if (binding.name.toUpperCase() === "PRIMARY") {
       return `ALTER TABLE ${qualifiedTable} DROP PRIMARY KEY;\n${sql}`;
     }
     return `ALTER TABLE ${qualifiedTable} DROP INDEX ${quoteSqlIdentifier(
       binding.name,
+      connectionType,
     )};\n${sql}`;
   }
 
@@ -558,10 +590,17 @@ function createObjectSaveSql(
 function createIndexDefinitionSql(
   table: DatabaseTable,
   index: DatabaseIndex,
+  connectionType: DatabaseConnectionType,
 ): string {
-  const qualifiedTable = formatQualifiedIdentifier(table.schema, table.name);
+  const qualifiedTable = formatQualifiedIdentifier(
+    table.schema,
+    table.name,
+    connectionType,
+  );
   const columns = index.columns.length
-    ? index.columns.map(quoteSqlIdentifier).join(", ")
+    ? index.columns
+        .map((column) => quoteSqlIdentifier(column, connectionType))
+        .join(", ")
     : "column_name";
   if (index.name.toUpperCase() === "PRIMARY") {
     return `ALTER TABLE ${qualifiedTable} ADD PRIMARY KEY (${columns});`;
@@ -569,6 +608,7 @@ function createIndexDefinitionSql(
 
   return `ALTER TABLE ${qualifiedTable} ADD INDEX ${quoteSqlIdentifier(
     index.name,
+    connectionType,
   )} (${columns});`;
 }
 
@@ -605,6 +645,125 @@ function splitSqlStatementsWithDelimiters(sqlText: string): string[] {
     statements.push(tail);
   }
   return statements;
+}
+
+function normalizeExecutableStatement(statement: string): string {
+  return statement.trim().replace(/;+\s*$/u, "");
+}
+
+function isIncrementallyPageableSelect(
+  statement: string,
+  connectionType: DatabaseConnectionType,
+): boolean {
+  const normalized = normalizeExecutableStatement(statement);
+  if (!/^(?:\(\s*)?(?:select|with)\b/iu.test(normalized)) {
+    return false;
+  }
+  if (/\bfor\s+update\b/iu.test(normalized)) {
+    return false;
+  }
+  if (connectionType === "MySQL") {
+    return !/\blimit\b/iu.test(normalized);
+  }
+  return !/(\bfetch\s+(?:first|next)\b|\boffset\b|\brownum\b)/iu.test(
+    normalized,
+  );
+}
+
+function createIncrementalSelectStatement({
+  statement,
+  connectionType,
+  offset,
+  pageSize,
+}: {
+  statement: string;
+  connectionType: DatabaseConnectionType;
+  offset: number;
+  pageSize: number;
+}): string {
+  const normalized = normalizeExecutableStatement(statement);
+  if (connectionType === "MySQL") {
+    return `${normalized} LIMIT ${pageSize} OFFSET ${offset}`;
+  }
+  return `${normalized} OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`;
+}
+
+function prepareIncrementalExecutionStatements(
+  statements: string[],
+  connectionType: DatabaseConnectionType,
+): { executionStatements: string[]; pageableStatements: boolean[] } {
+  const pageableStatements = statements.map((statement) =>
+    isIncrementallyPageableSelect(statement, connectionType),
+  );
+  return {
+    executionStatements: statements.map((statement, index) =>
+      pageableStatements[index]
+        ? createIncrementalSelectStatement({
+            statement,
+            connectionType,
+            offset: 0,
+            pageSize: SELECT_INCREMENTAL_PAGE_SIZE,
+          })
+        : statement,
+    ),
+    pageableStatements,
+  };
+}
+
+function withLogicalStatements(
+  results: DatabaseStatementExecutionResult[],
+  statements: string[],
+): DatabaseStatementExecutionResult[] {
+  return results.map((result, index) => ({
+    ...result,
+    statement: statements[index] ?? result.statement,
+  }));
+}
+
+function applyInitialResultPagination(
+  tabs: ResultTab[],
+  statements: string[],
+  pageableStatements: boolean[],
+): ResultTab[] {
+  return tabs.map((tab, index) => {
+    if (!pageableStatements[index] || tab.meta.status !== "success") {
+      return tab;
+    }
+    return {
+      ...tab,
+      pagination: {
+        baseSql: statements[index] ?? tab.statementSql,
+        nextOffset: tab.rows.length,
+        pageSize: SELECT_INCREMENTAL_PAGE_SIZE,
+        hasMore: tab.rows.length === SELECT_INCREMENTAL_PAGE_SIZE,
+        loading: false,
+      },
+    };
+  });
+}
+
+function escapeSqlStringLiteral(value: string): string {
+  return value.replace(/'/gu, "''");
+}
+
+function createOracleObjectDefinitionStatement(
+  objectType: DatabaseObjectType,
+  objectName: string,
+  schemaName: string,
+): string {
+  const ddlTypeByObject: Partial<Record<DatabaseObjectType, string>> = {
+    view: "VIEW",
+    procedure: "PROCEDURE",
+    function: "FUNCTION",
+    trigger: "TRIGGER",
+  };
+  const ddlType = ddlTypeByObject[objectType];
+  if (!ddlType) {
+    return "";
+  }
+  return `SELECT DBMS_METADATA.GET_DDL('${ddlType}', '${escapeSqlStringLiteral(
+    objectName,
+  )}', '${escapeSqlStringLiteral(schemaName)}') AS DDL FROM DUAL`;
 }
 
 export function DatabaseWorkspace({
@@ -710,6 +869,7 @@ function ConnectionActionWorkspace({
   const queryPanelRef = useRef<HTMLElement>(null);
   const editorViewRef = useRef<EditorView | null>(null);
   const executingRef = useRef(false);
+  const loadingMoreTabsRef = useRef<Set<string>>(new Set());
   const dragRef = useRef<DatabaseDragState | null>(null);
   const editorDragRef = useRef<DatabaseEditorDragState | null>(null);
   const latestSheetStateRef = useRef<SheetConnectionState | null>(null);
@@ -1341,7 +1501,7 @@ function ConnectionActionWorkspace({
       return;
     }
     const initialSql = options.isNew
-      ? createObjectTemplate(objectType, options.table)
+      ? createObjectTemplate(objectType, connection.type, options.table)
       : `-- Loading ${objectType} definition...`;
     const created = createQuerySheet(sheetName, initialSql);
     created.sheetMode = "object-backed";
@@ -1407,25 +1567,35 @@ function ConnectionActionWorkspace({
           triggers: [],
           partitions: [],
         },
+        connection.type,
       );
-      return `${tableSql.replace(/;\s*$/, "")}\nLIMIT 100;`;
+      return limitSelectTemplate(tableSql, connection.type, 100);
     }
 
     if (objectType === "index" && table && index) {
-      return createIndexDefinitionSql(table, index);
+      return createIndexDefinitionSql(table, index, connection.type);
     }
 
-    const target = formatQualifiedIdentifier(schema, name);
+    const target = formatQualifiedIdentifier(schema, name, connection.type);
     const statement =
-      objectType === "view"
-        ? `SHOW CREATE VIEW ${target};`
-        : objectType === "procedure"
-          ? `SHOW CREATE PROCEDURE ${target};`
-          : objectType === "function"
-            ? `SHOW CREATE FUNCTION ${target};`
-            : objectType === "trigger"
-              ? `SHOW CREATE TRIGGER ${target};`
-              : "";
+      connection.type === "Oracle"
+        ? createOracleObjectDefinitionStatement(
+            objectType,
+            name,
+            schema ||
+              effectiveConnection.schema ||
+              effectiveConnection.database ||
+              effectiveConnection.user,
+          )
+        : objectType === "view"
+          ? `SHOW CREATE VIEW ${target};`
+          : objectType === "procedure"
+            ? `SHOW CREATE PROCEDURE ${target};`
+            : objectType === "function"
+              ? `SHOW CREATE FUNCTION ${target};`
+              : objectType === "trigger"
+                ? `SHOW CREATE TRIGGER ${target};`
+                : "";
     if (!statement) {
       return `-- Failed to load ${objectType} definition`;
     }
@@ -1647,9 +1817,15 @@ function ConnectionActionWorkspace({
             nextBinding.objectType,
             parsedObject.schema,
             parsedObject.name,
+            connection.type,
           );
           await executeRawSql(
-            createObjectSaveSql(nextBinding, nextSql, binding.isNew === true),
+            createObjectSaveSql(
+              nextBinding,
+              nextSql,
+              binding.isNew === true,
+              connection.type,
+            ),
           );
           refreshMetadata();
           addMessage(
@@ -1780,14 +1956,22 @@ function ConnectionActionWorkspace({
         return;
       }
 
+      const { executionStatements, pageableStatements } =
+        prepareIncrementalExecutionStatements(statements, connection.type);
+
       const batch = await window.ivsDashboard.executeDatabaseStatements(
         effectiveConnection,
-        statements,
+        executionStatements,
       );
       const now = new Date().toISOString();
-      const resultTabs = createResultTabs(batch.results);
+      const logicalResults = withLogicalStatements(batch.results, statements);
+      const resultTabs = applyInitialResultPagination(
+        createResultTabs(logicalResults),
+        statements,
+        pageableStatements,
+      );
       const activeResultTabId = selectInitialResultTabId(resultTabs);
-      const messages = createBatchMessages(batch.results, now, source);
+      const messages = createBatchMessages(logicalResults, now, source);
       const activeOutputTab = resultTabs.some(
         (tab) => tab.meta.status === "success" && tab.columns.length > 0,
       )
@@ -1804,7 +1988,7 @@ function ConnectionActionWorkspace({
         lastExecutionTarget: { ...target, sheetId },
       }));
 
-      batch.results.forEach((result, index) => {
+      logicalResults.forEach((result, index) => {
         onExecution({
           id:
             result.executionRecordId ??
@@ -1830,8 +2014,8 @@ function ConnectionActionWorkspace({
       });
 
       if (
-        hasSuccessfulSchemaChange(batch.results) ||
-        hasSuccessfulRowCountChange(batch.results)
+        hasSuccessfulSchemaChange(logicalResults) ||
+        hasSuccessfulRowCountChange(logicalResults)
       ) {
         refreshMetadata();
       }
@@ -1843,6 +2027,109 @@ function ConnectionActionWorkspace({
     } finally {
       executingRef.current = false;
       setIsExecuting(false);
+    }
+  }
+
+  async function loadMoreResultRows(tabId: string): Promise<void> {
+    if (isExecuting || loadingMoreTabsRef.current.has(tabId)) {
+      return;
+    }
+
+    const state = sheetStateByConnection[connection.id];
+    const targetSheet = state?.sheets.find((sheet) =>
+      sheet.output.resultTabs.some((tab) => tab.id === tabId),
+    );
+    const targetTab = targetSheet?.output.resultTabs.find(
+      (tab) => tab.id === tabId,
+    );
+    const pageRequest = targetTab?.pagination;
+    if (!targetSheet || !pageRequest || pageRequest.loading || !pageRequest.hasMore) {
+      return;
+    }
+
+    loadingMoreTabsRef.current.add(tabId);
+    updateSheetOutput(targetSheet.id, (output) => ({
+      ...output,
+      resultTabs: output.resultTabs.map((tab) =>
+        tab.id === tabId && tab.pagination
+          ? {
+              ...tab,
+              pagination: {
+                ...tab.pagination,
+                loading: true,
+                errorMessage: undefined,
+              },
+            }
+          : tab,
+      ),
+    }));
+
+    try {
+      const nextStatement = createIncrementalSelectStatement({
+        statement: pageRequest.baseSql,
+        connectionType: connection.type,
+        offset: pageRequest.nextOffset,
+        pageSize: pageRequest.pageSize,
+      });
+      const batch = await window.ivsDashboard.executeDatabaseStatements(
+        effectiveConnection,
+        [nextStatement],
+      );
+      const result = batch.results[0];
+      if (!result || result.status !== "success") {
+        throw new Error(
+          result?.errorMessage || "Failed to load additional rows.",
+        );
+      }
+
+      updateSheetOutput(targetSheet.id, (output) => ({
+        ...output,
+        resultTabs: output.resultTabs.map((tab) => {
+          if (tab.id !== tabId || !tab.pagination) {
+            return tab;
+          }
+          const rows = [...tab.rows, ...result.rows];
+          return {
+            ...tab,
+            rows,
+            meta: {
+              ...tab.meta,
+              rows: rows.length,
+              duration: formatDurationMs(result.durationMs),
+              queriedAt: new Date().toISOString(),
+            },
+            pagination: {
+              ...tab.pagination,
+              nextOffset: tab.pagination.nextOffset + result.rowsFetched,
+              hasMore: result.rowsFetched === tab.pagination.pageSize,
+              loading: false,
+              errorMessage: undefined,
+            },
+          };
+        }),
+      }));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to load additional rows.";
+      updateSheetOutput(targetSheet.id, (output) => ({
+        ...output,
+        resultTabs: output.resultTabs.map((tab) =>
+          tab.id === tabId && tab.pagination
+            ? {
+                ...tab,
+                pagination: {
+                  ...tab.pagination,
+                  loading: false,
+                  errorMessage: message,
+                  hasMore: false,
+                },
+              }
+            : tab,
+        ),
+      }));
+      addMessage("error", message, targetSheet.id);
+    } finally {
+      loadingMoreTabsRef.current.delete(tabId);
     }
   }
 
@@ -2013,7 +2300,7 @@ function ConnectionActionWorkspace({
   }
 
   function insertTableTemplate(table: DatabaseTable): void {
-    const template = createInsertTemplate(table);
+    const template = createInsertTemplate(table, connection.type);
     const view = editorViewRef.current;
 
     if (!activeSheet) {
@@ -2061,7 +2348,7 @@ function ConnectionActionWorkspace({
   }
 
   function appendTableSelectTemplate(table: DatabaseTable): void {
-    const template = createSelectTemplate(table);
+    const template = createSelectTemplate(table, connection.type);
     const view = editorViewRef.current;
 
     if (!activeSheet) {
@@ -2747,6 +3034,9 @@ function ConnectionActionWorkspace({
                       columnWidths,
                     }))
                   }
+                  onLoadMoreRows={(tabId) => {
+                    void loadMoreResultRows(tabId);
+                  }}
                 />
               ) : (
                 <MessageLog messages={activeOutput.messages} />
@@ -2794,6 +3084,9 @@ function ConnectionActionWorkspace({
               columnWidths,
             }))
           }
+          onLoadMoreRows={(tabId) => {
+            void loadMoreResultRows(tabId);
+          }}
         />
       </Modal>
       {deleteRequest ? (

@@ -3,9 +3,12 @@ import {
   CheckCircle2,
   ChefHat,
   ChevronUp,
+  Grid3X3,
+  List,
   Minimize2,
   Package,
   PackageCheck,
+  Plus,
   Send,
 } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
@@ -29,12 +32,11 @@ import {
 } from "./features/dashboard/DashboardContent";
 import { GitTerminalTab } from "./features/git/GitTerminalTab";
 import { MonitorTab } from "./features/monitor/MonitorTab";
-import { NotesTab } from "./features/notes/NotesTab";
+import { NotesTab, type NotesView } from "./features/notes/NotesTab";
 import { SettingsContent } from "./features/settings/SettingsContent";
 import {
   ApiTesterCookieButton,
   ApiTesterCookieModal,
-  ApiTesterSavedRequestsButton,
   type ApiTesterDraftState,
   ApiTesterMockup,
 } from "./features/tools/ApiTesterMockup";
@@ -93,11 +95,13 @@ type DatabaseRuntimeStatus =
   | "disconnected"
   | "reconnecting"
   | "error";
-type ApiTesterView = "test" | "history";
+type ApiTesterView = "test" | "history" | "saved";
 type CompareView = "compare";
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
+  const [notesView, setNotesView] = useState<NotesView>("grid");
+  const [notesAddRequestId, setNotesAddRequestId] = useState(0);
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [activeTool, setActiveTool] = useState<ToolId>("comparing");
   const [apiTesterView, setApiTesterView] = useState<ApiTesterView>("test");
@@ -166,6 +170,7 @@ function App(): JSX.Element {
   const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
   const [snackbarClosing, setSnackbarClosing] = useState(false);
   const [chatEnabled, setChatEnabled] = useState(false);
+  const [debugEnabled, setDebugEnabled] = useState(false);
   const [buildMiniPanelMinimized, setBuildMiniPanelMinimized] = useState(false);
   const [dismissedBuildMiniRecordKeys, setDismissedBuildMiniRecordKeys] =
     useState<Set<string>>(() => new Set());
@@ -196,6 +201,7 @@ function App(): JSX.Element {
       .then((flags) => {
         if (!cancelled) {
           setChatEnabled(flags.chatEnabled);
+          setDebugEnabled(flags.debugEnabled);
         }
       })
       .catch((error) => {
@@ -967,6 +973,20 @@ function App(): JSX.Element {
     }, 3600);
   }
 
+  function showDebugBuildNotification(): void {
+    if (!debugEnabled) {
+      return;
+    }
+    void window.ivsDashboard.showDebugBuildNotification().catch((error) => {
+      showSnackbar(
+        error instanceof Error
+          ? error.message
+          : "Debug notification could not be shown.",
+        "invalid",
+      );
+    });
+  }
+
   function openAddProjectDialog(): void {
     if (projects.length >= MAX_PROJECTS) {
       showSnackbar(
@@ -1295,6 +1315,7 @@ function App(): JSX.Element {
           activeTool={activeTool}
           theme={theme}
           collapsed={sidebarCollapsed}
+          debugEnabled={debugEnabled}
           onProjectChange={switchProject}
           onDatabaseConnectionChange={switchDatabaseConnection}
           onDatabaseConnect={connectDatabaseConnection}
@@ -1307,6 +1328,7 @@ function App(): JSX.Element {
           onThemeToggle={() =>
             setTheme((current) => (current === "light" ? "dark" : "light"))
           }
+          onDebugBuildNotification={showDebugBuildNotification}
         />
         <main className="main-content">
           <AppHeader
@@ -1329,14 +1351,6 @@ function App(): JSX.Element {
                     <ApiTesterCookieButton
                       storageScopeId="global"
                       onClick={() => setCookieModalOpen(true)}
-                    />
-                    <ApiTesterSavedRequestsButton
-                      storageScopeId="global"
-                      onClick={() =>
-                        window.dispatchEvent(
-                          new Event("api-tester:open-saved-picker"),
-                        )
-                      }
                     />
                     <FontSizeDropdown
                       value={fontSizeMode}
@@ -1476,6 +1490,7 @@ function App(): JSX.Element {
         theme={theme}
         collapsed={sidebarCollapsed}
         projectStatuses={sidebarProjectStatuses}
+        debugEnabled={debugEnabled}
         onProjectChange={switchProject}
         onDatabaseConnectionChange={switchDatabaseConnection}
         onDatabaseConnect={connectDatabaseConnection}
@@ -1488,6 +1503,7 @@ function App(): JSX.Element {
         onThemeToggle={() =>
           setTheme((current) => (current === "light" ? "dark" : "light"))
         }
+        onDebugBuildNotification={showDebugBuildNotification}
       />
       <main
         className={`main-content${
@@ -1512,6 +1528,51 @@ function App(): JSX.Element {
                   fontSizeMode={fontSizeMode}
                   onFontSizeChange={setFontSizeMode}
                   onSettingsClick={() => setSettingsOpen(true)}
+                  showSettingsButton={activeTab !== "notes"}
+                  utilityActions={
+                    activeTab === "notes" ? (
+                      <>
+                        <button
+                          className="icon-button secondary header-settings-button"
+                          type="button"
+                          aria-label="Add note"
+                          title="Add note"
+                          disabled={projectLoading}
+                          onClick={() =>
+                            setNotesAddRequestId((current) => current + 1)
+                          }
+                        >
+                          <Plus size={18} />
+                        </button>
+                        <button
+                          className="icon-button secondary header-settings-button"
+                          type="button"
+                          aria-label={
+                            notesView === "grid"
+                              ? "Switch to list view"
+                              : "Switch to grid view"
+                          }
+                          title={
+                            notesView === "grid"
+                              ? "List view"
+                              : "Grid view"
+                          }
+                          disabled={projectLoading}
+                          onClick={() =>
+                            setNotesView((current) =>
+                              current === "grid" ? "list" : "grid",
+                            )
+                          }
+                        >
+                          {notesView === "grid" ? (
+                            <List size={18} />
+                          ) : (
+                            <Grid3X3 size={18} />
+                          )}
+                        </button>
+                      </>
+                    ) : undefined
+                  }
                   onServiceWarning={(message) =>
                     showSnackbar(message, "invalid")
                   }
@@ -1529,12 +1590,6 @@ function App(): JSX.Element {
                   <ApiTesterCookieButton
                     storageScopeId={selectedProject.id}
                     onClick={() => setCookieModalOpen(true)}
-                  />
-                  <ApiTesterSavedRequestsButton
-                    storageScopeId={selectedProject.id}
-                    onClick={() =>
-                      window.dispatchEvent(new Event("api-tester:open-saved-picker"))
-                    }
                   />
                   <FontSizeDropdown
                     value={fontSizeMode}
@@ -1656,6 +1711,8 @@ function App(): JSX.Element {
             {activeTab === "notes" ? (
               <NotesTab
                 projectId={selectedProject.id}
+                view={notesView}
+                addNoteRequestId={notesAddRequestId}
                 onFeedback={(message) => showSnackbar(message, "invalid")}
               />
             ) : null}
@@ -2304,6 +2361,15 @@ function ApiTesterHeaderTabs({
         onClick={() => onViewChange("history")}
       >
         History
+      </button>
+      <button
+        className={`tab${activeView === "saved" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeView === "saved"}
+        onClick={() => onViewChange("saved")}
+      >
+        Saved
       </button>
     </div>
   );

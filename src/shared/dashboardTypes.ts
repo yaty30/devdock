@@ -406,6 +406,17 @@ export type ApiTesterResponse = {
   binary?: boolean;
 };
 
+export type ApiTesterSavedRequestRecord = {
+  id: string;
+  scopeId: string;
+  name: string;
+  method: string;
+  url: string;
+  requestJson: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type DashboardEvent =
   | {
       type: "log";
@@ -446,7 +457,8 @@ export type DashboardEvent =
     };
 
 export type DashboardApi = {
-  getFeatureFlags: () => Promise<{ chatEnabled: boolean }>;
+  getFeatureFlags: () => Promise<{ chatEnabled: boolean; debugEnabled: boolean }>;
+  showDebugBuildNotification: () => Promise<void>;
   isWindowMaximized: () => Promise<boolean>;
   minimizeWindow: () => Promise<void>;
   toggleMaximizeWindow: () => Promise<void>;
@@ -454,6 +466,18 @@ export type DashboardApi = {
   sendApiTesterRequest: (
     request: ApiTesterRequest,
   ) => Promise<ApiTesterResponse>;
+  getApiTesterSavedRequests: (
+    scopeId: string,
+  ) => Promise<ApiTesterSavedRequestRecord[]>;
+  saveApiTesterSavedRequest: (request: {
+    id?: string;
+    scopeId: string;
+    name: string;
+    method: string;
+    url: string;
+    requestJson: string;
+  }) => Promise<ApiTesterSavedRequestRecord>;
+  deleteApiTesterSavedRequest: (id: string) => Promise<void>;
   getSnapshot: () => Promise<DashboardSnapshot>;
   getDatabaseConnections: () => Promise<DatabaseConnection[]>;
   saveDatabaseConnection: (

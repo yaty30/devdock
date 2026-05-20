@@ -14,12 +14,20 @@ import type { ChatNativeNotification } from "../shared/chatTypes";
 
 const api: DashboardApi = {
   getFeatureFlags: () => ipcRenderer.invoke("dashboard:getFeatureFlags"),
+  showDebugBuildNotification: () =>
+    ipcRenderer.invoke("dashboard:showDebugBuildNotification"),
   isWindowMaximized: () => ipcRenderer.invoke("window:isMaximized"),
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggleMaximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
   sendApiTesterRequest: (request) =>
     ipcRenderer.invoke("apiTester:sendRequest", request),
+  getApiTesterSavedRequests: (scopeId) =>
+    ipcRenderer.invoke("apiTester:getSavedRequests", scopeId),
+  saveApiTesterSavedRequest: (request) =>
+    ipcRenderer.invoke("apiTester:saveSavedRequest", request),
+  deleteApiTesterSavedRequest: (id) =>
+    ipcRenderer.invoke("apiTester:deleteSavedRequest", id),
   getSnapshot: () => ipcRenderer.invoke("dashboard:getSnapshot"),
   getDatabaseConnections: () => ipcRenderer.invoke("database:getConnections"),
   saveDatabaseConnection: (connection) =>

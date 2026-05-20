@@ -32,6 +32,7 @@ import type {
   ActivityKind,
   ActivityRecord,
   ActivityTone,
+  ApiTesterSavedRequestRecord,
   BuildOutcomeType,
   BuildProfileRecord,
   BuildQueryOptions,
@@ -75,6 +76,7 @@ import {
 
 type OracleDbModule = {
   OUT_FORMAT_OBJECT: number;
+  STRING: number;
   SYSASM: number;
   SYSBACKUP: number;
   SYSDBA: number;
@@ -82,6 +84,9 @@ type OracleDbModule = {
   SYSKM: number;
   SYSOPER: number;
   SYSRAC: number;
+  initOracleClient?: (options?: { libDir?: string }) => void;
+  oracleClientVersionString?: string;
+  thin?: boolean;
   getConnection: (options: OracleConnectionOptions) => Promise<OracleConnection>;
 };
 
@@ -98,6 +103,7 @@ type OracleExecuteOptions = {
   outFormat?: number;
   autoCommit?: boolean;
   fetchArraySize?: number;
+  fetchInfo?: Record<string, { type: number }>;
 };
 
 type OracleColumnMetadata = {
@@ -125,6 +131,7 @@ type OracleConnection = {
 };
 
 const oracleDriver = require("oracledb") as OracleDbModule;
+let oracleClientInitAttempted = false;
 
 type ServiceProcess = {
   child: ChildProcessWithoutNullStreams;
@@ -231,6 +238,17 @@ type DatabaseExecutionHistoryRow = {
   rows_affected: number | null;
   error_message: string | null;
   execution_message?: string | null;
+};
+
+type ApiTesterSavedRequestRow = {
+  id: string;
+  scope_id: string;
+  name: string;
+  method: string;
+  url: string;
+  request_json: string;
+  created_at: string;
+  updated_at: string;
 };
 
 type SettingsActivityEntry = {
@@ -883,6 +901,10 @@ export class DashboardBackend {
         "TABLE_OWNER",
         relevantSchemas,
       );
+      const indexTableOwnerFilter = createOracleInPredicate(
+        "IC.TABLE_OWNER",
+        relevantSchemas,
+      );
       const tableRows = await executeOracleRows(
         oracleConnection,
         `SELECT OWNER AS TABLE_SCHEMA,
@@ -943,9 +965,9 @@ export class DashboardBackend {
          JOIN ALL_INDEXES IX
            ON IX.OWNER = IC.INDEX_OWNER
           AND IX.INDEX_NAME = IC.INDEX_NAME
-         WHERE ${tableOwnerFilter.sql}
+         WHERE ${indexTableOwnerFilter.sql}
          ORDER BY IC.TABLE_OWNER, IC.TABLE_NAME, IC.INDEX_NAME, IC.COLUMN_POSITION`,
-        tableOwnerFilter.binds,
+        indexTableOwnerFilter.binds,
       );
       const triggerRows = await executeOracleRows(
         oracleConnection,
@@ -1194,6 +1216,7 @@ export class DashboardBackend {
             {
               outFormat: oracleDriver.OUT_FORMAT_OBJECT,
               autoCommit: true,
+              fetchInfo: { DDL: { type: oracleDriver.STRING } },
             },
           );
           const durationMs = Math.max(1, performance.now() - startedAt);
@@ -1296,6 +1319,67 @@ export class DashboardBackend {
     mkdirSync(dirname(targetPath), { recursive: true });
     writeFileSync(targetPath, Buffer.from(contentBase64, "base64"));
     return { success: true, path: targetPath };
+  }
+
+  getApiTesterSavedRequests(scopeId: string): ApiTesterSavedRequestRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, scope_id, name, method, url, request_json, created_at, updated_at
+         FROM api_tester_saved_requests
+         WHERE scope_id = ?
+         ORDER BY datetime(updated_at) DESC, datetime(created_at) DESC`,
+      )
+      .all(scopeId) as ApiTesterSavedRequestRow[];
+
+    return rows.map(mapApiTesterSavedRequestRow);
+  }
+
+  saveApiTesterSavedRequest(request: {
+    id?: string;
+    scopeId: string;
+    name: string;
+    method: string;
+    url: string;
+    requestJson: string;
+  }): ApiTesterSavedRequestRecord {
+    const id = request.id?.trim() || randomUUID();
+    const now = new Date().toISOString();
+    const existing = this.db
+      .prepare("SELECT created_at FROM api_tester_saved_requests WHERE id = ?")
+      .get(id) as { created_at: string } | undefined;
+    const saved = {
+      id,
+      scopeId: request.scopeId.trim() || "global",
+      name: request.name.trim() || "API request",
+      method: request.method.trim().toUpperCase() || "GET",
+      url: request.url.trim(),
+      requestJson: request.requestJson,
+      createdAt: existing?.created_at ?? now,
+      updatedAt: now,
+    };
+
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO api_tester_saved_requests (
+           id, scope_id, name, method, url, request_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        saved.id,
+        saved.scopeId,
+        saved.name,
+        saved.method,
+        saved.url,
+        saved.requestJson,
+        saved.createdAt,
+        saved.updatedAt,
+      );
+
+    return saved;
+  }
+
+  deleteApiTesterSavedRequest(id: string): void {
+    this.db.prepare("DELETE FROM api_tester_saved_requests WHERE id = ?").run(id);
   }
 
   getDashboardOverview(): ProjectDashboardSummary[] {
@@ -2196,6 +2280,17 @@ export class DashboardBackend {
         FOREIGN KEY(connection_id) REFERENCES database_connections(id)
       );
 
+      CREATE TABLE IF NOT EXISTS api_tester_saved_requests (
+        id TEXT PRIMARY KEY,
+        scope_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        method TEXT NOT NULL,
+        url TEXT NOT NULL,
+        request_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
       CREATE UNIQUE INDEX IF NOT EXISTS sheets_project_title_unique
         ON sheets(project_id, title COLLATE NOCASE);
       CREATE INDEX IF NOT EXISTS sheets_project_updated_idx
@@ -2206,6 +2301,8 @@ export class DashboardBackend {
         ON database_worksheets(connection_id, saved_at DESC);
       CREATE INDEX IF NOT EXISTS database_execution_connection_time_idx
         ON database_execution_history(connection_id, executed_at DESC);
+      CREATE INDEX IF NOT EXISTS api_tester_saved_scope_updated_idx
+        ON api_tester_saved_requests(scope_id, updated_at DESC);
     `);
 
     this.patchExistingActivityDatesToYesterday();
@@ -3985,7 +4082,12 @@ function toMysqlConnectionOptions(
 async function createOracleConnection(
   connection: DatabaseConnection,
 ): Promise<OracleConnection> {
-  return oracleDriver.getConnection(toOracleConnectionOptions(connection));
+  ensureOracleClientMode();
+  try {
+    return await oracleDriver.getConnection(toOracleConnectionOptions(connection));
+  } catch (error) {
+    throw withOracleConnectionHint(error);
+  }
 }
 
 function toOracleConnectionOptions(
@@ -4065,6 +4167,54 @@ function resolveOraclePrivilege(role?: string): number | undefined {
     );
   }
   return privilege;
+}
+
+function mapApiTesterSavedRequestRow(
+  row: ApiTesterSavedRequestRow,
+): ApiTesterSavedRequestRecord {
+  return {
+    id: row.id,
+    scopeId: row.scope_id,
+    name: row.name,
+    method: row.method,
+    url: row.url,
+    requestJson: row.request_json,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function ensureOracleClientMode(): void {
+  if (oracleClientInitAttempted || typeof oracleDriver.initOracleClient !== "function") {
+    return;
+  }
+
+  oracleClientInitAttempted = true;
+  const libDir = (
+    process.env.IVS_ORACLE_CLIENT_LIB_DIR ??
+    process.env.ORACLE_CLIENT_LIB_DIR ??
+    process.env.ORACLE_HOME ??
+    ""
+  ).trim();
+
+  try {
+    oracleDriver.initOracleClient(libDir ? { libDir } : undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/already initialized/i.test(message)) {
+      console.warn(`Oracle Thick mode was not initialized: ${message}`);
+    }
+  }
+}
+
+function withOracleConnectionHint(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/NJS-116|password verifier type/i.test(message)) {
+    return new Error(
+      `${message}\n\nThis Oracle account uses an older password verifier that node-oracledb Thin mode cannot authenticate. Install Oracle Instant Client and set IVS_ORACLE_CLIENT_LIB_DIR to its folder, or ask the DBA to reset the user password with a newer verifier.`,
+    );
+  }
+  return error instanceof Error ? error : new Error(message);
 }
 
 function oracleSelectOptions(): OracleExecuteOptions {

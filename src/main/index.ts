@@ -67,7 +67,11 @@ let isQuitting = false;
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
 const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
 const API_TESTER_REQUEST_CHANNEL = "apiTester:sendRequest";
+const API_TESTER_SAVED_GET_CHANNEL = "apiTester:getSavedRequests";
+const API_TESTER_SAVED_SAVE_CHANNEL = "apiTester:saveSavedRequest";
+const API_TESTER_SAVED_DELETE_CHANNEL = "apiTester:deleteSavedRequest";
 const CHAT_ENABLED = readBooleanEnvironmentFlag("ENABLE_CHAT", false);
+const DEBUG_ENABLED = readBooleanEnvironmentFlag("DEBUG", false);
 const DEFAULT_CHAT_PORT = Number(
   process.env.IVS_DASHBOARD_CHAT_PORT ?? "43781",
 );
@@ -90,6 +94,13 @@ const DEFAULT_CHAT_BIND_HOST =
   (isLoopbackHost(DEFAULT_CHAT_SERVICE_HOST)
     ? DEFAULT_CHAT_SERVICE_HOST
     : "0.0.0.0");
+const BUILD_NOTIFICATION_ARGUMENT_PREFIX = "ivs-dashboard-build-notification";
+const BUILD_NOTIFICATION_ACTION_OPEN_WAR = "open-war";
+const BUILD_NOTIFICATION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
+const buildNotificationTargets = new Map<
+  string,
+  { warDirectory: string | null; createdAt: number }
+>();
 
 function getBackend(): DashboardBackend {
   if (!backend) {
@@ -104,7 +115,16 @@ function registerIpc(): void {
   ipcMain.handle("dashboard:getFeatureFlags", () =>
     withLoggedErrors("dashboard:getFeatureFlags", () => ({
       chatEnabled: CHAT_ENABLED,
+      debugEnabled: DEBUG_ENABLED,
     })),
+  );
+  ipcMain.handle("dashboard:showDebugBuildNotification", () =>
+    withLoggedErrors("dashboard:showDebugBuildNotification", () => {
+      if (!DEBUG_ENABLED) {
+        throw new Error("Debug mode is disabled.");
+      }
+      showDebugBuildNotification();
+    }),
   );
   ipcMain.handle("window:isMaximized", (event) =>
     withLoggedErrors("window:isMaximized", () =>
@@ -141,6 +161,33 @@ function registerIpc(): void {
       withLoggedErrors(API_TESTER_REQUEST_CHANNEL, () =>
         sendApiTesterRequest(request),
       ),
+  );
+  ipcMain.handle(API_TESTER_SAVED_GET_CHANNEL, (_event, scopeId: string) =>
+    withLoggedErrors(API_TESTER_SAVED_GET_CHANNEL, () =>
+      getBackend().getApiTesterSavedRequests(scopeId),
+    ),
+  );
+  ipcMain.handle(
+    API_TESTER_SAVED_SAVE_CHANNEL,
+    (
+      _event,
+      request: {
+        id?: string;
+        scopeId: string;
+        name: string;
+        method: string;
+        url: string;
+        requestJson: string;
+      },
+    ) =>
+      withLoggedErrors(API_TESTER_SAVED_SAVE_CHANNEL, () =>
+        getBackend().saveApiTesterSavedRequest(request),
+      ),
+  );
+  ipcMain.handle(API_TESTER_SAVED_DELETE_CHANNEL, (_event, id: string) =>
+    withLoggedErrors(API_TESTER_SAVED_DELETE_CHANNEL, () =>
+      getBackend().deleteApiTesterSavedRequest(id),
+    ),
   );
   ipcMain.handle("dashboard:getSnapshot", () =>
     withLoggedErrors("dashboard:getSnapshot", () => getBackend().getSnapshot()),
@@ -935,20 +982,47 @@ function showBuildNotification(
   build: RecentBuildRecord,
   projectName: string,
   warDirectory: string | null,
-): void {
+  options: { showWhenFocused?: boolean; throwOnSkip?: boolean } = {},
+): boolean {
   const window = mainWindow;
-  if (!window || window.isDestroyed() || window.isFocused()) {
-    return;
+  if (!window || window.isDestroyed()) {
+    const message = "Build toast skipped because the main window is unavailable.";
+    if (options.throwOnSkip) {
+      throw new Error(message);
+    }
+    console.warn(`[main:notification] ${message}`);
+    return false;
+  }
+  if (window.isFocused() && !options.showWhenFocused) {
+    console.info(
+      `[main:notification] Build toast skipped while app is focused for ${projectName}`,
+    );
+    return false;
   }
 
-  window.flashFrame(true);
+  if (!options.showWhenFocused) {
+    window.flashFrame(true);
+  }
   if (!Notification.isSupported()) {
-    return;
+    const message = "Desktop notifications are not supported on this system.";
+    if (options.throwOnSkip) {
+      throw new Error(message);
+    }
+    console.warn(`[main:notification] ${message}`);
+    return false;
   }
 
+  const notificationToken = randomUUID();
+  rememberBuildNotificationTarget(notificationToken, warDirectory);
   const fallbackOptions = createBuildNotificationFallbackOptions(
     build,
     projectName,
+  );
+  const buildNotificationOptions = createBuildNotificationOptions(
+    build,
+    projectName,
+    notificationToken,
+    warDirectory,
   );
   const iconOptions = createBuildNotificationIconOptions();
 
@@ -987,7 +1061,7 @@ function showBuildNotification(
   let nativeNotification: Notification;
   try {
     nativeNotification = new Notification({
-      ...fallbackOptions,
+      ...buildNotificationOptions,
       ...iconOptions,
     });
   } catch (error) {
@@ -996,7 +1070,7 @@ function showBuildNotification(
         error instanceof Error ? error.message : String(error)
       }`,
     );
-    return;
+    return true;
   }
 
   let shown = false;
@@ -1021,7 +1095,10 @@ function showBuildNotification(
     clearTimeout(showTimeout);
   });
   nativeNotification.on("click", () => {
-    void openBuildNotificationTarget(window, warDirectory);
+    void openBuildNotificationTargetByToken(notificationToken);
+  });
+  nativeNotification.on("action", () => {
+    void openBuildNotificationTargetByToken(notificationToken);
   });
 
   try {
@@ -1032,13 +1109,106 @@ function showBuildNotification(
       `show() threw: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
+  return true;
+}
+
+function showDebugBuildNotification(): void {
+  const completedAt = new Date();
+  const startedAt = new Date(completedAt.getTime() - 169000);
+  const shown = showBuildNotification(
+    {
+      id: `debug-build-${completedAt.getTime()}`,
+      branch: "release/full-launch-10.1",
+      commit: "9804a3fdib",
+      commitCleanliness: "clean",
+      profile: "NF Local",
+      status: "Success",
+      duration: "2m 49s",
+      completed: "Just now",
+      startedAt: startedAt.toISOString(),
+      completedAt: completedAt.toISOString(),
+      outcomeType: "build-only",
+    },
+    "Project IAP",
+    app.getPath("documents"),
+    { showWhenFocused: true, throwOnSkip: true },
+  );
+  if (!shown) {
+    throw new Error("Debug notification was not shown.");
+  }
+}
+
+function createBuildNotificationOptions(
+  build: RecentBuildRecord,
+  projectName: string,
+  notificationToken: string,
+  warDirectory: string | null,
+): NotificationConstructorOptions {
+  const fallbackOptions = createBuildNotificationFallbackOptions(
+    build,
+    projectName,
+  );
+  if (process.platform !== "win32") {
+    return fallbackOptions;
+  }
+
+  return {
+    ...fallbackOptions,
+    toastXml: createBuildNotificationToastXml(
+      build,
+      projectName,
+      notificationToken,
+      warDirectory,
+    ),
+  };
+}
+
+function createBuildNotificationToastXml(
+  build: RecentBuildRecord,
+  projectName: string,
+  notificationToken: string,
+  warDirectory: string | null,
+): string {
+  const title = `🚀 ${projectName} Build ${build.status}`;
+  const lines = [
+    // `🦘 Profile: ${build.profile}`,
+    // `🌳 Branch: ${build.branch}`,
+    // `🔖 Commit: @${build.commit}/${build.commitCleanliness}`,
+    `🤝🏻 Profile:  ${build.profile}`,
+    `🕑 Duration: ${build.duration}`,
+    `🔖 Commit: @${build.commit}/${build.commitCleanliness}`
+
+  ];
+  const launchArgument = createBuildNotificationArgument(
+    notificationToken,
+    undefined,
+    warDirectory,
+  );
+  const openWarArgument = createBuildNotificationArgument(
+    notificationToken,
+    BUILD_NOTIFICATION_ACTION_OPEN_WAR,
+    warDirectory,
+  );
+
+  return `
+<toast launch="${escapeXmlAttribute(launchArgument)}">
+  <visual>
+    <binding template="ToastGeneric">
+      <text>${escapeXmlText(title)}</text>
+      ${lines.map((line) => `<text>${escapeXmlText(line)}</text>`).join("\n      ")}
+    </binding>
+  </visual>
+  <actions>
+    <action content="Open WAR folder" arguments="${escapeXmlAttribute(openWarArgument)}" activationType="foreground" />
+  </actions>
+</toast>`.trim();
 }
 
 function createBuildNotificationFallbackOptions(
   build: RecentBuildRecord,
   projectName: string,
 ): NotificationConstructorOptions {
-  const statusLabel = `🚀 Build ${build.status} 🕑: ${build.duration}`;
+  const statusLabel = `🚀 Build ${build.status} 🕑 ~ ${build.duration}`;
   const detailLines = [
     `🦘 Profile: ${build.profile}`,
     `🌳 Branch: ${build.branch}`,
@@ -1055,6 +1225,161 @@ function createBuildNotificationFallbackOptions(
 function createBuildNotificationIconOptions(): NotificationConstructorOptions {
   const iconPath = resolveNotificationIconPath();
   return iconPath ? { icon: iconPath } : {};
+}
+
+function createBuildNotificationArgument(
+  notificationToken: string,
+  action?: string,
+  warDirectory?: string | null,
+): string {
+  const parameters = new URLSearchParams({
+    source: BUILD_NOTIFICATION_ARGUMENT_PREFIX,
+    token: notificationToken,
+  });
+  if (action) {
+    parameters.set("action", action);
+  }
+  if (warDirectory) {
+    parameters.set("warDirectory", encodeBase64Url(warDirectory));
+  }
+  return parameters.toString();
+}
+
+type BuildNotificationActivation = {
+  token: string;
+  action: string | null;
+  warDirectory: string | null;
+};
+
+function parseBuildNotificationActivation(
+  argumentsText: string,
+): BuildNotificationActivation | null {
+  const parameters = new URLSearchParams(argumentsText);
+  if (parameters.get("source") === BUILD_NOTIFICATION_ARGUMENT_PREFIX) {
+    const token = parameters.get("token");
+    if (!token) {
+      return null;
+    }
+    const encodedDirectory = parameters.get("warDirectory");
+    return {
+      token,
+      action: parameters.get("action"),
+      warDirectory: encodedDirectory
+        ? decodeBase64Url(encodedDirectory)
+        : null,
+    };
+  }
+
+  const parts = argumentsText.split(":");
+  if (parts[0] !== BUILD_NOTIFICATION_ARGUMENT_PREFIX) {
+    return null;
+  }
+  if (parts.length === 2) {
+    return parts[1]
+      ? { token: parts[1], action: null, warDirectory: null }
+      : null;
+  }
+  if (parts.length === 3 && parts[1] === BUILD_NOTIFICATION_ACTION_OPEN_WAR) {
+    return parts[2]
+      ? {
+          token: parts[2],
+          action: BUILD_NOTIFICATION_ACTION_OPEN_WAR,
+          warDirectory: null,
+        }
+      : null;
+  }
+  return null;
+}
+
+function encodeBase64Url(value: string): string {
+  return Buffer.from(value, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function decodeBase64Url(value: string): string | null {
+  try {
+    const padded = `${value}${"=".repeat((4 - (value.length % 4)) % 4)}`;
+    return Buffer.from(
+      padded.replace(/-/g, "+").replace(/_/g, "/"),
+      "base64",
+    ).toString("utf8");
+  } catch (error) {
+    console.error("[main:notification] Failed to decode toast path", error);
+    return null;
+  }
+}
+
+function rememberBuildNotificationTarget(
+  notificationToken: string,
+  warDirectory: string | null,
+): void {
+  pruneBuildNotificationTargets();
+  buildNotificationTargets.set(notificationToken, {
+    warDirectory,
+    createdAt: Date.now(),
+  });
+}
+
+function pruneBuildNotificationTargets(): void {
+  const cutoff = Date.now() - BUILD_NOTIFICATION_TARGET_TTL_MS;
+  for (const [token, target] of buildNotificationTargets) {
+    if (target.createdAt < cutoff) {
+      buildNotificationTargets.delete(token);
+    }
+  }
+}
+
+function registerNotificationActivationHandler(): void {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const notificationApi = Notification as typeof Notification & {
+    handleActivation?: (callback: (details: { arguments?: string }) => void) =>
+      void;
+  };
+  notificationApi.handleActivation?.((details) => {
+    const argumentsText = details.arguments;
+    if (!argumentsText) {
+      return;
+    }
+    const activation = parseBuildNotificationActivation(argumentsText);
+    if (activation) {
+      console.info("[main:notification] Build toast activated", {
+        action: activation.action,
+        hasEmbeddedDirectory: Boolean(activation.warDirectory),
+      });
+      void openBuildNotificationTargetByToken(
+        activation.token,
+        activation.warDirectory,
+      );
+    }
+  });
+}
+
+async function openBuildNotificationTargetByToken(
+  notificationToken: string,
+  fallbackWarDirectory: string | null = null,
+): Promise<void> {
+  const target = buildNotificationTargets.get(notificationToken);
+  await openBuildNotificationTarget(
+    mainWindow,
+    fallbackWarDirectory ?? target?.warDirectory ?? null,
+  );
+}
+
+function escapeXmlText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function escapeXmlAttribute(value: string): string {
+  return escapeXmlText(value).replace(/"/g, "&quot;");
 }
 
 const MAX_TOAST_IMAGE_BYTES = 400 * 1024;
@@ -1092,18 +1417,27 @@ function resolveNotificationIconPath(): string | null {
 }
 
 async function openBuildNotificationTarget(
-  window: BrowserWindow,
+  window: BrowserWindow | null,
   warDirectory: string | null,
 ): Promise<void> {
-  window.flashFrame(false);
+  window?.flashFrame(false);
+  console.info("[main:notification] Opening build notification target", {
+    warDirectory,
+    exists: warDirectory ? existsSync(warDirectory) : false,
+  });
   if (warDirectory && existsSync(warDirectory)) {
     const result = await shell.openPath(warDirectory);
     if (!result) {
+      console.info(`[main:notification] Opened ${warDirectory}`);
       return;
     }
     console.error(
       `[main:notification] Failed to open ${warDirectory}: ${result}`,
     );
+  }
+
+  if (!window || window.isDestroyed()) {
+    return;
   }
 
   if (window.isMinimized()) {
@@ -1245,6 +1579,7 @@ app.whenReady().then(() => {
       chatConfig = initializeChat(userDataPath);
     }
     backend = new DashboardBackend(userDataPath, app.getAppPath());
+    registerNotificationActivationHandler();
     registerIpc();
     createWindow();
     void backend.autoStartServices().catch((error) => {

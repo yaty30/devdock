@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Copy,
   GitCompare,
+  LoaderCircle,
   LucideSquircle,
   SquareDashed,
 } from "lucide-react";
@@ -85,6 +86,7 @@ export function ResultTabsPanel({
   metadataTables,
   onTabChange,
   onColumnWidthsChange,
+  onLoadMoreRows,
 }: {
   tabs: ResultTab[];
   activeTabId: string | null;
@@ -93,6 +95,7 @@ export function ResultTabsPanel({
   onColumnWidthsChange: (
     columnWidths: Partial<Record<ResultColumnKey, number>>,
   ) => void;
+  onLoadMoreRows?: (tabId: string) => void;
 }): JSX.Element {
   const activeTab =
     tabs.find((tab) => tab.id === activeTabId) ?? tabs[0] ?? null;
@@ -130,9 +133,12 @@ export function ResultTabsPanel({
         rows={activeTab.rows}
         columns={activeTab.columns}
         meta={activeTab.meta}
+        pagination={activeTab.pagination}
+        resetKey={activeTab.id}
         metadataTables={metadataTables}
         columnWidths={activeTab.columnWidths}
         onColumnWidthsChange={onColumnWidthsChange}
+        onLoadMoreRows={() => onLoadMoreRows?.(activeTab.id)}
       />
     </div>
   );
@@ -141,18 +147,24 @@ function ResultGrid({
   rows,
   columns,
   meta,
+  pagination,
+  resetKey,
   metadataTables,
   columnWidths,
   onColumnWidthsChange,
+  onLoadMoreRows,
 }: {
   rows: ResultRow[];
   columns: ResultColumn[];
   meta: ResultMeta;
+  pagination?: ResultTab["pagination"];
+  resetKey: string;
   metadataTables: DatabaseTable[];
   columnWidths: Partial<Record<ResultColumnKey, number>>;
   onColumnWidthsChange: (
     columnWidths: Partial<Record<ResultColumnKey, number>>,
   ) => void;
+  onLoadMoreRows?: () => void;
 }): JSX.Element {
   const resultScrollRef = useRef<HTMLDivElement>(null);
   const columnDragRef = useRef<ResultColumnDragState | null>(null);
@@ -299,7 +311,7 @@ function ResultGrid({
     if (resultScrollRef.current) {
       resultScrollRef.current.scrollTop = 0;
     }
-  }, [rows, columns]);
+  }, [resetKey, columns]);
 
   useEffect(() => {
     if (!snackbar) {
@@ -470,9 +482,26 @@ function ResultGrid({
     setRowContextMenu(null);
   }
 
+  function handleResultScroll(): void {
+    const element = resultScrollRef.current;
+    if (!element || !pagination?.hasMore || pagination.loading) {
+      return;
+    }
+
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceFromBottom <= 180) {
+      onLoadMoreRows?.();
+    }
+  }
+
   return (
     <div className="database-result-region">
-      <div className="database-result-scroll" ref={resultScrollRef}>
+      <div
+        className="database-result-scroll"
+        ref={resultScrollRef}
+        onScroll={handleResultScroll}
+      >
         {hasColumns ? (
           <table
             className="recent-builds-table database-result-table"
@@ -645,6 +674,18 @@ function ResultGrid({
                 </tr>
               ) : null}
             </tbody>
+            {pagination?.loading ? (
+              <tbody>
+                <tr>
+                  <td colSpan={displayColumns.length}>
+                    <span className="database-result-loading-more">
+                      <LoaderCircle className="button-spinner" size={14} />
+                      Loading more rows...
+                    </span>
+                  </td>
+                </tr>
+              </tbody>
+            ) : null}
           </table>
         ) : null}
         {!hasColumns && rows.length === 0 ? (
@@ -835,7 +876,13 @@ function ResultRowDetails({
                     </button>
                   </div>
                 </td>
-                <td title={metadata.type}>{metadata.type}</td>
+                <td title={metadata.type}>
+                  <div className="database-detail-value-cell">
+                    <span className="database-detail-value-text">
+                      {metadata.type}
+                    </span>
+                  </div>
+                </td>
                 <td title={metadata.nullability}>{metadata.nullability}</td>
                 <td title={metadata.keyInfo}>{metadata.keyInfo}</td>
               </tr>
@@ -915,7 +962,7 @@ function createSeqResultColumn(): ResultColumn {
     key: SEQ_RESULT_COLUMN_KEY,
     label: "seq",
     kind: "number",
-    minWidth: 72,
+    minWidth: 92,
     weight: 0.35,
   };
 }

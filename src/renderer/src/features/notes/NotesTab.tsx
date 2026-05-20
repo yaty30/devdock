@@ -24,7 +24,6 @@ import { Plugin, PluginKey, TextSelection } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import {
   Bold,
-  Grid3X3,
   Highlighter,
   Italic,
   Link as LinkIcon,
@@ -40,7 +39,7 @@ import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Modal } from "../../components/dialogs/Modal";
 import type { Sheet, SheetContentJson, SheetUpdate } from "../../types";
 
-type NotesView = "grid" | "list";
+export type NotesView = "grid" | "list";
 type SaveStatus = "saved" | "saving" | "unsaved" | "failed";
 type FindRange = { from: number; to: number };
 type TiptapNode = {
@@ -118,15 +117,18 @@ const NoteFindHighlight = Extension.create({
 
 export function NotesTab({
   projectId,
+  view,
+  addNoteRequestId,
   onFeedback,
 }: {
   projectId: string;
+  view: NotesView;
+  addNoteRequestId: number;
   onFeedback?: (message: string) => void;
 }): JSX.Element {
   const [sheets, setSheets] = useState<Sheet[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [view, setView] = useState<NotesView>("grid");
   const [addOpen, setAddOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Sheet | null>(null);
   const [expandedSheetId, setExpandedSheetId] = useState<string | null>(null);
@@ -187,6 +189,12 @@ export function NotesTab({
       clearAllSaveTimers(saveTimersRef.current);
     };
   }, [projectId]);
+
+  useEffect(() => {
+    if (addNoteRequestId > 0) {
+      setAddOpen(true);
+    }
+  }, [addNoteRequestId]);
 
   const expandedSheet = expandedSheetId
     ? (sheets.find((sheet) => sheet.id === expandedSheetId) ?? null)
@@ -413,48 +421,6 @@ export function NotesTab({
 
   return (
     <section className="notes-screen">
-      <div className="notes-toolbar">
-        <div className="notes-toolbar-spacer" />
-        <div className="notes-toolbar-actions">
-          <button
-            className="button primary compact"
-            type="button"
-            onClick={() => setAddOpen(true)}
-          >
-            <Plus size={14} />
-            Add Note
-          </button>
-          <div
-            className="notes-view-toggle"
-            role="tablist"
-            aria-label="Notes view"
-          >
-            <button
-              className={view === "grid" ? "active" : ""}
-              type="button"
-              role="tab"
-              aria-selected={view === "grid"}
-              title="Grid view"
-              aria-label="Grid view"
-              onClick={() => setView("grid")}
-            >
-              <Grid3X3 size={15} />
-            </button>
-            <button
-              className={view === "list" ? "active" : ""}
-              type="button"
-              role="tab"
-              aria-selected={view === "list"}
-              title="List view"
-              aria-label="List view"
-              onClick={() => setView("list")}
-            >
-              <List size={15} />
-            </button>
-          </div>
-        </div>
-      </div>
-
       {loading ? (
         <div className="notes-loading panel" aria-live="polite">
           <span className="notes-spinner" />

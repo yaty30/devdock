@@ -1,5 +1,6 @@
 import type {
   DatabaseConnection,
+  DatabaseConnectionType,
   DatabaseMetadata,
   DatabaseStatementExecutionResult,
   DatabaseTable,
@@ -596,26 +597,39 @@ export function formatObjectName(table: DatabaseTable): string {
   return table.schema ? `${table.name}` : table.name;
 }
 
-export function quoteSqlIdentifier(identifier: string): string {
+export function quoteSqlIdentifier(
+  identifier: string,
+  connectionType: DatabaseConnectionType,
+): string {
+  if (connectionType === "Oracle") {
+    return `"${identifier.replace(/"/g, "\"\"")}"`;
+  }
+
   return `\`${identifier.replace(/`/g, "``")}\``;
 }
 
-export function quoteQualifiedTableName(table: DatabaseTable): string {
+export function quoteQualifiedTableName(
+  table: DatabaseTable,
+  connectionType: DatabaseConnectionType,
+): string {
   return table.schema
-    ? `${quoteSqlIdentifier(table.schema)}.${quoteSqlIdentifier(table.name)}`
-    : quoteSqlIdentifier(table.name);
+    ? `${quoteSqlIdentifier(table.schema, connectionType)}.${quoteSqlIdentifier(table.name, connectionType)}`
+    : quoteSqlIdentifier(table.name, connectionType);
 }
 
-export function createInsertTemplate(table: DatabaseTable): string {
+export function createInsertTemplate(
+  table: DatabaseTable,
+  connectionType: DatabaseConnectionType,
+): string {
   const columns = table.columns.map((column) => column.name);
   if (columns.length === 0) {
-    return `INSERT INTO ${quoteQualifiedTableName(table)} (\n  column_1\n) VALUES (\n  value_1\n);`;
+    return `INSERT INTO ${quoteQualifiedTableName(table, connectionType)} (\n  column_1\n) VALUES (\n  value_1\n);`;
   }
 
   const columnLines = columns
     .map(
       (column, index) =>
-        `  ${quoteSqlIdentifier(column)}${index < columns.length - 1 ? "," : ""}`,
+        `  ${quoteSqlIdentifier(column, connectionType)}${index < columns.length - 1 ? "," : ""}`,
     )
     .join("\n");
   const valueLines = columns
@@ -625,22 +639,36 @@ export function createInsertTemplate(table: DatabaseTable): string {
     )
     .join("\n");
 
-  return `INSERT INTO ${quoteQualifiedTableName(table)} (\n${columnLines}\n) VALUES (\n${valueLines}\n);`;
+  return `INSERT INTO ${quoteQualifiedTableName(table, connectionType)} (\n${columnLines}\n) VALUES (\n${valueLines}\n);`;
 }
 
-export function createSelectTemplate(table: DatabaseTable): string {
+export function createSelectTemplate(
+  table: DatabaseTable,
+  connectionType: DatabaseConnectionType,
+): string {
   const columns = table.columns.map((column) => column.name);
   const columnLines =
     columns.length > 0
       ? columns
           .map(
             (column, index) =>
-              `  ${quoteSqlIdentifier(column)}${index < columns.length - 1 ? "," : ""}`,
+              `  ${quoteSqlIdentifier(column, connectionType)}${index < columns.length - 1 ? "," : ""}`,
           )
           .join("\n")
       : "  column_1";
 
-  return `SELECT\n${columnLines}\nFROM ${quoteQualifiedTableName(table)};`;
+  return `SELECT\n${columnLines}\nFROM ${quoteQualifiedTableName(table, connectionType)};`;
+}
+
+export function limitSelectTemplate(
+  sql: string,
+  connectionType: DatabaseConnectionType,
+  rowLimit: number,
+): string {
+  const baseSql = sql.replace(/;\s*$/, "");
+  return connectionType === "Oracle"
+    ? `${baseSql}\nFETCH FIRST ${rowLimit} ROWS ONLY;`
+    : `${baseSql}\nLIMIT ${rowLimit};`;
 }
 
 export function appendSqlStatement(sql: string, statement: string): string {

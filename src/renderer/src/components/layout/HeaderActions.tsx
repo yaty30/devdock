@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  CaseSensitive,
   ChevronDown,
   Cog,
   LoaderCircle,
@@ -33,6 +34,8 @@ export function HeaderActions({
   onFontSizeChange,
   onSettingsClick,
   onServiceWarning,
+  utilityActions,
+  showSettingsButton = true,
   disabled = false,
 }: {
   projectId: string;
@@ -44,6 +47,8 @@ export function HeaderActions({
   onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
   onServiceWarning: (message: string) => void;
+  utilityActions?: ReactNode;
+  showSettingsButton?: boolean;
   disabled?: boolean;
 }): JSX.Element {
   return (
@@ -66,6 +71,8 @@ export function HeaderActions({
         fontSizeMode={fontSizeMode}
         onFontSizeChange={onFontSizeChange}
         onSettingsClick={onSettingsClick}
+        utilityActions={utilityActions}
+        showSettingsButton={showSettingsButton}
         disabled={disabled}
       />
     </div>
@@ -76,12 +83,16 @@ export function HeaderUtilityActions({
   fontSizeMode,
   onFontSizeChange,
   onSettingsClick,
+  utilityActions,
+  showSettingsButton = true,
   disabled = false,
   settingsIcon = "settings",
 }: {
   fontSizeMode: FontSizeMode;
   onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
+  utilityActions?: ReactNode;
+  showSettingsButton?: boolean;
   disabled?: boolean;
   settingsIcon?: "settings" | "cog";
 }): JSX.Element {
@@ -89,21 +100,24 @@ export function HeaderUtilityActions({
 
   return (
     <>
+      {utilityActions}
+      {showSettingsButton ? (
+        <button
+          className="icon-button secondary header-settings-button"
+          type="button"
+          aria-label="Settings"
+          title="Settings"
+          disabled={disabled}
+          onClick={onSettingsClick}
+        >
+          <SettingsButtonIcon size={18} />
+        </button>
+      ) : null}
       <FontSizeDropdown
         value={fontSizeMode}
         onChange={onFontSizeChange}
         disabled={disabled}
       />
-      <button
-        className="icon-button secondary header-settings-button"
-        type="button"
-        aria-label="Settings"
-        title="Settings"
-        disabled={disabled}
-        onClick={onSettingsClick}
-      >
-        <SettingsButtonIcon size={18} />
-      </button>
     </>
   );
 }
@@ -128,12 +142,14 @@ export function FontSizeDropdown({
   disabled?: boolean;
 }): JSX.Element {
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
   const [openMode, setOpenMode] = useState<"hover" | "click" | null>(null);
   const open = openMode !== null;
   const activeIndex = Math.max(
     0,
     FONT_SIZE_OPTIONS.findIndex((option) => option.value === value),
   );
+  const maxIndex = Math.max(FONT_SIZE_OPTIONS.length - 1, 1);
   const activeLabel = FONT_SIZE_OPTIONS[activeIndex]?.label ?? "100%";
 
   useEffect(() => {
@@ -154,24 +170,46 @@ export function FontSizeDropdown({
 
   useEffect(() => {
     if (disabled) {
+      clearHoverCloseTimer();
       setOpenMode(null);
     }
   }, [disabled]);
+
+  useEffect(() => {
+    return () => clearHoverCloseTimer();
+  }, []);
+
+  function clearHoverCloseTimer(): void {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  }
+
+  function openHoverDropdown(): void {
+    clearHoverCloseTimer();
+    if (!disabled && openMode !== "click") {
+      setOpenMode("hover");
+    }
+  }
+
+  function scheduleHoverDropdownClose(): void {
+    clearHoverCloseTimer();
+    if (openMode !== "hover") {
+      return;
+    }
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      setOpenMode((current) => (current === "hover" ? null : current));
+      hoverCloseTimerRef.current = null;
+    }, 180);
+  }
 
   return (
     <div
       className="build-dropdown font-size-dropdown"
       ref={dropdownRef}
-      onMouseEnter={() => {
-        if (!disabled && openMode !== "click") {
-          setOpenMode("hover");
-        }
-      }}
-      onMouseLeave={() => {
-        if (openMode === "hover") {
-          setOpenMode(null);
-        }
-      }}
+      onMouseEnter={openHoverDropdown}
+      onMouseLeave={scheduleHoverDropdownClose}
     >
       <button
         className={`icon-button secondary header-settings-button font-size-dropdown-trigger${
@@ -193,34 +231,55 @@ export function FontSizeDropdown({
       <div
         className={`build-dropdown-popover${open ? " open" : ""}`}
         aria-hidden={!open}
+        onMouseEnter={openHoverDropdown}
+        onMouseLeave={scheduleHoverDropdownClose}
       >
         <div className="build-dropdown-menu font-size-slider-menu">
-          <div className="font-size-slider-header">
-            <span>Font size</span>
-            <strong>{activeLabel}</strong>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={FONT_SIZE_OPTIONS.length - 1}
-            step={1}
-            value={activeIndex}
-            aria-label="Font size"
-            aria-valuetext={activeLabel}
-            onChange={(event) => {
-              const option = FONT_SIZE_OPTIONS[Number(event.target.value)];
-              if (option) {
-                onChange(option.value);
-              }
-            }}
-          />
-          <div className="font-size-slider-scale" aria-hidden="true">
-            {FONT_SIZE_OPTIONS.map((option) => (
-              <span
-                className={value === option.value ? "active" : undefined}
-                key={option.value}
+          <div
+            className="font-size-slider-control"
+            style={
+              {
+                "--font-slider-progress": `${(activeIndex / maxIndex) * 100}%`,
+              } as React.CSSProperties
+            }
+          >
+            <CaseSensitive size={16} />
+            <div className="font-size-slider-track-wrap">
+              <div className="font-size-slider-rail" aria-hidden="true">
+                <div className="font-size-slider-fill" />
+                <div className="font-size-slider-scale">
+                  {FONT_SIZE_OPTIONS.map((option, index) => (
+                    <span
+                      className={value === option.value ? "active" : undefined}
+                      key={option.value}
+                      style={
+                        {
+                          "--tick-percent": `${(index / maxIndex) * 100}%`,
+                        } as React.CSSProperties
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+              <input
+                className="font-size-slider-input"
+                type="range"
+                min={0}
+                max={FONT_SIZE_OPTIONS.length - 1}
+                step={1}
+                value={activeIndex}
+                aria-label="Font size"
+                aria-valuetext={activeLabel}
+                title={`Font size ${activeLabel}`}
+                onChange={(event) => {
+                  const option = FONT_SIZE_OPTIONS[Number(event.target.value)];
+                  if (option) {
+                    onChange(option.value);
+                  }
+                }}
               />
-            ))}
+            </div>
+            <CaseSensitive size={26} />
           </div>
         </div>
       </div>
@@ -259,6 +318,7 @@ function BuildActionsDropdown({
   disabled?: boolean;
 }): JSX.Element {
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
   const confirmRequestRef = useRef(0);
   const [openMode, setOpenMode] = useState<"hover" | "click" | null>(null);
   const [runningProfileId, setRunningProfileId] = useState<string | null>(null);
@@ -302,9 +362,14 @@ function BuildActionsDropdown({
 
   useEffect(() => {
     if (buildDisabled || buildRunning) {
+      clearHoverCloseTimer();
       setOpenMode(null);
     }
   }, [buildDisabled, buildRunning]);
+
+  useEffect(() => {
+    return () => clearHoverCloseTimer();
+  }, []);
 
   useEffect(() => {
     if (!latestBuildRunning) {
@@ -353,6 +418,7 @@ function BuildActionsDropdown({
 
   function stopBuild(): void {
     setStoppingBuild(true);
+    clearHoverCloseTimer();
     setOpenMode(null);
     window.ivsDashboard
       .stopBuild(projectId)
@@ -373,6 +439,7 @@ function BuildActionsDropdown({
   }
 
   function triggerBuild(profile: BuildProfileRecord): void {
+    clearHoverCloseTimer();
     setOpenMode(null);
     if (profile.confirm) {
       openBuildConfirmation(profile);
@@ -419,21 +486,38 @@ function BuildActionsDropdown({
     return `Run ${truncateBuildProfileLabel(profile.buttonName)} Build`;
   }
 
+  function clearHoverCloseTimer(): void {
+    if (hoverCloseTimerRef.current !== null) {
+      window.clearTimeout(hoverCloseTimerRef.current);
+      hoverCloseTimerRef.current = null;
+    }
+  }
+
+  function openHoverDropdown(): void {
+    clearHoverCloseTimer();
+    if (!buildDisabled && !buildRunning && openMode !== "click") {
+      setOpenMode("hover");
+    }
+  }
+
+  function scheduleHoverDropdownClose(): void {
+    clearHoverCloseTimer();
+    if (openMode !== "hover") {
+      return;
+    }
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      setOpenMode((current) => (current === "hover" ? null : current));
+      hoverCloseTimerRef.current = null;
+    }, 180);
+  }
+
   return (
     <>
       <div
         className="build-dropdown"
         ref={dropdownRef}
-        onMouseEnter={() => {
-          if (!buildDisabled && !buildRunning && openMode !== "click") {
-            setOpenMode("hover");
-          }
-        }}
-        onMouseLeave={() => {
-          if (openMode === "hover") {
-            setOpenMode(null);
-          }
-        }}
+        onMouseEnter={openHoverDropdown}
+        onMouseLeave={scheduleHoverDropdownClose}
       >
         <button
           className={`button primary build-dropdown-trigger${
@@ -486,6 +570,8 @@ function BuildActionsDropdown({
         <div
           className={`build-dropdown-popover${open ? " open" : ""}`}
           aria-hidden={!open}
+          onMouseEnter={openHoverDropdown}
+          onMouseLeave={scheduleHoverDropdownClose}
         >
           <div className="build-dropdown-menu" role="menu">
             {settings.buildProfiles.map((profile, index) => (
