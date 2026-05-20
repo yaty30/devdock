@@ -1,7 +1,7 @@
 {
-  "name": "ivs-dashboard-electron",
-  "version": "1.0.0",
-  "description": "Static Electron React TypeScript prototype for an IVS Dashboard.",
+  "name": "ivs-dashboard",
+  "version": "1.0.1",
+  "description": "IVS Dashboard.",
   "main": "build/main/index.js",
   "productName": "IVS Dashboard",
   "author": "yaty",
