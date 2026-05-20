@@ -47,8 +47,7 @@ import {
 } from "./features/tools/ConversionTools";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
-import closeMouthLogo from "./assets/close-mouth-logo.png";
-import openMouthLogo from "./assets/open-mouth-logo.png";
+import splashIcon from "./assets/icon.png";
 import { MAX_PROJECTS } from "../../shared/appLimits";
 import type {
   AppSection,
@@ -70,13 +69,13 @@ import type {
 } from "./types";
 
 const SPLASH_READY_FRAME_MS = 800;
-const SPLASH_FADE_OUT_MS = 1100;
-const SPLASH_LOGO_SIZE = "min(90px, 11vw)";
+const SPLASH_EXIT_HOLD_MS = 800;
+const SPLASH_FADE_OUT_MS = 420;
+const SPLASH_LOGO_SIZE = "min(56px, 7vw)";
 const INITIAL_STATE_LOAD_TIMEOUT_MS = 10000;
 const PROJECT_STATE_LOAD_TIMEOUT_MS = 8000;
 const DATABASE_IDLE_DISCONNECT_MS = 2 * 60 * 1000;
 
-type SplashFrame = "open" | "close";
 type SplashPhase = "visible" | "exiting" | "hidden";
 type SnackbarState = {
   message: string;
@@ -165,7 +164,6 @@ function App(): JSX.Element {
   const [stoppedServices, setStoppedServices] = useState<Set<string>>(
     new Set(),
   );
-  const [splashFrame, setSplashFrame] = useState<SplashFrame>("close");
   const [splashPhase, setSplashPhase] = useState<SplashPhase>("visible");
   const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
   const [snackbarClosing, setSnackbarClosing] = useState(false);
@@ -638,17 +636,15 @@ function App(): JSX.Element {
     }
 
     splashSequenceStartedRef.current = true;
-    setSplashFrame("open");
 
     const timers = [
-      window.setTimeout(() => setSplashFrame("close"), SPLASH_READY_FRAME_MS),
       window.setTimeout(
         () => setSplashPhase("exiting"),
-        SPLASH_READY_FRAME_MS * 2,
+        SPLASH_READY_FRAME_MS + SPLASH_EXIT_HOLD_MS,
       ),
       window.setTimeout(
         () => setSplashPhase("hidden"),
-        SPLASH_READY_FRAME_MS * 2 + SPLASH_FADE_OUT_MS,
+        SPLASH_READY_FRAME_MS + SPLASH_EXIT_HOLD_MS + SPLASH_FADE_OUT_MS,
       ),
     ];
 
@@ -1194,20 +1190,8 @@ function App(): JSX.Element {
   const splashOverlay =
     splashPhase !== "hidden" ? (
       <div className={`splash-screen ${splashPhase}`} aria-hidden="true">
-        <div
-          className={`splash-logo-stack showing-${splashFrame}`}
-          style={{ width: SPLASH_LOGO_SIZE }}
-        >
-          <img
-            className="splash-logo splash-logo-open"
-            src={openMouthLogo}
-            alt=""
-          />
-          <img
-            className="splash-logo splash-logo-close"
-            src={closeMouthLogo}
-            alt=""
-          />
+        <div className="splash-logo-shell" style={{ width: SPLASH_LOGO_SIZE }}>
+          <img className="splash-logo" src={splashIcon} alt="" />
         </div>
       </div>
     ) : null;

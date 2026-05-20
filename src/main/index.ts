@@ -16,7 +16,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { hostname } from "node:os";
@@ -1382,8 +1381,6 @@ function escapeXmlAttribute(value: string): string {
   return escapeXmlText(value).replace(/"/g, "&quot;");
 }
 
-const MAX_TOAST_IMAGE_BYTES = 400 * 1024;
-
 function resolveAppIconPath(): string | undefined {
   const candidates = [
     join(process.resourcesPath, "icon.ico"),
@@ -1395,27 +1392,19 @@ function resolveAppIconPath(): string | undefined {
 
 function resolveNotificationIconPath(): string | null {
   const candidates = [
-    join(process.resourcesPath, "toast-icon.png"),
+    join(process.resourcesPath, "icon.ico"),
     join(
       app.getAppPath(),
       "src",
       "renderer",
       "src",
       "assets",
-      "toast-icon.png",
+      "icon.ico",
     ),
   ];
 
   for (const candidate of candidates) {
     if (!existsSync(candidate)) {
-      continue;
-    }
-
-    try {
-      if (statSync(candidate).size > MAX_TOAST_IMAGE_BYTES) {
-        continue;
-      }
-    } catch {
       continue;
     }
 

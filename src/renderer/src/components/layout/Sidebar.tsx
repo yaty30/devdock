@@ -247,32 +247,32 @@ export function Sidebar({
             height="27"
             viewBox="0 0 24 24"
             fill="none"
-            stroke="url(#cheeseGradient)"
+            stroke="url(#shrimpGradient)"
             stroke-width="2"
             stroke-linecap="round"
             stroke-linejoin="round"
-            className="lucide lucide-cheese-icon lucide-cheese"
+            className="lucide lucide-shrimp-icon lucide-shrimp"
           >
             <defs>
               <linearGradient
-                id="cheeseGradient"
+                id="shrimpGradient"
                 x1="0"
                 y1="0"
                 x2="24"
                 y2="24"
                 gradientUnits="userSpaceOnUse"
               >
-                <stop offset="0%" stop-color="#facc15" />
-                <stop offset="50%" stop-color="#f59e0b" />
-                <stop offset="100%" stop-color="#fb923c" />
+                <stop offset="0%" stop-color="#c4b5fd" />
+                <stop offset="45%" stop-color="#8b8df8" />
+                <stop offset="100%" stop-color="#6366f1" />
               </linearGradient>
             </defs>
 
-            <path d="M21 19v-7c-1-6-7-9-7-9l-2.1 1.5a2 2 0 0 1-3 2.2L3 11v9c0 .6.4 1 1 1h3a2 2 0 0 1 4 0h8" />
-            <path d="M9 12H3" />
-            <path d="M9 12c0-.8 1.3-1.5 3-1.5s3 .7 3 1.5a3 3 0 1 1-6 0" />
-            <path d="M21 12h-6" />
-            <circle cx="19" cy="19" r="2" />
+            <path d="M11 12h.01" />
+            <path d="M13 22c.5-.5 1.12-1 2.5-1-1.38 0-2-.5-2.5-1" />
+            <path d="M14 2a3.28 3.28 0 0 1-3.227 1.798l-6.17-.561A2.387 2.387 0 1 0 4.387 8H15.5a1 1 0 0 1 0 13 1 1 0 0 0 0-5H12a7 7 0 0 1-7-7V8" />
+            <path d="M14 8a8.5 8.5 0 0 1 0 8" />
+            <path d="M16 16c2 0 4.5-4 4-6" />
           </svg>
         </div>
         <span className="brand-label">IVS Dashboard</span>

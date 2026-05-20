@@ -117,6 +117,14 @@ module.exports = {
   packagerConfig: {
     asar: true,
     prune: true,
+    icon: path.join(
+      __dirname,
+      "src",
+      "renderer",
+      "src",
+      "assets",
+      "icon.ico",
+    ),
     extraResource: [
       path.join(
         __dirname,
@@ -125,14 +133,6 @@ module.exports = {
         "src",
         "assets",
         "icon.ico",
-      ),
-      path.join(
-        __dirname,
-        "src",
-        "renderer",
-        "src",
-        "assets",
-        "toast-icon.png",
       ),
       path.join(__dirname, ".env"),
     ],
