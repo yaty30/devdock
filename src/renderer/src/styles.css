@@ -2960,7 +2960,7 @@ body {
   padding: 17px 20px;
   color: var(--text);
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
@@ -3052,7 +3052,7 @@ body {
   overflow: hidden;
   color: var(--text);
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
@@ -3064,7 +3064,7 @@ body {
   gap: 16px;
   min-width: 0;
   padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
 }
 
 .dashboard-project-title-group {
@@ -3134,8 +3134,8 @@ body {
   height: 26px;
   padding: 4px 6px;
   color: var(--text);
-  background: var(--subtle-bg);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-soft) 32%, var(--subtle-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
   border-radius: 7px;
 }
 
@@ -3160,8 +3160,8 @@ body {
   gap: 10px;
   min-height: 36px;
   padding: 0 9px 0 11px;
-  background: var(--subtle-bg);
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 24%, var(--subtle-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
   border-radius: 7px;
 }
 
@@ -3227,8 +3227,8 @@ body {
 
 .dashboard-status-value.idle {
   color: var(--muted);
-  background: var(--subtle-bg);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-soft) 22%, var(--subtle-bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
 }
 
 .dashboard-project-detail-grid {
@@ -3325,8 +3325,8 @@ body {
   place-items: center;
   min-height: 180px;
   color: var(--muted);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent-soft) 18%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
   border-radius: 12px;
   box-shadow: var(--shadow);
 }
@@ -3416,13 +3416,13 @@ body {
 
 [data-theme="dark"] .dashboard-project-meta strong:first-of-type,
 [data-theme="dark"] .dashboard-status-group {
-  background: rgba(30, 41, 59, 0.68);
-  border-color: rgba(51, 65, 85, 0.65);
+  background: color-mix(in srgb, var(--accent-soft) 42%, rgba(30, 41, 59, 0.68));
+  border-color: color-mix(in srgb, var(--accent) 18%, rgba(51, 65, 85, 0.65));
 }
 
 [data-theme="dark"] .dashboard-status-value.idle {
-  background: #1f2937;
-  border-color: #334155;
+  background: color-mix(in srgb, var(--accent-soft) 38%, #1f2937);
+  border-color: color-mix(in srgb, var(--accent) 16%, #334155);
 }
 
 .panel {
