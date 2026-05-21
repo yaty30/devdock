@@ -61,12 +61,21 @@ export type ProjectRecord = {
 };
 
 export type ServiceConfig = {
+  enabled?: boolean;
   workingDirectory: string;
   command: string;
   healthUrl: string;
   appUrl?: string;
   managementUrl?: string;
   autoStart?: boolean;
+};
+
+export type ProjectFrontendConfig = {
+  enabled: boolean;
+  path?: string;
+  installCommand?: string;
+  devCommand?: string;
+  buildCommand?: string;
 };
 
 export type MavenConfig = {
@@ -90,6 +99,7 @@ export type ProjectSettingsRecord = {
   gitProjectDirectory: string;
   defaultBranch: string;
   remote: string;
+  frontend: ProjectFrontendConfig;
   services: Record<ServiceName, ServiceConfig>;
   maven: MavenConfig;
   buildProfiles: BuildProfileRecord[];
@@ -171,6 +181,7 @@ export type ProjectRuntimeState = {
 
 export type ProjectDashboardSummary = {
   project: ProjectRecord;
+  frontendEnabled: boolean;
   statuses: ServiceStatusRecord[];
   lastBuild?: RecentBuildRecord;
   serviceUrls: {
@@ -279,12 +290,27 @@ export type DatabaseTable = {
   partitions: DatabasePartition[];
 };
 
+export type DatabaseObjectCollectionName =
+  | "tables"
+  | "views"
+  | "procedures"
+  | "functions"
+  | "types"
+  | "sequences"
+  | "packages"
+  | "triggers"
+  | "indexes";
+
 export type DatabaseMetadata = {
   schemas: string[];
   tables: DatabaseTable[];
   views: string[];
   procedures: string[];
   functions: string[];
+  types: string[];
+  sequences: string[];
+  packages: string[];
+  objectCounts: Partial<Record<DatabaseObjectCollectionName, number>>;
 };
 
 export type DatabaseQueryValue = string | number | boolean | null;
@@ -330,6 +356,7 @@ export type DatabaseWorksheet = {
   sql: string;
   savedAt: string;
   isOpen: boolean;
+  sortOrder: number;
   sheetMode?: "normal" | "object-backed" | "transient-preview";
   objectBinding?: {
     connectionId: string;
@@ -338,6 +365,9 @@ export type DatabaseWorksheet = {
       | "view"
       | "procedure"
       | "function"
+      | "type"
+      | "sequence"
+      | "package"
       | "trigger"
       | "index";
     schema: string;
@@ -499,6 +529,10 @@ export type DashboardApi = {
   getDatabaseMetadata: (
     connection: DatabaseConnection,
   ) => Promise<DatabaseMetadata>;
+  getDatabaseObjectNames: (
+    connection: DatabaseConnection,
+    collection: DatabaseObjectCollectionName,
+  ) => Promise<string[]>;
   getDatabaseWorksheetState: (
     connectionId: string,
   ) => Promise<DatabaseWorksheetState>;

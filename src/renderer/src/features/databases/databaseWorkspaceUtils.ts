@@ -34,12 +34,14 @@ export function createQuerySheet(name: string, sql = DEFAULT_SQL): QuerySheet {
     savedName: name,
     savedSql: sql,
     savedAt: null,
+    savedOrder: null,
     output: createEmptySheetOutput(),
   };
 }
 
 export function createQuerySheetFromPersisted(
   sheet: DatabaseWorksheet,
+  index: number,
 ): QuerySheet {
   return {
     id: sheet.sheetId,
@@ -48,6 +50,7 @@ export function createQuerySheetFromPersisted(
     savedName: sheet.sheetName,
     savedSql: sheet.sql,
     savedAt: sheet.savedAt,
+    savedOrder: Number.isFinite(sheet.sortOrder) ? sheet.sortOrder : index,
     sheetMode: sheet.sheetMode,
     objectBinding: sheet.objectBinding,
     output: createEmptySheetOutput(),
@@ -90,13 +93,14 @@ export function serializePersistedWorksheetState(
 ): DatabaseWorksheetState {
   const persistedSheets = state.sheets
     .filter(isPersistableSheet)
-    .map((sheet) => ({
+    .map((sheet, index) => ({
       connectionId,
       sheetId: sheet.id,
       sheetName: sheet.name.trim() || "Untitled",
       sql: sheet.sql,
       savedAt: new Date().toISOString(),
       isOpen: state.openSheetIds.includes(sheet.id),
+      sortOrder: index,
       sheetMode: sheet.sheetMode,
       objectBinding: sheet.objectBinding,
     }));
@@ -112,13 +116,14 @@ export function serializePersistedWorksheetState(
 export function worksheetStateNeedsPersist(
   state: SheetConnectionState,
 ): boolean {
-  return state.sheets.some((sheet) => {
+  return state.sheets.some((sheet, index) => {
     if (!isPersistableSheet(sheet)) {
       return false;
     }
 
     return (
       sheet.savedAt === null ||
+      sheet.savedOrder !== index ||
       sheet.name !== sheet.savedName ||
       sheet.sql !== sheet.savedSql
     );
@@ -145,9 +150,9 @@ export function markWorksheetStateSnapshotSaved(
   savedAt: string,
 ): SheetConnectionState {
   const snapshotSheets = new Map(
-    snapshot.sheets.map((sheet) => [
+    snapshot.sheets.map((sheet, index) => [
       sheet.id,
-      { name: sheet.name, sql: sheet.sql },
+      { name: sheet.name, sql: sheet.sql, order: index },
     ]),
   );
 
@@ -172,6 +177,7 @@ export function markWorksheetStateSnapshotSaved(
         savedName: snapshotSheet.name,
         savedSql: snapshotSheet.sql,
         savedAt,
+        savedOrder: snapshotSheet.order,
       };
     }),
   };
@@ -225,6 +231,10 @@ export function createEmptyMetadata(): DatabaseMetadata {
     views: [],
     procedures: [],
     functions: [],
+    types: [],
+    sequences: [],
+    packages: [],
+    objectCounts: {},
   };
 }
 
@@ -293,6 +303,13 @@ export function normalizeDatabaseMetadata(
     views: Array.isArray(metadata.views) ? metadata.views : [],
     procedures: Array.isArray(metadata.procedures) ? metadata.procedures : [],
     functions: Array.isArray(metadata.functions) ? metadata.functions : [],
+    types: Array.isArray(metadata.types) ? metadata.types : [],
+    sequences: Array.isArray(metadata.sequences) ? metadata.sequences : [],
+    packages: Array.isArray(metadata.packages) ? metadata.packages : [],
+    objectCounts:
+      metadata.objectCounts && typeof metadata.objectCounts === "object"
+        ? metadata.objectCounts
+        : {},
   };
 }
 

@@ -45,6 +45,7 @@ import type {
   DatabaseExecutionBatchResult,
   DatabaseExportResult,
   DatabaseMetadata,
+  DatabaseObjectCollectionName,
   DatabaseQueryValue,
   DatabaseStatementExecutionResult,
   DatabaseWorksheet,
@@ -73,6 +74,12 @@ import {
   MAX_RUNNING_SERVICES,
   RUNNING_SERVER_LIMIT_MESSAGE,
 } from "../shared/appLimits";
+import {
+  getProjectFrontendUrl,
+  getProjectServiceNames,
+  isProjectFrontendEnabled,
+  normalizeProjectSettings,
+} from "../shared/projectFrontend";
 
 type OracleDbModule = {
   OUT_FORMAT_OBJECT: number;
@@ -132,6 +139,32 @@ type OracleConnection = {
 
 const oracleDriver = require("oracledb") as OracleDbModule;
 let oracleClientInitAttempted = false;
+
+const ORACLE_OBJECT_COUNT_KEY_BY_TYPE: Record<
+  string,
+  DatabaseObjectCollectionName
+> = {
+  FUNCTION: "functions",
+  VIEW: "views",
+  TYPE: "types",
+  PACKAGE: "packages",
+  PROCEDURE: "procedures",
+  SEQUENCE: "sequences",
+  TRIGGER: "triggers",
+  TABLE: "tables",
+  INDEX: "indexes",
+};
+
+const ORACLE_OBJECT_TYPE_BY_COLLECTION: Partial<
+  Record<DatabaseObjectCollectionName, string>
+> = {
+  views: "VIEW",
+  procedures: "PROCEDURE",
+  functions: "FUNCTION",
+  types: "TYPE",
+  sequences: "SEQUENCE",
+  packages: "PACKAGE",
+};
 
 type ServiceProcess = {
   child: ChildProcessWithoutNullStreams;
@@ -218,6 +251,7 @@ type DatabaseWorksheetRow = {
   sql_content: string;
   saved_at: string;
   is_open: number;
+  sort_order: number;
 };
 
 type DatabaseWorksheetStateRow = {
@@ -431,10 +465,12 @@ export class DashboardBackend {
     const rows = this.db
       .prepare(
         `SELECT connection_id, sheet_id, sheet_name, sql_content, saved_at,
-                is_open
+          is_open, sort_order
          FROM database_worksheets
          WHERE connection_id = ?
-         ORDER BY datetime(saved_at) DESC, sheet_name COLLATE NOCASE ASC`,
+         ORDER BY sort_order ASC,
+            datetime(saved_at) DESC,
+            sheet_name COLLATE NOCASE ASC`,
       )
       .all(connectionId) as DatabaseWorksheetRow[];
     const state = this.db
@@ -472,10 +508,11 @@ export class DashboardBackend {
       .run(state.connectionId);
     const insertSheet = this.db.prepare(
       `INSERT INTO database_worksheets (
-         connection_id, sheet_id, sheet_name, sql_content, saved_at, is_open
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
+         connection_id, sheet_id, sheet_name, sql_content, saved_at, is_open,
+         sort_order
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
-    for (const sheet of state.sheets) {
+    for (const [index, sheet] of state.sheets.entries()) {
       const sheetName = sheet.sheetName.trim() || "Untitled";
       insertSheet.run(
         state.connectionId,
@@ -484,6 +521,7 @@ export class DashboardBackend {
         sheet.sql,
         sheet.savedAt || now,
         sheet.isOpen ? 1 : 0,
+        Number.isFinite(sheet.sortOrder) ? sheet.sortOrder : index,
       );
     }
     this.db
@@ -518,7 +556,7 @@ export class DashboardBackend {
           `SELECT sheet_id
            FROM database_worksheets
            WHERE connection_id = ? AND is_open = 1
-           ORDER BY datetime(saved_at) DESC
+           ORDER BY sort_order ASC, datetime(saved_at) DESC
            LIMIT 1`,
         )
         .get(connectionId) as { sheet_id: string } | undefined;
@@ -872,10 +910,25 @@ export class DashboardBackend {
           .map((row) =>
             qualifyDatabaseObject(row.routineSchema, row.routineName),
           ),
+        types: [],
+        sequences: [],
+        packages: [],
+        objectCounts: {},
       };
     } finally {
       await mysqlConnection.end().catch(() => undefined);
     }
+  }
+
+  async getDatabaseObjectNames(
+    connection: DatabaseConnection,
+    collection: DatabaseObjectCollectionName,
+  ): Promise<string[]> {
+    if (connection.type === "Oracle") {
+      return this.getOracleDatabaseObjectNames(connection, collection);
+    }
+
+    return [];
   }
 
   private async getOracleDatabaseMetadata(
@@ -905,6 +958,24 @@ export class DashboardBackend {
         "IC.TABLE_OWNER",
         relevantSchemas,
       );
+      const objectCountRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT object_type, COUNT(*) AS object_count
+         FROM user_objects
+         WHERE object_type IN (
+           'FUNCTION',
+           'VIEW',
+           'TYPE',
+           'PACKAGE',
+           'PROCEDURE',
+           'SEQUENCE',
+           'TRIGGER',
+           'TABLE',
+           'INDEX'
+         )
+         GROUP BY object_type
+         ORDER BY object_type`,
+      );
       const tableRows = await executeOracleRows(
         oracleConnection,
         `SELECT OWNER AS TABLE_SCHEMA,
@@ -914,26 +985,6 @@ export class DashboardBackend {
          WHERE ${schemaFilter.sql}
            AND NESTED = 'NO'
          ORDER BY OWNER, TABLE_NAME`,
-        schemaFilter.binds,
-      );
-      const viewRows = await executeOracleRows(
-        oracleConnection,
-        `SELECT OWNER AS VIEW_SCHEMA,
-                VIEW_NAME AS VIEW_NAME
-         FROM ALL_VIEWS
-         WHERE ${schemaFilter.sql}
-         ORDER BY OWNER, VIEW_NAME`,
-        schemaFilter.binds,
-      );
-      const objectRows = await executeOracleRows(
-        oracleConnection,
-        `SELECT OWNER AS OBJECT_SCHEMA,
-                OBJECT_NAME AS OBJECT_NAME,
-                OBJECT_TYPE AS OBJECT_TYPE
-         FROM ALL_OBJECTS
-         WHERE ${schemaFilter.sql}
-           AND OBJECT_TYPE IN ('PROCEDURE', 'FUNCTION')
-         ORDER BY OWNER, OBJECT_TYPE, OBJECT_NAME`,
         schemaFilter.binds,
       );
       const columnRows = await executeOracleRows(
@@ -1010,6 +1061,15 @@ export class DashboardBackend {
         DatabaseMetadata["tables"][number]["partitions"]
       >();
       const estimatedRowCountsByTableKey = new Map<string, number | null>();
+      const objectCounts: DatabaseMetadata["objectCounts"] = {};
+
+      for (const row of objectCountRows) {
+        const key =
+          ORACLE_OBJECT_COUNT_KEY_BY_TYPE[String(row.OBJECT_TYPE).toUpperCase()];
+        if (key) {
+          objectCounts[key] = Number(row.OBJECT_COUNT ?? 0);
+        }
+      }
 
       for (const row of tableRows) {
         const tableSchema = String(row.TABLE_SCHEMA);
@@ -1101,20 +1161,58 @@ export class DashboardBackend {
           partitions:
             partitionsByTable.get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`) ?? [],
         })),
-        views: viewRows.map((row) =>
-          qualifyDatabaseObject(row.VIEW_SCHEMA, row.VIEW_NAME),
-        ),
-        procedures: objectRows
-          .filter((row) => String(row.OBJECT_TYPE).toUpperCase() === "PROCEDURE")
-          .map((row) =>
-            qualifyDatabaseObject(row.OBJECT_SCHEMA, row.OBJECT_NAME),
-          ),
-        functions: objectRows
-          .filter((row) => String(row.OBJECT_TYPE).toUpperCase() === "FUNCTION")
-          .map((row) =>
-            qualifyDatabaseObject(row.OBJECT_SCHEMA, row.OBJECT_NAME),
-          ),
+        views: [],
+        procedures: [],
+        functions: [],
+        types: [],
+        sequences: [],
+        packages: [],
+        objectCounts,
       };
+    } finally {
+      await oracleConnection.close().catch(() => undefined);
+    }
+  }
+
+  private async getOracleDatabaseObjectNames(
+    connection: DatabaseConnection,
+    collection: DatabaseObjectCollectionName,
+  ): Promise<string[]> {
+    const objectType = ORACLE_OBJECT_TYPE_BY_COLLECTION[collection];
+    if (!objectType) {
+      return [];
+    }
+
+    const oracleConnection = await createOracleConnection(connection);
+    try {
+      const schemaRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT USERNAME AS SCHEMA_NAME
+         FROM ALL_USERS
+         ORDER BY USERNAME`,
+      );
+      const schemas = schemaRows.map((row) => String(row.SCHEMA_NAME));
+      const relevantSchemas = selectRelevantOracleSchemas(schemas, connection);
+
+      if (relevantSchemas.length === 0) {
+        return [];
+      }
+
+      const schemaFilter = createOracleInPredicate("OWNER", relevantSchemas);
+      const objectRows = await executeOracleRows(
+        oracleConnection,
+        `SELECT OWNER AS OBJECT_SCHEMA,
+                OBJECT_NAME AS OBJECT_NAME
+         FROM ALL_OBJECTS
+         WHERE ${schemaFilter.sql}
+           AND OBJECT_TYPE = :${schemaFilter.binds.length + 1}
+         ORDER BY OWNER, OBJECT_NAME`,
+        [...schemaFilter.binds, objectType],
+      );
+
+      return objectRows.map((row) =>
+        qualifyDatabaseObject(row.OBJECT_SCHEMA, row.OBJECT_NAME),
+      );
     } finally {
       await oracleConnection.close().catch(() => undefined);
     }
@@ -1388,12 +1486,11 @@ export class DashboardBackend {
       const settings = this.getSettings(project.id);
       return {
         project,
-        statuses: this.getStatuses(project.id),
+        frontendEnabled: isProjectFrontendEnabled(settings),
+        statuses: this.getStatuses(project.id, settings),
         lastBuild: this.queryBuilds(project.id, { limit: 1 }).builds[0],
         serviceUrls: {
-          frontendUrl:
-            settings.services.frontend.appUrl ||
-            settings.services.frontend.healthUrl,
+          frontendUrl: getProjectFrontendUrl(settings),
           wildflyConsoleUrl: settings.services.wildfly.managementUrl || "",
           wildflyKmuUrl: settings.services.wildfly.appUrl || "",
         },
@@ -1408,12 +1505,14 @@ export class DashboardBackend {
 
     return {
       settings,
-      statuses: this.getStatuses(projectId),
+      statuses: this.getStatuses(projectId, settings),
       recentBuilds: this.getRecentBuilds(projectId),
       activityFeed: this.getActivity(projectId),
       gitStatus: this.getGitStatus(projectId),
       logs: {
-        frontend: this.getLog(projectId, "frontend"),
+        frontend: isProjectFrontendEnabled(settings)
+          ? this.getLog(projectId, "frontend")
+          : [],
         wildfly: this.getLog(projectId, "wildfly"),
         build: this.getLog(projectId, "build"),
         tail: [],
@@ -1435,8 +1534,8 @@ export class DashboardBackend {
     const startedCommands = new Set<string>();
 
     for (const project of projects) {
-      for (const service of ["frontend", "wildfly"] as ServiceName[]) {
-        const settings = this.getSettings(project.id);
+      const settings = this.getSettings(project.id);
+      for (const service of getProjectServiceNames(settings)) {
         const config = settings.services[service];
         if (!config.autoStart) continue;
         const commandKey = `${service}:${config.workingDirectory}:${config.command}`;
@@ -1708,18 +1807,22 @@ export class DashboardBackend {
   }
 
   validateProjectSettings(
-    _projectId: string,
+    projectId: string,
     name: string,
     code: string,
     settings: ProjectSettingsRecord,
   ): string[] {
+    const normalizedSettings = normalizeProjectSettings(
+      settings,
+      this.defaultSettings(projectId),
+    );
     const errors = validateProjectIdentity(name.trim(), code.trim());
-    const appLogFile = settings.appLogFile.trim();
-    const frontend = settings.services.frontend;
-    const wildfly = settings.services.wildfly;
+    const appLogFile = normalizedSettings.appLogFile.trim();
+    const frontend = normalizedSettings.services.frontend;
+    const wildfly = normalizedSettings.services.wildfly;
     const frontendDirectory = frontend.workingDirectory.trim();
     const wildflyDirectory = wildfly.workingDirectory.trim();
-    const gitProjectDirectory = settings.gitProjectDirectory.trim();
+    const gitProjectDirectory = normalizedSettings.gitProjectDirectory.trim();
 
     if (!appLogFile) {
       errors.push("Application log file is required");
@@ -1727,7 +1830,7 @@ export class DashboardBackend {
       errors.push(`Application log file does not exist: ${appLogFile}`);
     }
 
-    if (frontendDirectory) {
+    if (isProjectFrontendEnabled(normalizedSettings)) {
       if (!isExistingDirectory(frontendDirectory)) {
         errors.push(`Frontend directory does not exist: ${frontendDirectory}`);
       }
@@ -1754,7 +1857,7 @@ export class DashboardBackend {
       if (!wildfly.healthUrl.trim()) {
         errors.push("WildFly health URL is required");
       }
-      errors.push(...validateMavenConfig(settings.maven));
+      errors.push(...validateMavenConfig(normalizedSettings.maven));
     }
 
     if (!gitProjectDirectory) {
@@ -1824,10 +1927,17 @@ export class DashboardBackend {
     settings: ProjectSettingsRecord,
   ): ProjectSettingsRecord {
     const previousSettings = this.getSettings(projectId);
-    const activityEntries = settingsActivityEntries(previousSettings, settings);
-    this.writeProjectConfig(projectId, settings);
-    this.ensureTail(projectId, settings.appLogFile, true);
-    this.send({ type: "settings", projectId, settings });
+    const normalizedSettings = normalizeProjectSettings(
+      settings,
+      this.defaultSettings(projectId),
+    );
+    const activityEntries = settingsActivityEntries(
+      previousSettings,
+      normalizedSettings,
+    );
+    this.writeProjectConfig(projectId, normalizedSettings);
+    this.ensureTail(projectId, normalizedSettings.appLogFile, true);
+    this.send({ type: "settings", projectId, settings: normalizedSettings });
     for (const entry of activityEntries) {
       this.insertActivity(
         projectId,
@@ -1837,7 +1947,7 @@ export class DashboardBackend {
         "system",
       );
     }
-    return settings;
+    return normalizedSettings;
   }
 
   async serviceAction(
@@ -1845,6 +1955,16 @@ export class DashboardBackend {
     service: ServiceName,
     action: ServiceAction,
   ): Promise<ServiceStatusRecord> {
+    const settings = this.getSettings(projectId);
+    if (service === "frontend" && !isProjectFrontendEnabled(settings)) {
+      return this.statusRecord(
+        service,
+        "unknown",
+        "Frontend is not configured",
+        "",
+      );
+    }
+
     if (action === "restart") {
       this.clearLog(projectId, service);
       await this.stopService(projectId, service);
@@ -2006,7 +2126,7 @@ export class DashboardBackend {
   async refreshStatus(projectId: string): Promise<ServiceStatusRecord[]> {
     const settings = this.getSettings(projectId);
     const statuses = await Promise.all(
-      (["frontend", "wildfly"] as ServiceName[]).map(async (service) => {
+      getProjectServiceNames(settings).map(async (service) => {
         const config = settings.services[service];
         const processKey = serviceProcessKey(projectId, service);
         const runningProcess = this.serviceProcesses.get(processKey);
@@ -2126,6 +2246,13 @@ export class DashboardBackend {
   }
 
   getLogFilePath(projectId: string, channel: LogChannel): string {
+    if (
+      channel === "frontend" &&
+      !isProjectFrontendEnabled(this.getSettings(projectId))
+    ) {
+      throw new Error("Frontend is not configured for this project.");
+    }
+
     if (channel === "tail") {
       const appLogFile = this.getSettings(projectId).appLogFile.trim();
       if (appLogFile) {
@@ -2253,6 +2380,7 @@ export class DashboardBackend {
         sql_content TEXT NOT NULL,
         saved_at TEXT NOT NULL,
         is_open INTEGER NOT NULL DEFAULT 1,
+        sort_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY(connection_id, sheet_id),
         FOREIGN KEY(connection_id) REFERENCES database_connections(id)
       );
@@ -2310,6 +2438,20 @@ export class DashboardBackend {
     this.ensureDatabaseExecutionMessageColumn();
     this.pruneDatabaseExecutionHistory();
     this.ensureSheetPinColumns();
+    this.ensureDatabaseWorksheetSortOrderColumn();
+  }
+
+  private ensureDatabaseWorksheetSortOrderColumn(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(database_worksheets)")
+      .all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "sort_order")) {
+      this.db.exec(
+        "ALTER TABLE database_worksheets ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
+      );
+    }
   }
 
   private ensureSheetPinColumns(): void {
@@ -2570,14 +2712,23 @@ export class DashboardBackend {
       gitProjectDirectory: "",
       defaultBranch: "",
       remote: "",
+      frontend: {
+        enabled: false,
+        path: "",
+        installCommand: "",
+        devCommand: "",
+        buildCommand: "",
+      },
       services: {
         frontend: {
+          enabled: false,
           workingDirectory: "",
           command: "",
           healthUrl: "",
           appUrl: "",
         },
         wildfly: {
+          enabled: true,
           workingDirectory: "",
           command: "",
           healthUrl: "",
@@ -2599,9 +2750,10 @@ export class DashboardBackend {
     const configPath = this.projectConfigPath(projectId);
     if (existsSync(configPath)) {
       try {
-        return JSON.parse(
-          readFileSync(configPath, "utf8"),
-        ) as ProjectSettingsRecord;
+        return normalizeProjectSettings(
+          JSON.parse(readFileSync(configPath, "utf8")),
+          this.defaultSettings(projectId),
+        );
       } catch (error) {
         console.error(
           `[settings:${projectId}] Failed to read app.config`,
@@ -2621,7 +2773,15 @@ export class DashboardBackend {
   ): void {
     const configPath = this.projectConfigPath(projectId);
     mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, `${JSON.stringify(settings, null, 2)}\n`, "utf8");
+    const normalizedSettings = normalizeProjectSettings(
+      settings,
+      this.defaultSettings(projectId),
+    );
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(normalizedSettings, null, 2)}\n`,
+      "utf8",
+    );
   }
 
   private projectConfigPath(projectId: string): string {
@@ -2634,6 +2794,14 @@ export class DashboardBackend {
   ): Promise<ServiceStatusRecord> {
     const settings = this.getSettings(projectId);
     const config = settings.services[service];
+    if (service === "frontend" && !isProjectFrontendEnabled(settings)) {
+      return this.statusRecord(
+        service,
+        "unknown",
+        "Frontend is not configured",
+        "",
+      );
+    }
     const key = serviceProcessKey(projectId, service);
     const existing = this.serviceProcesses.get(key);
     if (existing && existing.child.exitCode === null) {
@@ -2775,6 +2943,14 @@ export class DashboardBackend {
     const running = this.serviceProcesses.get(key);
     const settings = this.getSettings(projectId);
     const config = settings.services[service];
+    if (service === "frontend" && !isProjectFrontendEnabled(settings)) {
+      return this.statusRecord(
+        service,
+        "unknown",
+        "Frontend is not configured",
+        "",
+      );
+    }
 
     const stoppingStatus = this.statusRecord(
       service,
@@ -2947,19 +3123,24 @@ export class DashboardBackend {
     });
   }
 
-  private getStatuses(projectId: string): ServiceStatusRecord[] {
+  private getStatuses(
+    projectId: string,
+    settings = this.getSettings(projectId),
+  ): ServiceStatusRecord[] {
+    const services = getProjectServiceNames(settings);
     const rows = this.db
       .prepare(
         `SELECT service, state, message, url, checked_at AS checkedAt, started_at AS startedAt
          FROM service_status WHERE project_id = ? ORDER BY service ASC`,
       )
       .all(projectId) as ServiceStatusRecord[];
+    const filteredRows = rows.filter((row) => services.includes(row.service));
 
-    if (rows.length > 0) {
-      return rows;
+    if (filteredRows.length > 0) {
+      return filteredRows;
     }
 
-    return (["frontend", "wildfly"] as ServiceName[]).map((service) =>
+    return services.map((service) =>
       this.statusRecord(
         service,
         "unknown",
@@ -3855,6 +4036,7 @@ function mapDatabaseWorksheetRow(row: DatabaseWorksheetRow): DatabaseWorksheet {
     sql: row.sql_content,
     savedAt: row.saved_at,
     isOpen: row.is_open === 1,
+    sortOrder: row.sort_order,
   };
 }
 
@@ -4326,6 +4508,10 @@ function createEmptyDatabaseMetadata(schemas: string[] = []): DatabaseMetadata {
     views: [],
     procedures: [],
     functions: [],
+    types: [],
+    sequences: [],
+    packages: [],
+    objectCounts: {},
   };
 }
 

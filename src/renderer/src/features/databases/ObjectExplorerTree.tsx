@@ -25,12 +25,14 @@ export function ObjectTreeGroup({
   title,
   defaultOpen = false,
   forceOpen = false,
+  onOpen,
   onContextMenu,
   children,
 }: {
   title: string | JSX.Element;
   defaultOpen?: boolean;
   forceOpen?: boolean;
+  onOpen?: () => void;
   onContextMenu?: (event: React.MouseEvent) => void;
   children: ReactNode;
 }): JSX.Element {
@@ -46,7 +48,15 @@ export function ObjectTreeGroup({
     <div className="database-tree-group">
       <button
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onClick={() =>
+          setOpen((current) => {
+            const nextOpen = !current;
+            if (nextOpen) {
+              onOpen?.();
+            }
+            return nextOpen;
+          })
+        }
         onContextMenu={onContextMenu}
       >
         <ChevronDown size={14} className={open ? "open" : undefined} />

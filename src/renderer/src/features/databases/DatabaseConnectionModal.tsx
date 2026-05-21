@@ -137,6 +137,10 @@ export function DatabaseConnectionModal({
   }
 
   function updateDatabaseType(type: DatabaseConnectionType): void {
+    if (mode === "edit") {
+      return;
+    }
+
     setDraft((current) => ({
       ...current,
       type,
@@ -271,6 +275,7 @@ export function DatabaseConnectionModal({
                 value={draft.type}
                 options={DATABASE_TYPE_OPTIONS}
                 onChange={updateDatabaseType}
+                disabled={mode === "edit"}
                 ariaLabel="Database type"
               />
             </ConnectionField>

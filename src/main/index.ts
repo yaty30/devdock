@@ -27,6 +27,7 @@ import os from "os";
 import type {
   BuildQueryOptions,
   DatabaseConnection,
+  DatabaseObjectCollectionName,
   ProjectSettingsRecord,
   ServiceAction,
   ServiceName,
@@ -233,6 +234,17 @@ function registerIpc(): void {
     (_event, connection: DatabaseConnection) =>
       withLoggedErrors("database:getMetadata", () =>
         getBackend().getDatabaseMetadata(connection),
+      ),
+  );
+  ipcMain.handle(
+    "database:getObjectNames",
+    (
+      _event,
+      connection: DatabaseConnection,
+      collection: DatabaseObjectCollectionName,
+    ) =>
+      withLoggedErrors("database:getObjectNames", () =>
+        getBackend().getDatabaseObjectNames(connection, collection),
       ),
   );
   ipcMain.handle("database:getWorksheetState", (_event, connectionId: string) =>
@@ -1197,11 +1209,12 @@ function createBuildNotificationToastXml(
       ${lines.map((line) => `<text>${escapeXmlText(line)}</text>`).join("\n      ")}
     </binding>
   </visual>
-  <actions>
-    <action content="Open WAR folder" arguments="${escapeXmlAttribute(openWarArgument)}" activationType="foreground" />
-  </actions>
 </toast>`.trim();
 }
+
+// <actions>
+//   <action content="Open WAR folder" arguments="${escapeXmlAttribute(openWarArgument)}" activationType="foreground" />
+// </actions>
 
 function createBuildNotificationFallbackOptions(
   build: RecentBuildRecord,

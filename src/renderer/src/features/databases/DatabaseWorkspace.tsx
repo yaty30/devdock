@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
@@ -89,6 +90,7 @@ import type {
   DatabaseExecutionRecord,
   DatabaseIndex,
   DatabaseMetadata,
+  DatabaseObjectCollectionName,
   DatabaseQueryValue,
   DatabaseSslMode,
   DatabaseStatementExecutionResult,
@@ -154,6 +156,9 @@ export type DatabaseObjectType =
   | "view"
   | "procedure"
   | "function"
+  | "type"
+  | "sequence"
+  | "package"
   | "trigger"
   | "index";
 
@@ -165,6 +170,7 @@ export type QuerySheet = {
   savedSql: string;
   savedAt: string | null;
   output: SheetOutputState;
+  savedOrder: number | null;
   sheetMode?: "normal" | "object-backed" | "transient-preview";
   objectBinding?: {
     connectionId: string;
@@ -319,6 +325,30 @@ const DATABASE_EDITOR_MIN_HEIGHT = 160;
 const DATABASE_OUTPUT_MIN_HEIGHT = 160;
 const DATABASE_EDITOR_SPLITTER_SIZE = 14;
 const SELECT_INCREMENTAL_PAGE_SIZE = 50;
+const ORACLE_LAZY_OBJECT_COLLECTIONS = [
+  "views",
+  "procedures",
+  "functions",
+  "types",
+  "sequences",
+  "packages",
+] as const;
+
+type OracleLazyObjectCollection =
+  (typeof ORACLE_LAZY_OBJECT_COLLECTIONS)[number];
+
+const OBJECT_TYPE_BY_COLLECTION: Record<
+  OracleLazyObjectCollection,
+  DatabaseObjectType
+> = {
+  views: "view",
+  procedures: "procedure",
+  functions: "function",
+  types: "type",
+  sequences: "sequence",
+  packages: "package",
+};
+
 const databaseSheetStateCache: Record<string, SheetConnectionState> = {};
 
 export function DatabaseWorkspaceTabs({
@@ -356,6 +386,33 @@ export function DatabaseWorkspaceTabs({
       </button>
     </div>
   );
+}
+
+function moveSheetToTarget(
+  sheets: QuerySheet[],
+  draggedSheetId: string,
+  targetSheetId: string,
+): QuerySheet[] {
+  const fromIndex = sheets.findIndex((sheet) => sheet.id === draggedSheetId);
+  const toIndex = sheets.findIndex((sheet) => sheet.id === targetSheetId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return sheets;
+  }
+
+  const nextSheets = [...sheets];
+  const [movedSheet] = nextSheets.splice(fromIndex, 1);
+  nextSheets.splice(toIndex, 0, movedSheet);
+  return nextSheets;
+}
+
+function sortOpenSheetIdsBySheetOrder(
+  openSheetIds: string[],
+  sheets: QuerySheet[],
+): string[] {
+  const openSet = new Set(openSheetIds);
+  return sheets
+    .filter((sheet) => openSet.has(sheet.id))
+    .map((sheet) => sheet.id);
 }
 
 type ObjectBinding = NonNullable<QuerySheet["objectBinding"]>;
@@ -468,6 +525,10 @@ function createObjectTemplate(
       "DELIMITER //\n\nCREATE PROCEDURE __object_name__()\nBEGIN\n\nEND //\n\nDELIMITER ;",
     function:
       "DELIMITER //\n\nCREATE FUNCTION __object_name__() RETURNS int\nREADS SQL DATA\nBEGIN\n  RETURN 0;\nEND //\n\nDELIMITER ;",
+    type: "CREATE OR REPLACE TYPE __object_name__ AS OBJECT (\n\n);",
+    sequence: "CREATE SEQUENCE __object_name__ START WITH 1 INCREMENT BY 1;",
+    package:
+      "CREATE OR REPLACE PACKAGE __object_name__ AS\n\nEND __object_name__;",
     trigger: `DELIMITER //\n\nCREATE TRIGGER __object_name__\nBEFORE INSERT ON ${tableName}\nFOR EACH ROW\nBEGIN\n\nEND //\n\nDELIMITER ;`,
     index: `ALTER TABLE ${tableName} ADD INDEX __object_name__ (column_name);`,
   };
@@ -488,6 +549,9 @@ function findCreateStatement(
     view: ["DDL", "Create View"],
     procedure: ["DDL", "Create Procedure"],
     function: ["DDL", "Create Function"],
+    type: ["DDL"],
+    sequence: ["DDL"],
+    package: ["DDL"],
     trigger: ["DDL", "SQL Original Statement", "Create Trigger"],
   };
   const entries = Object.entries(row);
@@ -515,6 +579,8 @@ function formatLoadedObjectSql(
   if (
     objectType === "procedure" ||
     objectType === "function" ||
+    objectType === "type" ||
+    objectType === "package" ||
     objectType === "trigger"
   ) {
     return `DELIMITER //\n\n${createSql} //\n\nDELIMITER ;`;
@@ -538,6 +604,9 @@ function applyObjectNameToTemplate(
     view: [/__object_name__/g, /\bview_name\b/g],
     procedure: [/__object_name__/g, /\bproc_name\b/g],
     function: [/__object_name__/g, /\bfun_name\b/g],
+    type: [/__object_name__/g, /\btype_name\b/g],
+    sequence: [/__object_name__/g, /\bsequence_name\b/g],
+    package: [/__object_name__/g, /\bpackage_name\b/g],
     trigger: [/__object_name__/g, /\btrigger_name\b/g],
     index: [/__object_name__/g, /\bindex_name\b/g],
   };
@@ -563,7 +632,13 @@ function createObjectSaveSql(
     binding.name,
     connectionType,
   );
-  if (binding.objectType === "procedure" || binding.objectType === "function") {
+  if (
+    binding.objectType === "procedure" ||
+    binding.objectType === "function" ||
+    binding.objectType === "type" ||
+    binding.objectType === "sequence" ||
+    binding.objectType === "package"
+  ) {
     return `DROP ${binding.objectType.toUpperCase()} IF EXISTS ${qualifiedName};\n${sql}`;
   }
   if (binding.objectType === "trigger") {
@@ -755,6 +830,9 @@ function createOracleObjectDefinitionStatement(
     view: "VIEW",
     procedure: "PROCEDURE",
     function: "FUNCTION",
+    type: "TYPE",
+    sequence: "SEQUENCE",
+    package: "PACKAGE",
     trigger: "TRIGGER",
   };
   const ddlType = ddlTypeByObject[objectType];
@@ -895,6 +973,7 @@ function ConnectionActionWorkspace({
     null,
   );
   const [renamingSheetId, setRenamingSheetId] = useState<string | null>(null);
+  const [draggingSheetId, setDraggingSheetId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [explorerWidth, setExplorerWidth] = useState(DEFAULT_EXPLORER_WIDTH);
   const [editorHeight, setEditorHeight] = useState(DEFAULT_EDITOR_HEIGHT);
@@ -902,6 +981,9 @@ function ConnectionActionWorkspace({
   const [resultFullscreenOpen, setResultFullscreenOpen] = useState(false);
   const [metadataStateByConnection, setMetadataStateByConnection] = useState<
     Record<string, DatabaseMetadataState>
+  >({});
+  const [loadingObjectCollections, setLoadingObjectCollections] = useState<
+    Record<string, boolean>
   >({});
   const [selectedSchemaByConnection, setSelectedSchemaByConnection] = useState<
     Record<string, string>
@@ -1441,6 +1523,115 @@ function ConnectionActionWorkspace({
     activeMetadataLoadKeyRef.current = `${connection.id}:${schema}`;
   }
 
+  function createObjectCollectionLoadKey(
+    collection: DatabaseObjectCollectionName,
+  ): string {
+    return `${connection.id}:${selectedSchema}:${collection}`;
+  }
+
+  function getObjectCollectionCount(
+    collection: OracleLazyObjectCollection,
+  ): number {
+    return metadata.objectCounts[collection] ?? metadata[collection].length;
+  }
+
+  function isObjectCollectionLoading(
+    collection: OracleLazyObjectCollection,
+  ): boolean {
+    return Boolean(loadingObjectCollections[createObjectCollectionLoadKey(collection)]);
+  }
+
+  function loadObjectCollection(collection: OracleLazyObjectCollection): void {
+    if (connection.type !== "Oracle") {
+      return;
+    }
+
+    if (metadata[collection].length > 0 || getObjectCollectionCount(collection) === 0) {
+      return;
+    }
+
+    const loadKey = createObjectCollectionLoadKey(collection);
+    if (loadingObjectCollections[loadKey]) {
+      return;
+    }
+
+    setLoadingObjectCollections((current) => ({ ...current, [loadKey]: true }));
+    void window.ivsDashboard
+      .getDatabaseObjectNames(effectiveConnection, collection)
+      .then((objectNames) => {
+        setMetadataStateByConnection((current) => {
+          const currentState = current[connection.id];
+          const currentMetadata = currentState?.metadata ?? createEmptyMetadata();
+          const nextMetadata = {
+            ...currentMetadata,
+            [collection]: objectNames,
+          };
+          return {
+            ...current,
+            [connection.id]: {
+              status: "loaded",
+              metadata: nextMetadata,
+            },
+          };
+        });
+      })
+      .catch((error) => console.error(error))
+      .finally(() => {
+        setLoadingObjectCollections((current) => {
+          const next = { ...current };
+          delete next[loadKey];
+          return next;
+        });
+      });
+  }
+
+  function renderObjectCollectionItems(
+    collection: OracleLazyObjectCollection,
+    icon: ReactNode,
+  ): ReactNode {
+    const objectType = OBJECT_TYPE_BY_COLLECTION[collection];
+    const items = metadata[collection];
+    const loading = isObjectCollectionLoading(collection);
+
+    if (loading) {
+      return (
+        <div className="database-tree-empty database-tree-loading">
+          <LoaderCircle className="button-spinner" size={14} />
+          <span>Loading...</span>
+        </div>
+      );
+    }
+
+    if (items.length === 0) {
+      const count = getObjectCollectionCount(collection);
+      return (
+        <div className="database-tree-empty">
+          {connection.type === "Oracle" && count > 0
+            ? "Open to load objects."
+            : `No ${collection} loaded.`}
+        </div>
+      );
+    }
+
+    return items.map((objectName) => {
+      const parsed = parseDatabaseObjectName(objectName, selectedSchema);
+      const objectKey = createObjectKey(objectType, parsed.schema, parsed.name);
+      return (
+        <div
+          className={`database-tree-item ${objectType}-item${
+            activeObjectKey === objectKey ? " active" : ""
+          }`}
+          key={objectName}
+          onClick={() => void openObjectSheet(objectType, objectName)}
+          data-database-object-key={objectKey}
+        >
+          {icon}
+          <span>{objectName}</span>
+        </div>
+      );
+    });
+  }
+
   function createNewSheet(): void {
     updateCurrentConnectionState((state) => {
       const sheet = createQuerySheet(nextUntitledName(state.sheets), "");
@@ -1621,6 +1812,51 @@ function ConnectionActionWorkspace({
         ? state.openSheetIds
         : [...state.openSheetIds, sheetId],
     }));
+  }
+
+  function beginSheetDrag(
+    event: DragEvent<HTMLElement>,
+    sheetId: string,
+  ): void {
+    setDraggingSheetId(sheetId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", sheetId);
+  }
+
+  function allowSheetDrop(event: DragEvent<HTMLElement>): void {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  }
+
+  function dropSheet(event: DragEvent<HTMLElement>, targetSheetId: string): void {
+    event.preventDefault();
+    const draggedSheetId =
+      draggingSheetId || event.dataTransfer.getData("text/plain");
+    if (!draggedSheetId || draggedSheetId === targetSheetId) {
+      setDraggingSheetId(null);
+      return;
+    }
+
+    updateCurrentConnectionState((state) => {
+      const nextSheets = moveSheetToTarget(
+        state.sheets,
+        draggedSheetId,
+        targetSheetId,
+      );
+      if (nextSheets === state.sheets) {
+        return state;
+      }
+
+      return {
+        ...state,
+        sheets: nextSheets,
+        openSheetIds: sortOpenSheetIdsBySheetOrder(
+          state.openSheetIds,
+          nextSheets,
+        ),
+      };
+    });
+    setDraggingSheetId(null);
   }
 
   function updateActiveSheetSql(sql: string): void {
@@ -2608,8 +2844,17 @@ function ConnectionActionWorkspace({
                 <div
                   className={`database-tree-item database-sheet-tree-item${
                     activeSheet?.id === sheet.id ? " active" : ""
+                  }${
+                    draggingSheetId === sheet.id
+                      ? " database-sheet-dragging"
+                      : ""
                   }`}
                   key={sheet.id}
+                  draggable={renamingSheetId !== sheet.id}
+                  onDragStart={(event) => beginSheetDrag(event, sheet.id)}
+                  onDragOver={allowSheetDrop}
+                  onDrop={(event) => dropSheet(event, sheet.id)}
+                  onDragEnd={() => setDraggingSheetId(null)}
                   onClick={() => selectSheet(sheet.id)}
                   onContextMenu={(event) =>
                     openSheetContextMenu(event, sheet.id)
@@ -2650,7 +2895,7 @@ function ConnectionActionWorkspace({
               <>
                 <span>Tables</span>
                 <span className="database-tree-count">
-                  {metadata.tables.length}
+                  {metadata.objectCounts.tables ?? metadata.tables.length}
                 </span>
               </>
             }
@@ -2698,130 +2943,113 @@ function ConnectionActionWorkspace({
               <>
                 <span>Views</span>
                 <span className="database-tree-count">
-                  {metadata.views.length}
+                  {getObjectCollectionCount("views")}
                 </span>
               </>
             }
+            onOpen={() => loadObjectCollection("views")}
             onContextMenu={(event) => openObjectGroupContextMenu(event, "view")}
             forceOpen={activeSheet?.objectBinding?.objectType === "view"}
           >
-            {metadata.views.length > 0 ? (
-              metadata.views.map((viewName) => {
-                const parsed = parseDatabaseObjectName(
-                  viewName,
-                  selectedSchema,
-                );
-                const objectKey = createObjectKey(
-                  "view",
-                  parsed.schema,
-                  parsed.name,
-                );
-                return (
-                  <div
-                    className={`database-tree-item view-item${
-                      activeObjectKey === objectKey ? " active" : ""
-                    }`}
-                    key={viewName}
-                    onClick={() => void openObjectSheet("view", viewName)}
-                    data-database-object-key={objectKey}
-                  >
-                    <View size={15} />
-                    <span>{viewName}</span>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="database-tree-empty">No views loaded.</div>
-            )}
+            {renderObjectCollectionItems("views", <View size={15} />)}
           </ObjectTreeGroup>
           <ObjectTreeGroup
             title={
               <>
                 <span>Procedures</span>
                 <span className="database-tree-count">
-                  {metadata.procedures.length}
+                  {getObjectCollectionCount("procedures")}
                 </span>
               </>
             }
+            onOpen={() => loadObjectCollection("procedures")}
             onContextMenu={(event) =>
               openObjectGroupContextMenu(event, "procedure")
             }
             forceOpen={activeSheet?.objectBinding?.objectType === "procedure"}
           >
-            {metadata.procedures.length > 0 ? (
-              metadata.procedures.map((procedure) => {
-                const parsed = parseDatabaseObjectName(
-                  procedure,
-                  selectedSchema,
-                );
-                const objectKey = createObjectKey(
-                  "procedure",
-                  parsed.schema,
-                  parsed.name,
-                );
-                return (
-                  <div
-                    className={`database-tree-item procedure-item${
-                      activeObjectKey === objectKey ? " active" : ""
-                    }`}
-                    key={procedure}
-                    onClick={() => void openObjectSheet("procedure", procedure)}
-                    data-database-object-key={objectKey}
-                  >
-                    <Microchip size={15} />
-                    <span>{procedure}</span>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="database-tree-empty">No procedures loaded.</div>
-            )}
+            {renderObjectCollectionItems("procedures", <Microchip size={15} />)}
           </ObjectTreeGroup>
           <ObjectTreeGroup
             title={
               <>
                 <span>Functions</span>
                 <span className="database-tree-count">
-                  {metadata.functions.length}
+                  {getObjectCollectionCount("functions")}
                 </span>
               </>
             }
+            onOpen={() => loadObjectCollection("functions")}
             onContextMenu={(event) =>
               openObjectGroupContextMenu(event, "function")
             }
             forceOpen={activeSheet?.objectBinding?.objectType === "function"}
           >
-            {metadata.functions.length > 0 ? (
-              metadata.functions.map((routineFunction) => {
-                const parsed = parseDatabaseObjectName(
-                  routineFunction,
-                  selectedSchema,
-                );
-                const objectKey = createObjectKey(
-                  "function",
-                  parsed.schema,
-                  parsed.name,
-                );
-                return (
-                  <div
-                    className={`database-tree-item function-item${
-                      activeObjectKey === objectKey ? " active" : ""
-                    }`}
-                    key={routineFunction}
-                    onClick={() =>
-                      void openObjectSheet("function", routineFunction)
-                    }
-                    data-database-object-key={objectKey}
-                  >
-                    <SquareFunction size={15} />
-                    <span>{routineFunction}</span>
-                  </div>
-                );
-              })
-            ) : (
-              <div className="database-tree-empty">No functions loaded.</div>
+            {renderObjectCollectionItems(
+              "functions",
+              <SquareFunction size={15} />,
             )}
           </ObjectTreeGroup>
+          {connection.type === "Oracle" ? (
+            <>
+              <ObjectTreeGroup
+                title={
+                  <>
+                    <span>Types</span>
+                    <span className="database-tree-count">
+                      {getObjectCollectionCount("types")}
+                    </span>
+                  </>
+                }
+                onOpen={() => loadObjectCollection("types")}
+                onContextMenu={(event) =>
+                  openObjectGroupContextMenu(event, "type")
+                }
+                forceOpen={activeSheet?.objectBinding?.objectType === "type"}
+              >
+                {renderObjectCollectionItems("types", <Box size={15} />)}
+              </ObjectTreeGroup>
+              <ObjectTreeGroup
+                title={
+                  <>
+                    <span>Sequences</span>
+                    <span className="database-tree-count">
+                      {getObjectCollectionCount("sequences")}
+                    </span>
+                  </>
+                }
+                onOpen={() => loadObjectCollection("sequences")}
+                onContextMenu={(event) =>
+                  openObjectGroupContextMenu(event, "sequence")
+                }
+                forceOpen={
+                  activeSheet?.objectBinding?.objectType === "sequence"
+                }
+              >
+                {renderObjectCollectionItems(
+                  "sequences",
+                  <Sigma size={15} />,
+                )}
+              </ObjectTreeGroup>
+              <ObjectTreeGroup
+                title={
+                  <>
+                    <span>Packages</span>
+                    <span className="database-tree-count">
+                      {getObjectCollectionCount("packages")}
+                    </span>
+                  </>
+                }
+                onOpen={() => loadObjectCollection("packages")}
+                onContextMenu={(event) =>
+                  openObjectGroupContextMenu(event, "package")
+                }
+                forceOpen={activeSheet?.objectBinding?.objectType === "package"}
+              >
+                {renderObjectCollectionItems("packages", <Puzzle size={15} />)}
+              </ObjectTreeGroup>
+            </>
+          ) : null}
         </div>
       </Panel>
 
@@ -2872,8 +3100,15 @@ function ConnectionActionWorkspace({
                 sheet.name !== sheet.savedName || sheet.sql !== sheet.savedSql;
               return (
                 <div
-                  className={`query-tab${active ? " active" : ""}`}
+                  className={`query-tab${active ? " active" : ""}${
+                    draggingSheetId === sheet.id ? " query-tab-dragging" : ""
+                  }`}
                   key={sheet.id}
+                  draggable
+                  onDragStart={(event) => beginSheetDrag(event, sheet.id)}
+                  onDragOver={allowSheetDrop}
+                  onDrop={(event) => dropSheet(event, sheet.id)}
+                  onDragEnd={() => setDraggingSheetId(null)}
                 >
                   <button
                     className="query-tab-main"

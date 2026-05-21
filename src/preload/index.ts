@@ -44,6 +44,8 @@ const api: DashboardApi = {
     ipcRenderer.invoke("database:testConnection", connection),
   getDatabaseMetadata: (connection) =>
     ipcRenderer.invoke("database:getMetadata", connection),
+  getDatabaseObjectNames: (connection, collection) =>
+    ipcRenderer.invoke("database:getObjectNames", connection, collection),
   getDatabaseWorksheetState: (connectionId) =>
     ipcRenderer.invoke("database:getWorksheetState", connectionId),
   saveDatabaseWorksheetState: (state) =>
