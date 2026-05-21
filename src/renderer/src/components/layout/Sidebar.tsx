@@ -47,6 +47,7 @@ export function Sidebar({
   collapsed,
   debugEnabled = false,
   projectStatuses = {},
+  projectFrontendEnabled = {},
   onProjectChange,
   onDatabaseConnectionChange,
   onDatabaseConnect,
@@ -69,6 +70,7 @@ export function Sidebar({
   collapsed: boolean;
   debugEnabled?: boolean;
   projectStatuses?: Record<string, ServiceStatusRecord[]>;
+  projectFrontendEnabled?: Record<string, boolean>;
   onProjectChange: (project: Project) => void;
   onDatabaseConnectionChange: (connection: DatabaseConnection) => void;
   onDatabaseConnect: (connection: DatabaseConnection) => void;
@@ -285,6 +287,7 @@ export function Sidebar({
               icon={<BarChart3 size={18} />}
               label="Overview"
               tooltipLabel="Overview"
+              className="overview-nav-item"
               isActive={activeSection === "dashboard"}
               onHover={closeFlyout}
               onClick={() => {
@@ -326,7 +329,7 @@ export function Sidebar({
         ) : (
           <>
             <button
-              className={`nav-item${activeSection === "dashboard" ? " active" : ""}`}
+              className={`nav-item overview-nav-item${activeSection === "dashboard" ? " active" : ""}`}
               type="button"
               onClick={() => onSectionChange("dashboard")}
               aria-label="Dashboard"
@@ -362,46 +365,53 @@ export function Sidebar({
               className={`project-list${projectsOpen && !collapsed ? " open" : ""}`}
               aria-hidden={!collapsed && !projectsOpen}
             >
-              {projects.map((project) => (
-                <Tooltip
-                  key={project.id}
-                  className="project-tooltip-anchor"
-                  placement="right"
-                  content={
-                    <ServiceStatusTooltip
-                      statuses={projectStatuses[project.id]}
-                    />
-                  }
-                >
-                  <button
-                    className={`project-item${
-                      activeSection === "project" &&
-                      project.id === selectedProjectId
-                        ? " active"
-                        : ""
-                    }`}
-                    type="button"
-                    tabIndex={projectsOpen || collapsed ? 0 : -1}
-                    onClick={() => onProjectChange(project)}
+              {projects.map((project) => {
+                const frontendEnabled =
+                  projectFrontendEnabled[project.id] ?? true;
+                return (
+                  <Tooltip
+                    key={project.id}
+                    className="project-tooltip-anchor"
+                    placement="right"
+                    content={
+                      <ServiceStatusTooltip
+                        statuses={projectStatuses[project.id]}
+                        frontendEnabled={frontendEnabled}
+                      />
+                    }
                   >
-                    <div className="project-info">
-                      <span className="project-code">{project.code}</span>
-                      <span className="project-name">{project.name}</span>
+                    <button
+                      className={`project-item${
+                        activeSection === "project" &&
+                        project.id === selectedProjectId
+                          ? " active"
+                          : ""
+                      }`}
+                      type="button"
+                      tabIndex={projectsOpen || collapsed ? 0 : -1}
+                      onClick={() => onProjectChange(project)}
+                    >
+                      <div className="project-info">
+                        <span className="project-code">{project.code}</span>
+                        <span className="project-name">{project.name}</span>
 
-                      <div className="project-service-dots">
-                        <div className="project-service-dots dots">
-                          <span
-                            className={`project-service-dot ${getServiceState(projectStatuses[project.id], "frontend")}`}
-                          />
-                          <span
-                            className={`project-service-dot ${getServiceState(projectStatuses[project.id], "wildfly")}`}
-                          />
+                        <div className="project-service-dots">
+                          <div className="project-service-dots dots">
+                            {frontendEnabled ? (
+                              <span
+                                className={`project-service-dot ${getServiceState(projectStatuses[project.id], "frontend")}`}
+                              />
+                            ) : null}
+                            <span
+                              className={`project-service-dot ${getServiceState(projectStatuses[project.id], "wildfly")}`}
+                            />
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  </button>
-                </Tooltip>
-              ))}
+                    </button>
+                  </Tooltip>
+                );
+              })}
               <button
                 className="project-item add-project-item"
                 type="button"
@@ -704,13 +714,15 @@ export function Sidebar({
                       {project.name}
                     </span>
                   </span>
-                  <ProjectServiceRow
-                    label="Frontend"
-                    state={getServiceState(
-                      projectStatuses[project.id],
-                      "frontend",
-                    )}
-                  />
+                  {(projectFrontendEnabled[project.id] ?? true) ? (
+                    <ProjectServiceRow
+                      label="Frontend"
+                      state={getServiceState(
+                        projectStatuses[project.id],
+                        "frontend",
+                      )}
+                    />
+                  ) : null}
                   <ProjectServiceRow
                     label="Backend"
                     state={getServiceState(
@@ -918,6 +930,7 @@ function CollapsedSidebarItem({
   label,
   isActive,
   isOpen = false,
+  className = "",
   onClick,
   onHover,
   tooltipLabel,
@@ -927,6 +940,7 @@ function CollapsedSidebarItem({
   label: string;
   isActive: boolean;
   isOpen?: boolean;
+  className?: string;
   onClick: (anchor: HTMLButtonElement) => void;
   onHover?: (anchor: HTMLButtonElement) => void;
   tooltipLabel: string;
@@ -936,7 +950,7 @@ function CollapsedSidebarItem({
     <button
       className={`nav-item collapsed-sidebar-item${
         isActive ? " active" : ""
-      }${isOpen ? " flyout-open" : ""}`}
+      }${isOpen ? " flyout-open" : ""}${className ? ` ${className}` : ""}`}
       type="button"
       onMouseEnter={(event) => onHover?.(event.currentTarget)}
       onFocus={(event) => onHover?.(event.currentTarget)}
@@ -1143,19 +1157,23 @@ function formatStatusLabel(status: string): string {
 
 function ServiceStatusTooltip({
   statuses,
+  frontendEnabled,
 }: {
   statuses: ServiceStatusRecord[] | undefined;
+  frontendEnabled: boolean;
 }): JSX.Element {
   const frontendState = getServiceState(statuses, "frontend");
   const wildflyState = getServiceState(statuses, "wildfly");
   return (
     <span className="service-status-tooltip">
-      <span className="service-status-tooltip-row">
-        <span className="service-status-tooltip-label">Frontend</span>
-        <span className={`service-status-tooltip-state ${frontendState}`}>
-          {frontendState}
+      {frontendEnabled ? (
+        <span className="service-status-tooltip-row">
+          <span className="service-status-tooltip-label">Frontend</span>
+          <span className={`service-status-tooltip-state ${frontendState}`}>
+            {frontendState}
+          </span>
         </span>
-      </span>
+      ) : null}
       <span className="service-status-tooltip-row">
         <span className="service-status-tooltip-label">Backend</span>
         <span className={`service-status-tooltip-state ${wildflyState}`}>

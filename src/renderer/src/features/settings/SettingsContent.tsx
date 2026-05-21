@@ -16,6 +16,7 @@ import type {
   ServiceName,
   SettingsTab,
 } from "../../types";
+import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
 
 function FieldRow({
   label,
@@ -241,6 +242,26 @@ export function SettingsContent({
     }));
   }
 
+  function updateFrontendEnabled(enabled: boolean): void {
+    setDraft((current) => ({
+      ...current,
+      frontend: {
+        ...current.frontend,
+        enabled,
+      },
+      services: {
+        ...current.services,
+        frontend: {
+          ...current.services.frontend,
+          enabled,
+          autoStart: enabled
+            ? (current.services.frontend.autoStart ?? false)
+            : false,
+        },
+      },
+    }));
+  }
+
   function updateProfile(
     profileId: string,
     patch: Partial<BuildProfileRecord>,
@@ -408,6 +429,22 @@ export function SettingsContent({
       ...draft,
       defaultBranch: draft.defaultBranch.trim() || "main",
       remote: draft.remote.trim() || "origin",
+      frontend: {
+        ...draft.frontend,
+        enabled: draft.frontend.enabled,
+        path: draft.services.frontend.workingDirectory,
+        devCommand: draft.services.frontend.command,
+      },
+      services: {
+        ...draft.services,
+        frontend: {
+          ...draft.services.frontend,
+          enabled: draft.frontend.enabled,
+          autoStart: draft.frontend.enabled
+            ? (draft.services.frontend.autoStart ?? false)
+            : false,
+        },
+      },
       maven: {
         ...draft.maven,
         skipTests: mavenConfigComplete ? draft.maven.skipTests : false,
@@ -682,16 +719,22 @@ export function SettingsContent({
                     />
                     WildFly
                   </label>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={draft.services.frontend.autoStart ?? false}
-                      onChange={(e) =>
-                        updateService("frontend", "autoStart", e.target.checked)
-                      }
-                    />
-                    Frontend
-                  </label>
+                  {isProjectFrontendEnabled(draft) ? (
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={draft.services.frontend.autoStart ?? false}
+                        onChange={(e) =>
+                          updateService(
+                            "frontend",
+                            "autoStart",
+                            e.target.checked,
+                          )
+                        }
+                      />
+                      Frontend
+                    </label>
+                  ) : null}
                 </div>
               </div>
             </Panel>
@@ -734,41 +777,59 @@ export function SettingsContent({
         {activeSettingsTab === "services" ? (
           <div className="services-settings-grid">
             <Panel title="Frontend" className="settings-form-panel">
-              <FieldRow
-                label="Directory"
-                value={draft.services.frontend.workingDirectory}
-                browse
-                onChange={(value) =>
-                  updateService("frontend", "workingDirectory", value)
-                }
-                onBrowse={() =>
-                  browseDirectory(
-                    "Select frontend directory",
-                    draft.services.frontend.workingDirectory,
-                    (value) =>
-                      updateService("frontend", "workingDirectory", value),
-                  )
-                }
-              />
-              <FieldRow
-                label="Command"
-                value={draft.services.frontend.command}
-                onChange={(value) =>
-                  updateService("frontend", "command", value)
-                }
-              />
-              <FieldRow
-                label="Health URL"
-                value={draft.services.frontend.healthUrl}
-                onChange={(value) =>
-                  updateService("frontend", "healthUrl", value)
-                }
-              />
-              <FieldRow
-                label="App URL"
-                value={draft.services.frontend.appUrl ?? ""}
-                onChange={(value) => updateService("frontend", "appUrl", value)}
-              />
+              <label className="settings-toggle-row">
+                <input
+                  type="checkbox"
+                  checked={draft.frontend.enabled}
+                  onChange={(event) =>
+                    updateFrontendEnabled(event.target.checked)
+                  }
+                />
+                <span>This project has a separate frontend</span>
+              </label>
+              {isProjectFrontendEnabled(draft) ? (
+                <>
+                  <FieldRow
+                    label="Directory"
+                    value={draft.services.frontend.workingDirectory}
+                    browse
+                    onChange={(value) =>
+                      updateService("frontend", "workingDirectory", value)
+                    }
+                    onBrowse={() =>
+                      browseDirectory(
+                        "Select frontend directory",
+                        draft.services.frontend.workingDirectory,
+                        (value) =>
+                          updateService("frontend", "workingDirectory", value),
+                      )
+                    }
+                  />
+                  <FieldRow
+                    label="Command"
+                    value={draft.services.frontend.command}
+                    onChange={(value) =>
+                      updateService("frontend", "command", value)
+                    }
+                  />
+                  <FieldRow
+                    label="Health URL"
+                    value={draft.services.frontend.healthUrl}
+                    onChange={(value) =>
+                      updateService("frontend", "healthUrl", value)
+                    }
+                  />
+                  <FieldRow
+                    label="App URL"
+                    value={draft.services.frontend.appUrl ?? ""}
+                    onChange={(value) =>
+                      updateService("frontend", "appUrl", value)
+                    }
+                  />
+                </>
+              ) : (
+                <div className="settings-note">Not configured</div>
+              )}
             </Panel>
 
             <Panel title="WildFly" className="settings-form-panel">

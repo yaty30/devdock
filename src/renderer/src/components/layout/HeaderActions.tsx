@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 import {
   CaseSensitive,
   ChevronDown,
@@ -21,6 +27,7 @@ import type {
   ServiceStatusRecord,
 } from "../../types";
 import { RUNNING_SERVER_LIMIT_MESSAGE } from "../../../../shared/appLimits";
+import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
 
 const BUILD_PROFILE_LABEL_MAX_LENGTH = 20;
 
@@ -55,6 +62,7 @@ export function HeaderActions({
     <div className="header-actions">
       <ServiceControlGroup
         projectId={projectId}
+        settings={settings}
         statuses={statuses}
         onServiceWarning={onServiceWarning}
         disabled={disabled}
@@ -201,7 +209,17 @@ export function FontSizeDropdown({
     hoverCloseTimerRef.current = window.setTimeout(() => {
       setOpenMode((current) => (current === "hover" ? null : current));
       hoverCloseTimerRef.current = null;
-    }, 180);
+    }, 420);
+  }
+
+  function closeHoverDropdownIfPointerLeft(
+    event: ReactMouseEvent<HTMLElement>,
+  ): void {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && dropdownRef.current?.contains(nextTarget)) {
+      return;
+    }
+    scheduleHoverDropdownClose();
   }
 
   return (
@@ -209,7 +227,7 @@ export function FontSizeDropdown({
       className="build-dropdown font-size-dropdown"
       ref={dropdownRef}
       onMouseEnter={openHoverDropdown}
-      onMouseLeave={scheduleHoverDropdownClose}
+      onMouseLeave={closeHoverDropdownIfPointerLeft}
     >
       <button
         className={`icon-button secondary header-settings-button font-size-dropdown-trigger${
@@ -232,7 +250,8 @@ export function FontSizeDropdown({
         className={`build-dropdown-popover${open ? " open" : ""}`}
         aria-hidden={!open}
         onMouseEnter={openHoverDropdown}
-        onMouseLeave={scheduleHoverDropdownClose}
+        onMouseLeave={closeHoverDropdownIfPointerLeft}
+        onPointerDown={clearHoverCloseTimer}
       >
         <div className="build-dropdown-menu font-size-slider-menu">
           <div
@@ -508,7 +527,17 @@ function BuildActionsDropdown({
     hoverCloseTimerRef.current = window.setTimeout(() => {
       setOpenMode((current) => (current === "hover" ? null : current));
       hoverCloseTimerRef.current = null;
-    }, 180);
+    }, 420);
+  }
+
+  function closeHoverDropdownIfPointerLeft(
+    event: ReactMouseEvent<HTMLElement>,
+  ): void {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && dropdownRef.current?.contains(nextTarget)) {
+      return;
+    }
+    scheduleHoverDropdownClose();
   }
 
   return (
@@ -517,7 +546,7 @@ function BuildActionsDropdown({
         className="build-dropdown"
         ref={dropdownRef}
         onMouseEnter={openHoverDropdown}
-        onMouseLeave={scheduleHoverDropdownClose}
+        onMouseLeave={closeHoverDropdownIfPointerLeft}
       >
         <button
           className={`button primary build-dropdown-trigger${
@@ -571,7 +600,8 @@ function BuildActionsDropdown({
           className={`build-dropdown-popover${open ? " open" : ""}`}
           aria-hidden={!open}
           onMouseEnter={openHoverDropdown}
-          onMouseLeave={scheduleHoverDropdownClose}
+          onMouseLeave={closeHoverDropdownIfPointerLeft}
+          onPointerDown={clearHoverCloseTimer}
         >
           <div className="build-dropdown-menu" role="menu">
             {settings.buildProfiles.map((profile, index) => (
@@ -746,11 +776,13 @@ function gitChangeLines(gitStatus: GitStatusRecord): string[] {
 
 function ServiceControlGroup({
   projectId,
+  settings,
   statuses,
   onServiceWarning,
   disabled = false,
 }: {
   projectId: string;
+  settings: ProjectSettingsRecord;
   statuses: ServiceStatusRecord[];
   onServiceWarning: (message: string) => void;
   disabled?: boolean;
@@ -786,10 +818,14 @@ function ServiceControlGroup({
   return (
     <div className="service-controls" aria-label="Service controls">
       {(
-        [
-          ["frontend", "Frontend"],
-          ["wildfly", "WildFly"],
-        ] as const
+        isProjectFrontendEnabled(settings)
+          ? ([
+              ["frontend", "Frontend"],
+              ["wildfly", "WildFly"],
+            ] as const)
+          : ([
+              ["wildfly", "WildFly"],
+            ] as const)
       ).map(([service, label]) => {
         const serviceName = service as ServiceName;
         const state = serviceStates.get(serviceName);

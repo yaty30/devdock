@@ -1228,6 +1228,11 @@ body {
   color: var(--accent);
 }
 
+.overview-nav-item:hover,
+.overview-nav-item:hover svg {
+  color: var(--accent);
+}
+
 .sidebar-footer {
   display: flex;
   flex-direction: column;
@@ -2067,14 +2072,14 @@ body {
 }
 
 [data-theme="dark"] .build-dropdown-trigger {
-  background: #5558e8;
-  border-color: #6467f2;
-  box-shadow: 0 8px 18px rgba(85, 88, 232, 0.2);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 [data-theme="dark"] .build-dropdown-trigger:hover {
-  background: #494bd2;
-  border-color: #5b5ee8;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .build-dropdown-trigger:not(.stop-build-trigger):disabled,
@@ -2082,16 +2087,16 @@ body {
   color: #ffffff;
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: 0 8px 18px rgba(68, 76, 231, 0.24);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 24%, transparent);
   transform: none;
 }
 
 [data-theme="dark"] .build-dropdown-trigger:not(.stop-build-trigger):disabled,
 [data-theme="dark"]
   .build-dropdown-trigger:not(.stop-build-trigger):disabled:hover {
-  background: #5558e8;
-  border-color: #6467f2;
-  box-shadow: 0 8px 18px rgba(85, 88, 232, 0.2);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .build-dropdown-trigger.stop-build-trigger {
@@ -2102,8 +2107,8 @@ body {
 }
 
 .build-dropdown-trigger.stop-build-trigger:hover {
-  background: #dc2626;
-  border-color: #dc2626;
+  background: var(--error);
+  border-color: var(--error);
   box-shadow: 0 8px 18px rgba(220, 38, 38, 0.3);
 }
 
@@ -3390,6 +3395,29 @@ body {
 .tail-log-panel {
   grid-column: 3;
   grid-row: 1;
+}
+
+.dashboard-grid.frontend-disabled .tail-log-panel {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.dashboard-grid.frontend-disabled .wildfly-panel {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.dashboard-grid.frontend-disabled .build-log-panel,
+.dashboard-grid.frontend-disabled .build-status-panel {
+  grid-column: 3;
+}
+
+.dashboard-grid.frontend-disabled .column-splitter-two {
+  grid-column: 2;
+}
+
+.dashboard-grid.frontend-disabled .row-splitter {
+  grid-column: 1 / 4;
 }
 
 .grid-splitter {
@@ -5804,6 +5832,11 @@ select option {
   margin-top: 0;
   padding-top: 4px;
   overflow: hidden;
+  transition: grid-template-columns 220ms ease;
+}
+
+.git-terminal-screen.history-collapsed {
+  grid-template-columns: minmax(0, 1fr) 44px;
 }
 
 .git-terminal-header {
@@ -5824,7 +5857,7 @@ select option {
 
 .git-status-strip {
   display: grid;
-  grid-template-columns: minmax(150px, 0.9fr) 120px 130px minmax(220px, 1.3fr);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
   min-height: 44px;
   padding: 6px 10px;
@@ -5847,11 +5880,12 @@ select option {
 
 .git-status-strip strong {
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
   color: var(--info);
   font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
 }
 
 .git-working-tree-status.success {
@@ -5881,6 +5915,7 @@ select option {
 .git-terminal-actions {
   display: flex;
   flex: 0 0 auto;
+  align-items: center;
   gap: 6px;
   min-height: 44px;
   padding: 6px;
@@ -5892,6 +5927,10 @@ select option {
 .git-terminal-actions button,
 .git-find-row button,
 .git-command-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
   min-height: var(--control-sm);
   padding: 0 10px;
   color: var(--nav-text);
@@ -5911,17 +5950,17 @@ select option {
 }
 
 .git-terminal-layout {
-  display: grid;
+  display: contents;
   grid-column: 1 / -1;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
-  gap: 12px;
-  min-width: 0;
-  min-height: 0;
 }
 
 .git-terminal-panel {
+  position: relative;
+  grid-column: 1;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   padding: 12px;
   background: var(--surface);
@@ -6019,6 +6058,7 @@ select option {
 
 .terminal-output {
   flex: 1 1 auto;
+  height: 100%;
   min-height: 0;
   padding: 8px 0;
   overflow: auto;
@@ -6029,6 +6069,23 @@ select option {
   scrollbar-width: thin;
   background: var(--terminal-bg);
   border: 1px solid var(--terminal-border);
+  border-radius: 8px;
+}
+
+.git-terminal-loading {
+  position: absolute;
+  inset: 52px 12px 12px;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 9px;
+  color: var(--accent);
+  font-size: var(--font-sm);
+  font-weight: 800;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--terminal-bg) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--terminal-border));
   border-radius: 8px;
 }
 
@@ -6099,6 +6156,7 @@ select option {
 .git-command-row {
   display: grid;
   grid-column: 1;
+  grid-row: 3;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
@@ -6130,11 +6188,24 @@ select option {
 }
 
 .git-history-panel {
+  grid-column: 2;
+  grid-row: 2 / 4;
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: 14px;
+  transition:
+    padding 220ms ease,
+    border-color 220ms ease,
+    background-color 220ms ease;
+}
+
+.git-history-panel.collapsed {
+  align-items: center;
+  padding: 8px 5px;
 }
 
 .git-history-header {
@@ -6143,6 +6214,19 @@ select option {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
+  transition: margin-bottom 220ms ease;
+}
+
+.git-history-panel.collapsed .git-history-header {
+  flex-direction: column;
+  justify-content: flex-start;
+  margin-bottom: 0;
+}
+
+.git-history-panel.collapsed .git-history-header > svg {
+  color: var(--muted);
+  opacity: 0.85;
+  transform: scale(0.96);
 }
 
 .git-history-header h2 {
@@ -6166,6 +6250,27 @@ select option {
   border-radius: 7px;
 }
 
+.git-history-toggle {
+  flex: 0 0 auto;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    transform 180ms ease;
+}
+
+.git-history-toggle svg {
+  transition: transform 220ms ease;
+}
+
+.git-history-panel:not(.collapsed) .git-history-toggle svg {
+  transform: rotate(0deg);
+}
+
+.git-history-panel.collapsed .git-history-toggle svg {
+  transform: rotate(180deg);
+}
+
 .git-history-header button:hover,
 .git-history-item button:hover {
   color: var(--accent);
@@ -6181,6 +6286,11 @@ select option {
   overflow: auto;
   scrollbar-color: var(--accent-soft) transparent;
   scrollbar-width: thin;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity 160ms ease,
+    transform 220ms ease;
 }
 
 .git-history-item {
@@ -6294,17 +6404,16 @@ select option {
 }
 
 @media (max-width: 1380px) {
-  .git-terminal-screen,
-  .git-terminal-layout {
-    grid-template-columns: minmax(0, 1fr);
+  .git-terminal-screen {
+    grid-template-columns: minmax(0, 1fr) 44px;
   }
 
-  .git-command-row {
-    grid-column: 1;
+  .git-terminal-screen:not(.history-collapsed) {
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 300px);
   }
 
   .git-history-panel {
-    min-height: 220px;
+    min-height: 0;
   }
 }
 
@@ -6670,6 +6779,22 @@ select option {
   margin-top: 4px;
   color: var(--muted);
   font-size: var(--font-sm);
+}
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  margin-bottom: 12px;
+  color: var(--nav-text);
+  font-size: var(--font-md);
+  font-weight: 700;
+}
+
+.settings-toggle-row input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
 }
 
 .auto-start-checks {
@@ -8331,6 +8456,16 @@ button.database-tree-item {
   background: var(--accent-soft);
 }
 
+.database-sheet-tree-item[draggable="true"],
+.query-tab[draggable="true"] {
+  cursor: grab;
+}
+
+.database-sheet-dragging,
+.query-tab-dragging {
+  opacity: 0.55;
+}
+
 .database-sheet-tree-item span:not(.database-unsaved-dot) {
   min-width: 0;
   overflow: hidden;
@@ -8340,8 +8475,16 @@ button.database-tree-item {
 
 .database-tree-item.view-item,
 .database-tree-item.procedure-item,
-.database-tree-item.function-item {
+.database-tree-item.function-item,
+.database-tree-item.type-item,
+.database-tree-item.sequence-item,
+.database-tree-item.package-item {
   cursor: pointer;
+}
+
+.database-tree-loading {
+  gap: 7px;
+  font-style: normal;
 }
 
 .database-unsaved-dot {

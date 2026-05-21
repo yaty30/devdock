@@ -49,6 +49,7 @@ import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import splashIcon from "./assets/icon.png";
 import { MAX_PROJECTS } from "../../shared/appLimits";
+import { isProjectFrontendEnabled } from "../../shared/projectFrontend";
 import type {
   AppSection,
   DashboardTab,
@@ -551,6 +552,11 @@ function App(): JSX.Element {
   const activeProjectState =
     projectStateProjectId === selectedProject?.id ? projectState : null;
   const sidebarProjectStatuses = getSidebarProjectStatuses(
+    dashboardOverview,
+    activeProjectState,
+    selectedProject?.id ?? null,
+  );
+  const sidebarProjectFrontendEnabled = getSidebarProjectFrontendEnabled(
     dashboardOverview,
     activeProjectState,
     selectedProject?.id ?? null,
@@ -1474,6 +1480,7 @@ function App(): JSX.Element {
         theme={theme}
         collapsed={sidebarCollapsed}
         projectStatuses={sidebarProjectStatuses}
+        projectFrontendEnabled={sidebarProjectFrontendEnabled}
         debugEnabled={debugEnabled}
         onProjectChange={switchProject}
         onDatabaseConnectionChange={switchDatabaseConnection}
@@ -2102,6 +2109,26 @@ function getSidebarProjectStatuses(
   return statusesByProjectId;
 }
 
+function getSidebarProjectFrontendEnabled(
+  summaries: ProjectDashboardSummary[],
+  activeProjectState: ProjectRuntimeState | null,
+  activeProjectId: string | null,
+): Record<string, boolean> {
+  const enabledByProjectId: Record<string, boolean> = {};
+
+  summaries.forEach((summary) => {
+    enabledByProjectId[summary.project.id] = summary.frontendEnabled;
+  });
+
+  if (activeProjectId && activeProjectState) {
+    enabledByProjectId[activeProjectId] = isProjectFrontendEnabled(
+      activeProjectState.settings,
+    );
+  }
+
+  return enabledByProjectId;
+}
+
 function getToolTitle(tool: ToolId): string {
   if (tool === "api-tester") {
     return "API Tester";
@@ -2271,8 +2298,16 @@ function createLoadingProjectState(): ProjectRuntimeState {
       gitProjectDirectory: "",
       defaultBranch: "",
       remote: "",
+      frontend: {
+        enabled: false,
+        path: "",
+        installCommand: "",
+        devCommand: "",
+        buildCommand: "",
+      },
       services: {
         frontend: {
+          enabled: false,
           workingDirectory: "",
           command: "",
           healthUrl: "",
@@ -2280,6 +2315,7 @@ function createLoadingProjectState(): ProjectRuntimeState {
           autoStart: false,
         },
         wildfly: {
+          enabled: true,
           workingDirectory: "",
           command: "",
           healthUrl: "",

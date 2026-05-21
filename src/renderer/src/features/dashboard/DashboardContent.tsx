@@ -37,6 +37,7 @@ import {
   useLogViewport,
 } from "../../hooks/useLogStore";
 import type { LogLine } from "../../../../shared/dashboardTypes";
+import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
 import type {
   BuildStage,
   DatabaseConnection,
@@ -80,7 +81,17 @@ const DASHBOARD_SPLITTER_SIZE = 16;
 
 function dashboardColumnTemplate(
   columnWidths: DashboardLayout["columnWidths"],
+  frontendEnabled: boolean,
 ): string {
+  if (!frontendEnabled) {
+    return columnWidths === null
+      ? `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 2.12fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 0.96fr)`
+      : `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${Math.max(
+          DASHBOARD_MIN_COLUMN_WIDTH,
+          columnWidths[0] + columnWidths[1],
+        )}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${columnWidths[2]}px)`;
+  }
+
   return columnWidths === null
     ? `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 1fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 1.12fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 0.96fr)`
     : `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${columnWidths[0]}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${columnWidths[1]}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${columnWidths[2]}px)`;
@@ -495,6 +506,7 @@ function BuildStatusPanel({
     latestBuild?.status,
     latestBuild,
     buildLines,
+    isProjectFrontendEnabled(projectState.settings),
   );
 
   return (
@@ -935,6 +947,7 @@ function ProjectStatusRow({
   summary: ProjectDashboardSummary;
   now: number;
 }): JSX.Element {
+  const frontendEnabled = summary.frontendEnabled;
   const frontend = serviceStatus(summary, "frontend");
   const wildfly = serviceStatus(summary, "wildfly");
   const overallStatus = projectOverallStatus(summary);
@@ -952,7 +965,7 @@ function ProjectStatusRow({
               <strong>{summary.project.id}</strong>
               <i />
               <span>Services</span>
-              <strong>Frontend / WildFly</strong>
+              <strong>{frontendEnabled ? "Frontend / WildFly" : "WildFly"}</strong>
             </div>
           </div>
         </div>
@@ -983,28 +996,36 @@ function ProjectStatusRow({
           <header>
             <SquareTerminal size={18} />
             <h3>Frontend</h3>
-            {statusPill(frontend?.state)}
+            {frontendEnabled ? statusPill(frontend?.state) : null}
           </header>
-          <DashboardDetailRow label="URL">
-            {summary.serviceUrls.frontendUrl ? (
-              <a
-                className="monitor-link"
-                href={summary.serviceUrls.frontendUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <span>{summary.serviceUrls.frontendUrl}</span>
-                <ExternalLink size={13} />
-              </a>
-            ) : (
-              <strong>Not set</strong>
-            )}
-          </DashboardDetailRow>
-          <DashboardDetailRow label="Last Check">
-            <strong>
-              {frontend ? formatDate(frontend.checkedAt) : "Not checked"}
-            </strong>
-          </DashboardDetailRow>
+          {frontendEnabled ? (
+            <>
+              <DashboardDetailRow label="URL">
+                {summary.serviceUrls.frontendUrl ? (
+                  <a
+                    className="monitor-link"
+                    href={summary.serviceUrls.frontendUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <span>{summary.serviceUrls.frontendUrl}</span>
+                    <ExternalLink size={13} />
+                  </a>
+                ) : (
+                  <strong>Not set</strong>
+                )}
+              </DashboardDetailRow>
+              <DashboardDetailRow label="Last Check">
+                <strong>
+                  {frontend ? formatDate(frontend.checkedAt) : "Not checked"}
+                </strong>
+              </DashboardDetailRow>
+            </>
+          ) : (
+            <DashboardDetailRow label="Status">
+              <strong>Not configured</strong>
+            </DashboardDetailRow>
+          )}
         </section>
 
         <section className="dashboard-project-detail">
@@ -1051,7 +1072,9 @@ function ProjectStatusRow({
             <h3>Uptime</h3>
           </header>
           <DashboardDetailRow label="Frontend">
-            <strong>{formatServiceUptime(frontend, now)}</strong>
+            <strong>
+              {frontendEnabled ? formatServiceUptime(frontend, now) : "Not configured"}
+            </strong>
           </DashboardDetailRow>
           <DashboardDetailRow label="WildFly">
             <strong>{formatServiceUptime(wildfly, now)}</strong>
@@ -1174,9 +1197,13 @@ function projectOverallStatus(summary: ProjectDashboardSummary): {
   label: string;
   tone: "success" | "warning" | "failed" | "idle";
 } {
-  const frontend = serviceStatus(summary, "frontend");
+  const frontend = summary.frontendEnabled
+    ? serviceStatus(summary, "frontend")
+    : undefined;
   const wildfly = serviceStatus(summary, "wildfly");
-  const states = [frontend?.state, wildfly?.state];
+  const states = summary.frontendEnabled
+    ? [frontend?.state, wildfly?.state]
+    : [wildfly?.state];
 
   if (states.every((state) => state === "running")) {
     return { label: "All Services Running", tone: "success" };
@@ -1235,9 +1262,10 @@ export function ProjectDashboardContent({
   resetVersion: number;
   projectState: ProjectRuntimeState;
 }): JSX.Element {
+  const frontendEnabled = isProjectFrontendEnabled(projectState.settings);
   const frontendStatus = serviceStatus(projectState, "frontend");
   const wildflyStatus = serviceStatus(projectState, "wildfly");
-  const frontendRunning = frontendStatus?.state === "running";
+  const frontendRunning = frontendEnabled && frontendStatus?.state === "running";
   const wildflyRunning = wildflyStatus?.state === "running";
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -1273,7 +1301,9 @@ export function ProjectDashboardContent({
       const entry = entries[0];
       if (!entry) return;
       const newContentWidth = entry.contentRect.width;
-      const newAvailableWidth = newContentWidth - DASHBOARD_SPLITTER_SIZE * 2;
+      const splitterCount = frontendEnabled ? 2 : 1;
+      const newAvailableWidth =
+        newContentWidth - DASHBOARD_SPLITTER_SIZE * splitterCount;
       const current = layoutRef.current;
       if (current.columnWidths === null) return;
       const prev =
@@ -1292,7 +1322,7 @@ export function ProjectDashboardContent({
 
     observer.observe(grid);
     return () => observer.disconnect();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [frontendEnabled]);
 
   function applyGridLayout(nextLayout: DashboardLayout): void {
     const grid = gridRef.current;
@@ -1302,7 +1332,7 @@ export function ProjectDashboardContent({
 
     grid.style.setProperty(
       "--dashboard-column-template",
-      dashboardColumnTemplate(nextLayout.columnWidths),
+      dashboardColumnTemplate(nextLayout.columnWidths, frontendEnabled),
     );
     grid.style.setProperty(
       "--dashboard-row-template",
@@ -1341,7 +1371,7 @@ export function ProjectDashboardContent({
       ? grid.clientWidth -
         gridPaddingLeft -
         gridPaddingRight -
-        DASHBOARD_SPLITTER_SIZE * 2
+        DASHBOARD_SPLITTER_SIZE * (frontendEnabled ? 2 : 1)
       : 0;
     const availableHeight = grid
       ? grid.clientHeight -
@@ -1350,9 +1380,13 @@ export function ProjectDashboardContent({
         DASHBOARD_SPLITTER_SIZE
       : 0;
     const topRowPanel =
-      gridRef.current?.querySelector<HTMLElement>(".frontend-panel");
+      gridRef.current?.querySelector<HTMLElement>(
+        frontendEnabled ? ".frontend-panel" : ".tail-log-panel",
+      );
     const columnPanels = [
-      gridRef.current?.querySelector<HTMLElement>(".frontend-panel"),
+      frontendEnabled
+        ? gridRef.current?.querySelector<HTMLElement>(".frontend-panel")
+        : null,
       gridRef.current?.querySelector<HTMLElement>(".tail-log-panel"),
       gridRef.current?.querySelector<HTMLElement>(".build-status-panel"),
     ];
@@ -1463,34 +1497,43 @@ export function ProjectDashboardContent({
   };
 
   const gridStyle = {
-    "--dashboard-column-template": dashboardColumnTemplate(layout.columnWidths),
+    "--dashboard-column-template": dashboardColumnTemplate(
+      layout.columnWidths,
+      frontendEnabled,
+    ),
     "--dashboard-row-template": dashboardRowTemplate(layout.topRowHeight),
   } as CSSProperties;
 
   return (
     <section className="resizable-panel-screen">
-      <div className="dashboard-grid" ref={gridRef} style={gridStyle}>
-        <LogPanel
-          title="Frontend"
-          projectId={projectId}
-          channel="frontend"
-          footer="Open full log"
-          className="frontend-panel"
-          serviceState={frontendStatus?.state}
-          openDisabled={!frontendRunning}
-          suspendAutoFollow={isResizing}
-          onOpen={() => void window.ivsDashboard.openLog(projectId, "frontend")}
-          onZoom={() =>
-            setZoomLog({
-              title: "Frontend",
-              channel: "frontend",
-              footer: "Open full log",
-              className: "frontend-panel log-zoom-panel",
-              serviceState: frontendStatus?.state,
-              openDisabled: !frontendRunning,
-            })
-          }
-        />
+      <div
+        className={`dashboard-grid${frontendEnabled ? "" : " frontend-disabled"}`}
+        ref={gridRef}
+        style={gridStyle}
+      >
+        {frontendEnabled ? (
+          <LogPanel
+            title="Frontend"
+            projectId={projectId}
+            channel="frontend"
+            footer="Open full log"
+            className="frontend-panel"
+            serviceState={frontendStatus?.state}
+            openDisabled={!frontendRunning}
+            suspendAutoFollow={isResizing}
+            onOpen={() => void window.ivsDashboard.openLog(projectId, "frontend")}
+            onZoom={() =>
+              setZoomLog({
+                title: "Frontend",
+                channel: "frontend",
+                footer: "Open full log",
+                className: "frontend-panel log-zoom-panel",
+                serviceState: frontendStatus?.state,
+                openDisabled: !frontendRunning,
+              })
+            }
+          />
+        ) : null}
         <BuildLogPanel
           projectId={projectId}
           suspendAutoFollow={isResizing}
@@ -1543,21 +1586,23 @@ export function ProjectDashboardContent({
             })
           }
         />
-        <div
-          className="grid-splitter column-splitter column-splitter-one"
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize Frontend and Build Log columns"
-          onPointerDown={(event) => startResize("column-1", event)}
-          onPointerMove={resizeLayout}
-          onPointerUp={stopResize}
-          onPointerCancel={stopResize}
-        />
+        {frontendEnabled ? (
+          <div
+            className="grid-splitter column-splitter column-splitter-one"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize Frontend and Tail Log columns"
+            onPointerDown={(event) => startResize("column-1", event)}
+            onPointerMove={resizeLayout}
+            onPointerUp={stopResize}
+            onPointerCancel={stopResize}
+          />
+        ) : null}
         <div
           className="grid-splitter column-splitter column-splitter-two"
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize Build Log and Build Status columns"
+          aria-label="Resize Tail Log and Build panels columns"
           onPointerDown={(event) => startResize("column-2", event)}
           onPointerMove={resizeLayout}
           onPointerUp={stopResize}
@@ -1782,6 +1827,7 @@ function buildStagesFromLatest(
   status: string | undefined,
   build: ProjectRuntimeState["recentBuilds"][number] | undefined,
   buildLines: LogLine[],
+  frontendEnabled: boolean,
 ): BuildStage[] {
   const stepDefinitions = [
     {
@@ -1813,7 +1859,7 @@ function buildStagesFromLatest(
       label: "Build completed",
       patterns: [/build success/i, /build completed/i],
     },
-  ];
+  ].filter((step) => frontendEnabled || step.label !== "Building frontend");
 
   if (!status) {
     return stepDefinitions.map((step) => ({

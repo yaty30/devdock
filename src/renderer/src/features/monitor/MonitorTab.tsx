@@ -34,6 +34,7 @@ import type {
   ServiceState,
 } from "../../types";
 import { clamp } from "../../utils/math";
+import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
 
 type MonitorLayout = {
   columnWidths: [number, number, number, number] | null;
@@ -826,6 +827,7 @@ function readStoredMonitorLayout(projectId: string): MonitorLayout {
 }
 
 function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
+  const frontendEnabled = isProjectFrontendEnabled(projectState.settings);
   const frontendStatus = projectState.statuses.find(
     (status) => status.service === "frontend",
   );
@@ -839,19 +841,25 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
       title: "Frontend",
       icon: <SquareTerminal size={26} />,
       rows: [
-        { label: "Status", value: statusPill(frontendStatus?.state) },
+        {
+          label: "Status",
+          value: frontendEnabled ? statusPill(frontendStatus?.state) : "Not configured",
+        },
         {
           label: "URL",
-          value:
-            projectState.settings.services.frontend.appUrl ||
-            projectState.settings.services.frontend.healthUrl ||
-            "Not set",
+          value: frontendEnabled
+            ? projectState.settings.services.frontend.appUrl ||
+              projectState.settings.services.frontend.healthUrl ||
+              "Not set"
+            : "Not configured",
         },
         {
           label: "Last Check",
-          value: frontendStatus
-            ? formatDate(frontendStatus.checkedAt)
-            : "Not checked",
+          value: frontendEnabled
+            ? frontendStatus
+              ? formatDate(frontendStatus.checkedAt)
+              : "Not checked"
+            : "Not configured",
         },
       ],
     },
@@ -877,7 +885,9 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
       rows: [
         {
           label: "Frontend",
-          value: formatUptime(frontendStatus?.startedAt, frontendStatus?.state),
+          value: frontendEnabled
+            ? formatUptime(frontendStatus?.startedAt, frontendStatus?.state)
+            : "Not configured",
         },
         {
           label: "WildFly",
