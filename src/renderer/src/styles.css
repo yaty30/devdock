@@ -183,7 +183,7 @@
 :root[data-accent="black"],
 [data-accent="black"] {
   --accent: #111827;
-  --accent-soft: #f3f4f6;
+  --accent-soft: #e6e6e6;
   --accent-border: #d1d5db;
 }
 
@@ -231,7 +231,7 @@
 
 :root[data-theme="dark"][data-accent="black"],
 [data-theme="dark"][data-accent="black"] {
-  --accent: #e5e7eb;
+  --accent: #a5a5a5;
   --accent-soft: #25272d;
   --accent-border: #4b5563;
 }
@@ -239,7 +239,7 @@
 [data-theme="dark"] .project-code,
 [data-theme="dark"] .elapsed-pill,
 [data-theme="dark"] .quick-command-row button {
-  border-color: #334155;
+  border-color: var(--accent-border);
 }
 
 [data-theme="dark"] .status-pill.success {
@@ -1371,6 +1371,14 @@ body {
   grid-template-columns: 40px;
   justify-content: center;
   gap: 8px;
+}
+
+.sidebar.collapsed .sidebar-settings-button {
+  order: 1;
+}
+
+.sidebar.collapsed .sidebar-collapse-button {
+  order: 2;
 }
 
 .sidebar.collapsed .theme-toggle {
@@ -2673,7 +2681,7 @@ body {
   color: #ffffff;
   background: var(--accent);
   border: 1px solid var(--accent);
-  box-shadow: 0 8px 18px rgba(68, 76, 231, 0.24);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .button.compact {
@@ -3551,8 +3559,8 @@ body {
 
 .grid-splitter:hover::before,
 .grid-splitter:active::before {
-  background: rgba(68, 76, 231, 0.18);
-  box-shadow: 0 0 0 1px rgba(68, 76, 231, 0.16);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .column-splitter {
@@ -3623,7 +3631,7 @@ body {
   font-weight: 700;
   white-space: nowrap;
   background: var(--accent-soft);
-  border: 1px solid #dfe3ff;
+  border: 1px solid var(--accent-border);
   border-radius: 999px;
 }
 
@@ -3854,7 +3862,7 @@ body {
 .link-button:hover {
   color: var(--accent);
   background: var(--accent-soft);
-  border-color: #c7d2fe;
+  border-color: var(--accent-border);
 }
 
 .link-button svg {
@@ -5213,8 +5221,8 @@ body {
 .monitor-link:hover {
   color: var(--accent);
   background: var(--accent-soft);
-  border-color: #c7d2fe;
-  box-shadow: 0 7px 14px rgba(68, 76, 231, 0.1);
+  border-color: var(--accent-border);
+  box-shadow: 0 7px 14px color-mix(in srgb, var(--accent) 10%, transparent);
   text-decoration: none;
 }
 
@@ -5779,9 +5787,9 @@ select option {
 
 .pagination button.active {
   color: #ffffff;
-  background: #6478f6;
-  border-color: #6478f6;
-  box-shadow: 0 6px 12px rgba(100, 120, 246, 0.18);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .pagination button:not(.active):hover {
@@ -6147,7 +6155,7 @@ select option {
   font-size: var(--font-xs);
   font-weight: 750;
   background: var(--accent-soft);
-  border: 1px solid #dfe3ff;
+  border: 1px solid var(--accent-border);
   border-radius: 999px;
   transition:
     background-color 150ms ease,
@@ -6161,12 +6169,12 @@ select option {
   color: #ffffff;
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: 0 8px 16px rgba(68, 76, 231, 0.18);
+  box-shadow: 0 8px 16px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .quick-command-row button:active {
   transform: scale(0.94);
-  box-shadow: 0 4px 10px rgba(68, 76, 231, 0.14);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .terminal-output {
@@ -7330,13 +7338,13 @@ select option {
   color: #ffffff;
   background: var(--accent);
   border: 1px solid var(--accent);
-  box-shadow: 0 8px 18px rgba(68, 76, 231, 0.22);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .icon-button.primary:hover {
   color: #ffffff;
-  background: #3038c9;
-  border-color: #3038c9;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .icon-button.secondary {
@@ -11257,7 +11265,7 @@ button.database-tree-item {
 
 .database-sql-editor-shell .cm-editor .cm-selectionBackground,
 .database-sql-editor-shell .cm-editor.cm-focused .cm-selectionBackground {
-  background-color: rgba(99, 102, 241, 0.28) !important;
+  background-color: color-mix(in srgb, var(--accent) 28%, transparent) !important;
 }
 
 .database-sql-editor-shell .cm-editor {
@@ -12500,7 +12508,7 @@ button.database-tree-item {
 
 .shutdown-service-item.stopped {
   background: var(--accent-soft);
-  border-color: #dfe3ff;
+  border-color: var(--accent-border);
 }
 
 .shutdown-service-label {

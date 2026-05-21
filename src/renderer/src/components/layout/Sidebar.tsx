@@ -895,7 +895,7 @@ export function Sidebar({
         ) : null}
         <div className="sidebar-footer-actions">
           <button
-            className="theme-toggle sidebar-icon-button"
+            className="theme-toggle sidebar-icon-button sidebar-collapse-button"
             type="button"
             onClick={onCollapseToggle}
             aria-label={collapsed ? "Expand side menu" : "Collapse side menu"}
@@ -908,7 +908,7 @@ export function Sidebar({
             )}
           </button>
           <button
-            className="theme-toggle sidebar-icon-button"
+            className="theme-toggle sidebar-icon-button sidebar-settings-button"
             type="button"
             onClick={onInterfaceSettings}
             aria-label="Interface settings"

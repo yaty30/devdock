@@ -104,7 +104,7 @@ export function HeaderUtilityActions({
   disabled?: boolean;
   settingsIcon?: "settings" | "cog";
 }): JSX.Element {
-  const SettingsButtonIcon = settingsIcon === "cog" ? Cog : Settings;
+  const SettingsButtonIcon = Cog; //settingsIcon === "cog" ? Cog : Settings;
 
   return (
     <>
@@ -562,7 +562,7 @@ function BuildActionsDropdown({
                 ? `Run ${latestProfileUsedToday.buttonName} Build`
                 : undefined
           }
-          disabled={buildDisabled || stoppingBuild}
+          disabled={false}
           onClick={() => {
             if (buildRunning) {
               stopBuild();
