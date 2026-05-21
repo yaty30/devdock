@@ -3382,7 +3382,8 @@ body {
   padding: 13px;
 }
 
-.wildfly-panel {
+.wildfly-panel,
+.backend-panel {
   grid-column: 1 / 4;
   grid-row: 3;
 }
@@ -3900,6 +3901,7 @@ body {
 
 .build-log-panel .panel-header,
 .wildfly-panel .panel-header,
+.backend-panel .panel-header,
 .tail-log-panel .panel-header {
   margin-bottom: 8px;
 }
@@ -4890,7 +4892,8 @@ body {
   line-height: 1.14;
 }
 
-.wildfly-panel .log-lines {
+.wildfly-panel .log-lines,
+.backend-panel .log-lines {
   gap: 3px;
   font-size: var(--font-xs);
   line-height: 1.14;

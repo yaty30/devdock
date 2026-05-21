@@ -9,10 +9,11 @@ import { GripVertical, Plus, Trash2 } from "lucide-react";
 import { Panel } from "../../components/common/Panel";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {
-  BuildProfileRecord,
+  BackendRuntime,
   ConfirmDialogState,
   Project,
   ProjectSettingsRecord,
+  RuntimeBuilderRecord,
   ServiceName,
   SettingsTab,
 } from "../../types";
@@ -53,10 +54,20 @@ function FieldRow({
 
 const PROFILE_ROW_EXIT_MS = 180;
 
-type BuildProfileField = "buttonName" | "profileName" | "goals";
+type BuildProfileField = "buttonName" | "command";
 type BuildProfileFieldErrors = Partial<
   Record<string, Partial<Record<BuildProfileField, boolean>>>
 >;
+
+function runtimeLabel(runtime: BackendRuntime): string {
+  if (runtime === "wildfly") {
+    return "WildFly";
+  }
+  if (runtime === "python") {
+    return "Python";
+  }
+  return "Node";
+}
 
 export function SettingsContent({
   selectedProject,
@@ -106,7 +117,7 @@ export function SettingsContent({
   const closingTimerRef = useRef<number | null>(null);
   const profileScrollerRef = useRef<HTMLDivElement>(null);
   const profileDeleteTimersRef = useRef<Map<string, number>>(new Map());
-  const previousProfileCountRef = useRef(settings.buildProfiles.length);
+  const previousProfileCountRef = useRef(settings.builders.length);
   const onDirtyChangeRef = useRef(onDirtyChange);
   onDirtyChangeRef.current = onDirtyChange;
 
@@ -118,17 +129,8 @@ export function SettingsContent({
     [draft, settings, projectNameDraft, projectCodeDraft, selectedProject],
   );
   const savedProfileIds = useMemo(
-    () => new Set(settings.buildProfiles.map((profile) => profile.id)),
-    [settings.buildProfiles],
-  );
-  const mavenConfigComplete = useMemo(
-    () =>
-      Boolean(
-        draft.maven.executable.trim() &&
-        draft.maven.settingsXml.trim() &&
-        draft.maven.pomXml.trim(),
-      ),
-    [draft.maven.executable, draft.maven.pomXml, draft.maven.settingsXml],
+    () => new Set(settings.builders.map((profile) => profile.id)),
+    [settings.builders],
   );
 
   useEffect(() => {
@@ -191,11 +193,11 @@ export function SettingsContent({
     setProfileFieldErrors({});
     setDeletingProfileIds(new Set());
     setDraggingProfileId(null);
-    previousProfileCountRef.current = settings.buildProfiles.length;
+    previousProfileCountRef.current = settings.builders.length;
   }, [settings, selectedProject]);
 
   useEffect(() => {
-    const currentProfileCount = draft.buildProfiles.length;
+    const currentProfileCount = draft.builders.length;
     const addedProfile = currentProfileCount > previousProfileCountRef.current;
     previousProfileCountRef.current = currentProfileCount;
 
@@ -211,18 +213,7 @@ export function SettingsContent({
     });
 
     return () => window.cancelAnimationFrame(animationFrame);
-  }, [activeSettingsTab, draft.buildProfiles.length]);
-
-  useEffect(() => {
-    if (mavenConfigComplete || !draft.maven.skipTests) {
-      return;
-    }
-
-    setDraft((current) => ({
-      ...current,
-      maven: { ...current.maven, skipTests: false },
-    }));
-  }, [draft.maven.skipTests, mavenConfigComplete]);
+  }, [activeSettingsTab, draft.builders.length]);
 
   function updateService(
     service: ServiceName,
@@ -241,18 +232,110 @@ export function SettingsContent({
     }));
   }
 
-  function updateProfile(
-    profileId: string,
-    patch: Partial<BuildProfileRecord>,
+  function updateBackend(field: string, value: string | boolean): void {
+    setDraft((current) => ({
+      ...current,
+      services: {
+        ...current.services,
+        backend: {
+          ...current.services.backend,
+          [field]: value,
+        },
+      },
+    }));
+  }
+
+  function updateBackendRuntime(runtime: BackendRuntime): void {
+    setDraft((current) => ({
+      ...current,
+      services: {
+        ...current.services,
+        backend: {
+          ...current.services.backend,
+          runtime,
+        },
+      },
+    }));
+  }
+
+  function updateWildflyOption(
+    field: keyof ProjectSettingsRecord["services"]["backend"]["runtimeOptions"]["wildfly"],
+    value: string | boolean,
   ): void {
     setDraft((current) => ({
       ...current,
-      buildProfiles: current.buildProfiles.map((profile) =>
+      services: {
+        ...current.services,
+        backend: {
+          ...current.services.backend,
+          runtimeOptions: {
+            ...current.services.backend.runtimeOptions,
+            wildfly: {
+              ...current.services.backend.runtimeOptions.wildfly,
+              [field]: value,
+            },
+          },
+        },
+      },
+    }));
+  }
+
+  function updatePythonOption(
+    field: keyof ProjectSettingsRecord["services"]["backend"]["runtimeOptions"]["python"],
+    value: string,
+  ): void {
+    setDraft((current) => ({
+      ...current,
+      services: {
+        ...current.services,
+        backend: {
+          ...current.services.backend,
+          runtimeOptions: {
+            ...current.services.backend.runtimeOptions,
+            python: {
+              ...current.services.backend.runtimeOptions.python,
+              [field]: value,
+            },
+          },
+        },
+      },
+    }));
+  }
+
+  function updateNodeOption(
+    field: keyof ProjectSettingsRecord["services"]["backend"]["runtimeOptions"]["node"],
+    value: string,
+  ): void {
+    setDraft((current) => ({
+      ...current,
+      services: {
+        ...current.services,
+        backend: {
+          ...current.services.backend,
+          runtimeOptions: {
+            ...current.services.backend.runtimeOptions,
+            node: {
+              ...current.services.backend.runtimeOptions.node,
+              [field]: value,
+            },
+          },
+        },
+      },
+    }));
+  }
+
+  function updateProfile(
+    profileId: string,
+    patch: Partial<RuntimeBuilderRecord>,
+  ): void {
+    setDraft((current) => ({
+      ...current,
+      builders: current.builders.map((profile) =>
         profile.id === profileId ? { ...profile, ...patch } : profile,
       ),
     }));
 
-    (["buttonName", "profileName", "goals"] as BuildProfileField[]).forEach(
+    (["buttonName", "command"] as BuildProfileField[]).forEach(
       (field) => {
         const value = patch[field];
         if (typeof value !== "string" || !value.trim()) {
@@ -283,13 +366,12 @@ export function SettingsContent({
     const id = `profile-${Date.now()}`;
     setDraft((current) => ({
       ...current,
-      buildProfiles: [
-        ...current.buildProfiles,
+      builders: [
+        ...current.builders,
         {
           id,
           buttonName: "",
-          profileName: "",
-          goals: "",
+          command: "",
           confirm: false,
           outcomeType: "build-only",
         },
@@ -311,7 +393,7 @@ export function SettingsContent({
     const timer = window.setTimeout(() => {
       setDraft((current) => ({
         ...current,
-        buildProfiles: current.buildProfiles.filter(
+        builders: current.builders.filter(
           (profile) => profile.id !== profileId,
         ),
       }));
@@ -344,10 +426,10 @@ export function SettingsContent({
     }
 
     setDraft((current) => {
-      const fromIndex = current.buildProfiles.findIndex(
+      const fromIndex = current.builders.findIndex(
         (profile) => profile.id === draggedProfileId,
       );
-      const toIndex = current.buildProfiles.findIndex(
+      const toIndex = current.builders.findIndex(
         (profile) => profile.id === targetProfileId,
       );
 
@@ -368,10 +450,10 @@ export function SettingsContent({
         return current;
       }
 
-      const buildProfiles = [...current.buildProfiles];
-      const [movedProfile] = buildProfiles.splice(fromIndex, 1);
-      buildProfiles.splice(insertIndex, 0, movedProfile);
-      return { ...current, buildProfiles };
+      const builders = [...current.builders];
+      const [movedProfile] = builders.splice(fromIndex, 1);
+      builders.splice(insertIndex, 0, movedProfile);
+      return { ...current, builders };
     });
   }
 
@@ -389,7 +471,7 @@ export function SettingsContent({
     return profileFieldErrors[profileId]?.[field] === true;
   }
 
-  function profileRowClass(profile: BuildProfileRecord): string | undefined {
+  function profileRowClass(profile: RuntimeBuilderRecord): string | undefined {
     const classes: string[] = [];
     if (!savedProfileIds.has(profile.id)) {
       classes.push("profile-row-new");
@@ -408,10 +490,6 @@ export function SettingsContent({
       ...draft,
       defaultBranch: draft.defaultBranch.trim() || "main",
       remote: draft.remote.trim() || "origin",
-      maven: {
-        ...draft.maven,
-        skipTests: mavenConfigComplete ? draft.maven.skipTests : false,
-      },
     };
   }
 
@@ -424,11 +502,10 @@ export function SettingsContent({
 
     const seenNames = new Set<string>();
     const duplicateNames = new Set<string>();
-    let missingProfileName = false;
     let missingButtonName = false;
-    let missingGoals = false;
+    let missingCommand = false;
 
-    draft.buildProfiles.forEach((profile) => {
+    draft.builders.forEach((profile) => {
       const name = profile.buttonName.trim().toLowerCase();
       if (!name) {
         missingButtonName = true;
@@ -442,37 +519,25 @@ export function SettingsContent({
         seenNames.add(name);
       }
 
-      if (!profile.profileName.trim()) {
-        missingProfileName = true;
+      if (!profile.command.trim()) {
+        missingCommand = true;
         profileErrors[profile.id] = {
           ...profileErrors[profile.id],
-          profileName: true,
-        };
-      }
-
-      if (!profile.goals.trim()) {
-        missingGoals = true;
-        profileErrors[profile.id] = {
-          ...profileErrors[profile.id],
-          goals: true,
+          command: true,
         };
       }
     });
 
     if (missingButtonName) {
-      errors.push("Build Profiles: name is required");
+      errors.push("Builders: name is required");
     }
 
-    if (missingProfileName) {
-      errors.push("Build Profiles: profile is required");
-    }
-
-    if (missingGoals) {
-      errors.push("Build Profiles: goal is required");
+    if (missingCommand) {
+      errors.push("Builders: command is required");
     }
 
     duplicateNames.forEach((name) =>
-      errors.push(`Build Profiles: duplicate name "${name}"`),
+      errors.push(`Builders: duplicate name "${name}"`),
     );
 
     return { errors, profileErrors };
@@ -667,20 +732,20 @@ export function SettingsContent({
                 <span>Project ID</span>
                 <strong>{selectedProject.id}</strong>
                 <span>Runtime</span>
-                <strong>Configured</strong>
+                <strong>{runtimeLabel(draft.services.backend.runtime)}</strong>
                 <span>Log File</span>
-                <strong>{draft.appLogFile || "Not set"}</strong>
+                <strong>{draft.services.backend.logFile || "Not set"}</strong>
                 <span>Auto start</span>
                 <div className="auto-start-checks">
                   <label>
                     <input
                       type="checkbox"
-                      checked={draft.services.wildfly.autoStart ?? false}
+                      checked={draft.services.backend.autoStart ?? false}
                       onChange={(e) =>
-                        updateService("wildfly", "autoStart", e.target.checked)
+                        updateBackend("autoStart", e.target.checked)
                       }
                     />
-                    WildFly
+                    Backend
                   </label>
                   <label>
                     <input
@@ -709,21 +774,15 @@ export function SettingsContent({
                 maxLength={3}
               />
               <FieldRow
-                label="Application Log File"
-                value={draft.appLogFile}
+                label="Backend Log File"
+                value={draft.services.backend.logFile}
                 browse
-                onChange={(value) =>
-                  setDraft((current) => ({ ...current, appLogFile: value }))
-                }
+                onChange={(value) => updateBackend("logFile", value)}
                 onBrowse={() =>
                   browseFile(
-                    "Select application log file",
-                    draft.appLogFile,
-                    (value) =>
-                      setDraft((current) => ({
-                        ...current,
-                        appLogFile: value,
-                      })),
+                    "Select backend log file",
+                    draft.services.backend.logFile,
+                    (value) => updateBackend("logFile", value),
                   )
                 }
               />
@@ -771,47 +830,158 @@ export function SettingsContent({
               />
             </Panel>
 
-            <Panel title="WildFly" className="settings-form-panel">
+            <Panel title="Backend" className="settings-form-panel">
+              <label className="settings-field-row">
+                <span>Runtime</span>
+                <select
+                  value={draft.services.backend.runtime}
+                  onChange={(event) =>
+                    updateBackendRuntime(event.target.value as BackendRuntime)
+                  }
+                >
+                  <option value="wildfly">WildFly / Java</option>
+                  <option value="python">Python</option>
+                  <option value="node">Node</option>
+                </select>
+                <span />
+              </label>
               <FieldRow
-                label="Bin Directory"
-                value={draft.services.wildfly.workingDirectory}
+                label="Directory"
+                value={draft.services.backend.workingDirectory}
                 browse
                 onChange={(value) =>
-                  updateService("wildfly", "workingDirectory", value)
+                  updateBackend("workingDirectory", value)
                 }
                 onBrowse={() =>
                   browseDirectory(
-                    "Select WildFly directory",
-                    draft.services.wildfly.workingDirectory,
-                    (value) =>
-                      updateService("wildfly", "workingDirectory", value),
+                    "Select backend directory",
+                    draft.services.backend.workingDirectory,
+                    (value) => updateBackend("workingDirectory", value),
                   )
                 }
               />
               <FieldRow
                 label="Start Command"
-                value={draft.services.wildfly.command}
-                onChange={(value) => updateService("wildfly", "command", value)}
+                value={draft.services.backend.command}
+                onChange={(value) => updateBackend("command", value)}
               />
               <FieldRow
                 label="Health URL"
-                value={draft.services.wildfly.healthUrl}
-                onChange={(value) =>
-                  updateService("wildfly", "healthUrl", value)
-                }
+                value={draft.services.backend.healthUrl}
+                onChange={(value) => updateBackend("healthUrl", value)}
               />
               <FieldRow
-                label="Admin Console URL"
-                value={draft.services.wildfly.managementUrl ?? ""}
-                onChange={(value) =>
-                  updateService("wildfly", "managementUrl", value)
-                }
+                label="App URL"
+                value={draft.services.backend.appUrl ?? ""}
+                onChange={(value) => updateBackend("appUrl", value)}
               />
-              <FieldRow
-                label="KMU URL"
-                value={draft.services.wildfly.appUrl ?? ""}
-                onChange={(value) => updateService("wildfly", "appUrl", value)}
-              />
+              {draft.services.backend.runtime === "wildfly" ? (
+                <>
+                  <FieldRow
+                    label="Admin Console URL"
+                    value={
+                      draft.services.backend.runtimeOptions.wildfly
+                        .managementUrl
+                    }
+                    onChange={(value) =>
+                      updateWildflyOption("managementUrl", value)
+                    }
+                  />
+                  <FieldRow
+                    label="Ready Log Fragment"
+                    value={
+                      draft.services.backend.runtimeOptions.wildfly
+                        .readyLogFragment
+                    }
+                    onChange={(value) =>
+                      updateWildflyOption("readyLogFragment", value)
+                    }
+                  />
+                </>
+              ) : null}
+              {draft.services.backend.runtime === "python" ? (
+                <>
+                  <FieldRow
+                    label="Venv Directory"
+                    value={
+                      draft.services.backend.runtimeOptions.python
+                        .venvDirectory
+                    }
+                    browse
+                    onChange={(value) =>
+                      updatePythonOption("venvDirectory", value)
+                    }
+                    onBrowse={() =>
+                      browseDirectory(
+                        "Select Python venv directory",
+                        draft.services.backend.runtimeOptions.python
+                          .venvDirectory,
+                        (value) => updatePythonOption("venvDirectory", value),
+                      )
+                    }
+                  />
+                  <FieldRow
+                    label="Python Executable"
+                    value={
+                      draft.services.backend.runtimeOptions.python
+                        .pythonExecutable
+                    }
+                    browse
+                    onChange={(value) =>
+                      updatePythonOption("pythonExecutable", value)
+                    }
+                    onBrowse={() =>
+                      browseFile(
+                        "Select Python executable",
+                        draft.services.backend.runtimeOptions.python
+                          .pythonExecutable,
+                        (value) =>
+                          updatePythonOption("pythonExecutable", value),
+                      )
+                    }
+                  />
+                </>
+              ) : null}
+              {draft.services.backend.runtime === "node" ? (
+                <>
+                  <label className="settings-field-row">
+                    <span>Package Manager</span>
+                    <select
+                      value={
+                        draft.services.backend.runtimeOptions.node
+                          .packageManager
+                      }
+                      onChange={(event) =>
+                        updateNodeOption("packageManager", event.target.value)
+                      }
+                    >
+                      <option value="npm">npm</option>
+                      <option value="yarn">yarn</option>
+                      <option value="pnpm">pnpm</option>
+                      <option value="bun">bun</option>
+                    </select>
+                    <span />
+                  </label>
+                  <FieldRow
+                    label="Node Executable"
+                    value={
+                      draft.services.backend.runtimeOptions.node.nodeExecutable
+                    }
+                    browse
+                    onChange={(value) =>
+                      updateNodeOption("nodeExecutable", value)
+                    }
+                    onBrowse={() =>
+                      browseFile(
+                        "Select Node executable",
+                        draft.services.backend.runtimeOptions.node
+                          .nodeExecutable,
+                        (value) => updateNodeOption("nodeExecutable", value),
+                      )
+                    }
+                  />
+                </>
+              ) : null}
             </Panel>
           </div>
         ) : null}
@@ -859,114 +1029,108 @@ export function SettingsContent({
 
         {activeSettingsTab === "builders" ? (
           <div className="builders-layout">
-            <Panel title="Maven Config" className="settings-form-panel">
-              <FieldRow
-                label="mvn.cmd Location"
-                value={draft.maven.executable}
-                browse
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    maven: { ...current.maven, executable: value },
-                  }))
-                }
-                onBrowse={() =>
-                  browseFile(
-                    "Select Maven executable",
-                    draft.maven.executable,
-                    (value) =>
-                      setDraft((current) => ({
-                        ...current,
-                        maven: { ...current.maven, executable: value },
-                      })),
-                    [
-                      {
-                        name: "Executables",
-                        extensions: ["cmd", "bat", "exe"],
-                      },
-                      { name: "All files", extensions: ["*"] },
-                    ],
-                  )
-                }
-              />
-              <FieldRow
-                label="settings.xml Path"
-                value={draft.maven.settingsXml}
-                browse
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    maven: { ...current.maven, settingsXml: value },
-                  }))
-                }
-                onBrowse={() =>
-                  browseFile(
-                    "Select Maven settings.xml",
-                    draft.maven.settingsXml,
-                    (value) =>
-                      setDraft((current) => ({
-                        ...current,
-                        maven: { ...current.maven, settingsXml: value },
-                      })),
-                    [
-                      { name: "XML", extensions: ["xml"] },
-                      { name: "All files", extensions: ["*"] },
-                    ],
-                  )
-                }
-              />
-              <FieldRow
-                label="pom.xml Path"
-                value={draft.maven.pomXml}
-                browse
-                onChange={(value) =>
-                  setDraft((current) => ({
-                    ...current,
-                    maven: { ...current.maven, pomXml: value },
-                  }))
-                }
-                onBrowse={() =>
-                  browseFile(
-                    "Select pom.xml",
-                    draft.maven.pomXml,
-                    (value) =>
-                      setDraft((current) => ({
-                        ...current,
-                        maven: { ...current.maven, pomXml: value },
-                      })),
-                    [
-                      { name: "Maven POM", extensions: ["xml"] },
-                      { name: "All files", extensions: ["*"] },
-                    ],
-                  )
-                }
-              />
-              <label className="skip-tests-row">
-                <span />
-                <span className="skip-tests-control">
-                  <input
-                    type="checkbox"
-                    checked={mavenConfigComplete && draft.maven.skipTests}
-                    disabled={!mavenConfigComplete}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        maven: {
-                          ...current.maven,
-                          skipTests: event.target.checked,
-                        },
-                      }))
+            <Panel
+              title={`${runtimeLabel(draft.services.backend.runtime)} Runtime`}
+              className="settings-form-panel"
+            >
+              {draft.services.backend.runtime === "wildfly" ? (
+                <>
+                  <FieldRow
+                    label="mvn.cmd Location"
+                    value={
+                      draft.services.backend.runtimeOptions.wildfly
+                        .mavenExecutable
+                    }
+                    browse
+                    onChange={(value) =>
+                      updateWildflyOption("mavenExecutable", value)
+                    }
+                    onBrowse={() =>
+                      browseFile(
+                        "Select Maven executable",
+                        draft.services.backend.runtimeOptions.wildfly
+                          .mavenExecutable,
+                        (value) =>
+                          updateWildflyOption("mavenExecutable", value),
+                        [
+                          { name: "Executables", extensions: ["cmd", "bat", "exe"] },
+                          { name: "All files", extensions: ["*"] },
+                        ],
+                      )
                     }
                   />
-                  Skip tests (-DskipTests)
-                </span>
-              </label>
+                  <FieldRow
+                    label="settings.xml Path"
+                    value={
+                      draft.services.backend.runtimeOptions.wildfly
+                        .mavenSettingsXml
+                    }
+                    browse
+                    onChange={(value) =>
+                      updateWildflyOption("mavenSettingsXml", value)
+                    }
+                    onBrowse={() =>
+                      browseFile(
+                        "Select Maven settings.xml",
+                        draft.services.backend.runtimeOptions.wildfly
+                          .mavenSettingsXml,
+                        (value) =>
+                          updateWildflyOption("mavenSettingsXml", value),
+                        [
+                          { name: "XML", extensions: ["xml"] },
+                          { name: "All files", extensions: ["*"] },
+                        ],
+                      )
+                    }
+                  />
+                  <FieldRow
+                    label="pom.xml Path"
+                    value={draft.services.backend.runtimeOptions.wildfly.pomXml}
+                    browse
+                    onChange={(value) => updateWildflyOption("pomXml", value)}
+                    onBrowse={() =>
+                      browseFile(
+                        "Select pom.xml",
+                        draft.services.backend.runtimeOptions.wildfly.pomXml,
+                        (value) => updateWildflyOption("pomXml", value),
+                        [
+                          { name: "Maven POM", extensions: ["xml"] },
+                          { name: "All files", extensions: ["*"] },
+                        ],
+                      )
+                    }
+                  />
+                  <label className="skip-tests-row">
+                    <span />
+                    <span className="skip-tests-control">
+                      <input
+                        type="checkbox"
+                        checked={
+                          draft.services.backend.runtimeOptions.wildfly
+                            .skipTests
+                        }
+                        onChange={(event) =>
+                          updateWildflyOption("skipTests", event.target.checked)
+                        }
+                      />
+                      Skip tests (-DskipTests)
+                    </span>
+                  </label>
+                </>
+              ) : (
+                <FieldRow
+                  label="Runtime"
+                  value={runtimeLabel(draft.services.backend.runtime)}
+                  onChange={() => undefined}
+                  readOnly
+                />
+              )}
             </Panel>
             <Panel
-              title="Build Profiles"
+              title="Builders"
               titleMeta={
                 <span className="build-profiles-count-badge">
-                  {draft.buildProfiles.length}
+                  {draft.builders.length}
                 </span>
               }
               action={
@@ -991,14 +1155,13 @@ export function SettingsContent({
                     <tr>
                       <th aria-label="Reorder"></th>
                       <th>Name</th>
-                      <th>Profile</th>
-                      <th>Goal</th>
+                      <th>Command</th>
                       <th>Confirm</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    {draft.buildProfiles.map((profile) => (
+                    {draft.builders.map((profile) => (
                       <tr
                         key={profile.id}
                         className={profileRowClass(profile)}
@@ -1074,35 +1237,16 @@ export function SettingsContent({
                         </td>
                         <td>
                           <input
-                            className={profileInputClass(
-                              profile.id,
-                              "profileName",
-                            )}
+                            className={profileInputClass(profile.id, "command")}
                             type="text"
-                            value={profile.profileName}
+                            value={profile.command}
                             aria-invalid={profileInputInvalid(
                               profile.id,
-                              "profileName",
+                              "command",
                             )}
                             onChange={(event) =>
                               updateProfile(profile.id, {
-                                profileName: event.target.value,
-                              })
-                            }
-                          />
-                        </td>
-                        <td>
-                          <input
-                            className={profileInputClass(profile.id, "goals")}
-                            type="text"
-                            value={profile.goals}
-                            aria-invalid={profileInputInvalid(
-                              profile.id,
-                              "goals",
-                            )}
-                            onChange={(event) =>
-                              updateProfile(profile.id, {
-                                goals: event.target.value,
+                                command: event.target.value,
                               })
                             }
                           />

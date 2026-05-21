@@ -12,11 +12,11 @@ import {
 } from "lucide-react";
 import { ConfirmDialog } from "../dialogs/ConfirmDialog";
 import type {
-  BuildProfileRecord,
   FontSizeMode,
   GitStatusRecord,
   ProjectSettingsRecord,
   RecentBuildRecord,
+  RuntimeBuilderRecord,
   ServiceName,
   ServiceStatusRecord,
 } from "../../types";
@@ -325,7 +325,7 @@ function BuildActionsDropdown({
   const [runningProfileName, setRunningProfileName] = useState<string | null>(
     null,
   );
-  const [pendingBuild, setPendingBuild] = useState<BuildProfileRecord | null>(
+  const [pendingBuild, setPendingBuild] = useState<RuntimeBuilderRecord | null>(
     null,
   );
   const [confirmGitStatus, setConfirmGitStatus] =
@@ -336,12 +336,12 @@ function BuildActionsDropdown({
   const latestBuildRunning = latestBuild?.status === "Running";
   const open = openMode !== null;
   const buildRunning = runningProfileId !== null || latestBuildRunning;
-  const wildflyStatus = statuses.find((status) => status.service === "wildfly");
-  const wildflyAvailable = wildflyStatus?.state === "running";
-  const buildDisabled = disabled || (!buildRunning && !wildflyAvailable);
+  const backendStatus = statuses.find((status) => status.service === "backend");
+  const backendAvailable = backendStatus?.state === "running";
+  const buildDisabled = disabled || (!buildRunning && !backendAvailable);
   const latestProfileUsedToday = findLatestBuildProfileUsedToday(
     recentBuilds,
-    settings.buildProfiles,
+    settings.builders,
   );
 
   useEffect(() => {
@@ -397,10 +397,10 @@ function BuildActionsDropdown({
       if (
         Number.isInteger(profileIndex) &&
         profileIndex >= 0 &&
-        profileIndex < settings.buildProfiles.length
+        profileIndex < settings.builders.length
       ) {
         event.preventDefault();
-        triggerBuild(settings.buildProfiles[profileIndex]);
+        triggerBuild(settings.builders[profileIndex]);
       }
     }
 
@@ -412,7 +412,7 @@ function BuildActionsDropdown({
     buildDisabled,
     buildRunning,
     projectId,
-    settings.buildProfiles,
+    settings.builders,
     gitStatus,
   ]);
 
@@ -426,7 +426,7 @@ function BuildActionsDropdown({
       .finally(() => setStoppingBuild(false));
   }
 
-  function runBuild(profile: BuildProfileRecord): void {
+  function runBuild(profile: RuntimeBuilderRecord): void {
     setRunningProfileId(profile.id);
     setRunningProfileName(profile.buttonName);
     window.ivsDashboard
@@ -438,7 +438,7 @@ function BuildActionsDropdown({
       });
   }
 
-  function triggerBuild(profile: BuildProfileRecord): void {
+  function triggerBuild(profile: RuntimeBuilderRecord): void {
     clearHoverCloseTimer();
     setOpenMode(null);
     if (profile.confirm) {
@@ -448,7 +448,7 @@ function BuildActionsDropdown({
     runBuild(profile);
   }
 
-  function openBuildConfirmation(profile: BuildProfileRecord): void {
+  function openBuildConfirmation(profile: RuntimeBuilderRecord): void {
     const requestId = confirmRequestRef.current + 1;
     confirmRequestRef.current = requestId;
     setPendingBuild(profile);
@@ -475,14 +475,14 @@ function BuildActionsDropdown({
     setPendingBuild(null);
   }
 
-  function confirmBuildTitle(profile: BuildProfileRecord): string {
-    const name = `${profile.buttonName} ${profile.profileName}`.toLowerCase();
+  function confirmBuildTitle(profile: RuntimeBuilderRecord): string {
+    const name = `${profile.buttonName} ${profile.command}`.toLowerCase();
     return name.includes("prod") || name.includes("production")
       ? "Run Production Build?"
       : `Run ${profile.buttonName} Build?`;
   }
 
-  function formatRunBuildLabel(profile: BuildProfileRecord): string {
+  function formatRunBuildLabel(profile: RuntimeBuilderRecord): string {
     return `Run ${truncateBuildProfileLabel(profile.buttonName)} Build`;
   }
 
@@ -528,7 +528,7 @@ function BuildActionsDropdown({
           aria-expanded={open}
           title={
             buildDisabled && !buildRunning
-              ? "Start WildFly before running a build"
+              ? "Start Backend before running a build"
               : latestProfileUsedToday
                 ? `Run ${latestProfileUsedToday.buttonName} Build`
                 : undefined
@@ -574,7 +574,7 @@ function BuildActionsDropdown({
           onMouseLeave={scheduleHoverDropdownClose}
         >
           <div className="build-dropdown-menu" role="menu">
-            {settings.buildProfiles.map((profile, index) => (
+            {settings.builders.map((profile, index) => (
               <button
                 type="button"
                 role="menuitem"
@@ -594,7 +594,7 @@ function BuildActionsDropdown({
                 <kbd>Ctrl+{index + 1}</kbd>
               </button>
             ))}
-            {settings.buildProfiles.length === 0 ? (
+            {settings.builders.length === 0 ? (
               <button
                 type="button"
                 role="menuitem"
@@ -640,7 +640,7 @@ function BuildConfirmDetails({
   profile,
   gitStatus,
 }: {
-  profile: BuildProfileRecord;
+  profile: RuntimeBuilderRecord;
   gitStatus: GitStatusRecord;
 }): JSX.Element {
   const changeLines = gitChangeLines(gitStatus);
@@ -657,8 +657,8 @@ function BuildConfirmDetails({
     ["Branch", gitStatus.branch || "unavailable"],
     ["Commit", gitStatus.commit ? `@${gitStatus.commit}` : "unavailable"],
     ["Git status", statusLabel],
-    ["Profile", profile.profileName],
-    ["Goal", profile.goals],
+    ["Builder", profile.buttonName],
+    ["Command", profile.command],
   ];
 
   return (
@@ -675,8 +675,8 @@ function BuildConfirmDetails({
 
 function findLatestBuildProfileUsedToday(
   builds: RecentBuildRecord[],
-  profiles: BuildProfileRecord[],
-): BuildProfileRecord | null {
+  profiles: RuntimeBuilderRecord[],
+): RuntimeBuilderRecord | null {
   const todayBuild = builds.find((build) => isLocalToday(build.startedAt));
   if (!todayBuild) {
     return null;
@@ -687,8 +687,8 @@ function findLatestBuildProfileUsedToday(
     profiles.find((profile) =>
       [
         profile.buttonName,
-        profile.profileName,
-        `${profile.buttonName} ${profile.profileName}`,
+        profile.command,
+        `${profile.buttonName} ${profile.command}`,
       ]
         .map((value) => value.trim().toLowerCase())
         .includes(normalizedBuildProfile),
@@ -788,7 +788,7 @@ function ServiceControlGroup({
       {(
         [
           ["frontend", "Frontend"],
-          ["wildfly", "WildFly"],
+          ["backend", "Backend"],
         ] as const
       ).map(([service, label]) => {
         const serviceName = service as ServiceName;

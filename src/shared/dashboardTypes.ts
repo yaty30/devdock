@@ -4,7 +4,7 @@ import type {
   ChatUserProfile,
 } from "./chatTypes";
 
-export type ServiceName = "frontend" | "wildfly";
+export type ServiceName = "frontend" | "backend";
 export type ServiceAction = "start" | "stop" | "restart";
 export type ServiceState =
   | "running"
@@ -17,7 +17,8 @@ export type BuildOutcomeType = "build-only" | "build-and-deploy";
 export type BuildStatus = "running" | "success" | "failed" | "stopped";
 export type ActivityTone = "success" | "accent" | "info" | "neutral" | "failed";
 export type ActivityKind = "service" | "build" | "git" | "system";
-export type LogChannel = "frontend" | "wildfly" | "build" | "tail";
+export type LogChannel = "frontend" | "backend" | "build" | "tail";
+export type BackendRuntime = "wildfly" | "python" | "node";
 
 export type LogLine = {
   seq: number;
@@ -65,8 +66,44 @@ export type ServiceConfig = {
   command: string;
   healthUrl: string;
   appUrl?: string;
-  managementUrl?: string;
   autoStart?: boolean;
+};
+
+export type WildflyRuntimeOptions = {
+  managementUrl: string;
+  readyLogFragment: string;
+  mavenExecutable: string;
+  mavenSettingsXml: string;
+  pomXml: string;
+  skipTests: boolean;
+};
+
+export type PythonRuntimeOptions = {
+  venvDirectory: string;
+  pythonExecutable: string;
+};
+
+export type NodeRuntimeOptions = {
+  packageManager: "npm" | "yarn" | "pnpm" | "bun";
+  nodeExecutable: string;
+};
+
+export type BackendServiceConfig = ServiceConfig & {
+  runtime: BackendRuntime;
+  logFile: string;
+  runtimeOptions: {
+    wildfly: WildflyRuntimeOptions;
+    python: PythonRuntimeOptions;
+    node: NodeRuntimeOptions;
+  };
+};
+
+export type RuntimeBuilderRecord = {
+  id: string;
+  buttonName: string;
+  command: string;
+  confirm: boolean;
+  outcomeType: BuildOutcomeType;
 };
 
 export type MavenConfig = {
@@ -86,13 +123,14 @@ export type BuildProfileRecord = {
 };
 
 export type ProjectSettingsRecord = {
-  appLogFile: string;
   gitProjectDirectory: string;
   defaultBranch: string;
   remote: string;
-  services: Record<ServiceName, ServiceConfig>;
-  maven: MavenConfig;
-  buildProfiles: BuildProfileRecord[];
+  services: {
+    frontend: ServiceConfig;
+    backend: BackendServiceConfig;
+  };
+  builders: RuntimeBuilderRecord[];
 };
 
 export type ServiceStatusRecord = {
@@ -175,8 +213,8 @@ export type ProjectDashboardSummary = {
   lastBuild?: RecentBuildRecord;
   serviceUrls: {
     frontendUrl: string;
-    wildflyConsoleUrl: string;
-    wildflyKmuUrl: string;
+    backendUrl: string;
+    backendManagementUrl: string;
   };
 };
 

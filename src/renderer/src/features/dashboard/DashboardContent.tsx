@@ -511,12 +511,21 @@ function BuildStatusPanel({
       action={
         <ActionLink
           onClick={() => {
-            const pomPath = projectState.settings.maven.pomXml;
-            const targetPath = pomPath.replace(/[\\/][^\\/]+$/, "\\target");
-            void window.ivsDashboard.openPath(targetPath);
+            const backend = projectState.settings.services.backend;
+            const targetPath =
+              backend.runtime === "wildfly" &&
+              backend.runtimeOptions.wildfly.pomXml
+                ? backend.runtimeOptions.wildfly.pomXml.replace(
+                    /[\\/][^\\/]+$/,
+                    "\\target",
+                  )
+                : backend.workingDirectory;
+            if (targetPath) {
+              void window.ivsDashboard.openPath(targetPath);
+            }
           }}
         >
-          Open WAR folder
+          Open build folder
         </ActionLink>
       }
       className="build-status-panel"
@@ -936,7 +945,7 @@ function ProjectStatusRow({
   now: number;
 }): JSX.Element {
   const frontend = serviceStatus(summary, "frontend");
-  const wildfly = serviceStatus(summary, "wildfly");
+  const backend = serviceStatus(summary, "backend");
   const overallStatus = projectOverallStatus(summary);
   const lastBuild = summary.lastBuild;
 
@@ -952,7 +961,7 @@ function ProjectStatusRow({
               <strong>{summary.project.id}</strong>
               <i />
               <span>Services</span>
-              <strong>Frontend / WildFly</strong>
+              <strong>Frontend / Backend</strong>
             </div>
           </div>
         </div>
@@ -1010,33 +1019,33 @@ function ProjectStatusRow({
         <section className="dashboard-project-detail">
           <header>
             <Layers3 size={18} />
-            <h3>WildFly</h3>
-            {statusPill(wildfly?.state)}
+            <h3>Backend</h3>
+            {statusPill(backend?.state)}
           </header>
           <DashboardDetailRow label="Console">
-            {summary.serviceUrls.wildflyConsoleUrl ? (
+            {summary.serviceUrls.backendManagementUrl ? (
               <a
                 className="monitor-link"
-                href={summary.serviceUrls.wildflyConsoleUrl}
+                href={summary.serviceUrls.backendManagementUrl}
                 target="_blank"
                 rel="noreferrer"
               >
-                <span>{summary.serviceUrls.wildflyConsoleUrl}</span>
+                <span>{summary.serviceUrls.backendManagementUrl}</span>
                 <ExternalLink size={13} />
               </a>
             ) : (
               <strong>Not set</strong>
             )}
           </DashboardDetailRow>
-          <DashboardDetailRow label="KMU">
-            {summary.serviceUrls.wildflyKmuUrl ? (
+          <DashboardDetailRow label="URL">
+            {summary.serviceUrls.backendUrl ? (
               <a
                 className="monitor-link"
-                href={summary.serviceUrls.wildflyKmuUrl}
+                href={summary.serviceUrls.backendUrl}
                 target="_blank"
                 rel="noreferrer"
               >
-                <span>{summary.serviceUrls.wildflyKmuUrl}</span>
+                <span>{summary.serviceUrls.backendUrl}</span>
                 <ExternalLink size={13} />
               </a>
             ) : (
@@ -1053,8 +1062,8 @@ function ProjectStatusRow({
           <DashboardDetailRow label="Frontend">
             <strong>{formatServiceUptime(frontend, now)}</strong>
           </DashboardDetailRow>
-          <DashboardDetailRow label="WildFly">
-            <strong>{formatServiceUptime(wildfly, now)}</strong>
+          <DashboardDetailRow label="Backend">
+            <strong>{formatServiceUptime(backend, now)}</strong>
           </DashboardDetailRow>
         </section>
 
@@ -1175,8 +1184,8 @@ function projectOverallStatus(summary: ProjectDashboardSummary): {
   tone: "success" | "warning" | "failed" | "idle";
 } {
   const frontend = serviceStatus(summary, "frontend");
-  const wildfly = serviceStatus(summary, "wildfly");
-  const states = [frontend?.state, wildfly?.state];
+  const backend = serviceStatus(summary, "backend");
+  const states = [frontend?.state, backend?.state];
 
   if (states.every((state) => state === "running")) {
     return { label: "All Services Running", tone: "success" };
@@ -1236,9 +1245,9 @@ export function ProjectDashboardContent({
   projectState: ProjectRuntimeState;
 }): JSX.Element {
   const frontendStatus = serviceStatus(projectState, "frontend");
-  const wildflyStatus = serviceStatus(projectState, "wildfly");
+  const backendStatus = serviceStatus(projectState, "backend");
   const frontendRunning = frontendStatus?.state === "running";
-  const wildflyRunning = wildflyStatus?.state === "running";
+  const backendRunning = backendStatus?.state === "running";
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
@@ -1506,25 +1515,25 @@ export function ProjectDashboardContent({
         />
         <BuildStatusPanel projectId={projectId} projectState={projectState} />
         <LogPanel
-          title="WildFly"
+          title="Backend"
           projectId={projectId}
-          channel="wildfly"
+          channel="backend"
           footer="Open full log"
-          className="wildfly-panel"
+          className="backend-panel"
           dense
           colorize={false}
-          serviceState={wildflyStatus?.state}
-          openDisabled={!wildflyRunning}
+          serviceState={backendStatus?.state}
+          openDisabled={!backendRunning}
           suspendAutoFollow={isResizing}
-          onOpen={() => void window.ivsDashboard.openLog(projectId, "wildfly")}
+          onOpen={() => void window.ivsDashboard.openLog(projectId, "backend")}
           onZoom={() =>
             setZoomLog({
-              title: "WildFly",
-              channel: "wildfly",
+              title: "Backend",
+              channel: "backend",
               footer: "Open full log",
-              className: "wildfly-panel log-zoom-panel",
-              serviceState: wildflyStatus?.state,
-              openDisabled: !wildflyRunning,
+              className: "backend-panel log-zoom-panel",
+              serviceState: backendStatus?.state,
+              openDisabled: !backendRunning,
               dense: true,
               colorize: false,
             })

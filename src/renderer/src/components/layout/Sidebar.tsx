@@ -394,7 +394,7 @@ export function Sidebar({
                             className={`project-service-dot ${getServiceState(projectStatuses[project.id], "frontend")}`}
                           />
                           <span
-                            className={`project-service-dot ${getServiceState(projectStatuses[project.id], "wildfly")}`}
+                            className={`project-service-dot ${getServiceState(projectStatuses[project.id], "backend")}`}
                           />
                         </div>
                       </div>
@@ -711,11 +711,11 @@ export function Sidebar({
                       "frontend",
                     )}
                   />
-                  <ProjectServiceRow
+                    <ProjectServiceRow
                     label="Backend"
                     state={getServiceState(
                       projectStatuses[project.id],
-                      "wildfly",
+                      "backend",
                     )}
                   />
                 </button>
@@ -1124,7 +1124,7 @@ function formatDatabaseConnectionTarget(
 
 function getServiceState(
   statuses: ServiceStatusRecord[] | undefined,
-  service: "frontend" | "wildfly",
+  service: "frontend" | "backend",
 ): string {
   return statuses?.find((s) => s.service === service)?.state ?? "unknown";
 }
@@ -1147,7 +1147,7 @@ function ServiceStatusTooltip({
   statuses: ServiceStatusRecord[] | undefined;
 }): JSX.Element {
   const frontendState = getServiceState(statuses, "frontend");
-  const wildflyState = getServiceState(statuses, "wildfly");
+  const backendState = getServiceState(statuses, "backend");
   return (
     <span className="service-status-tooltip">
       <span className="service-status-tooltip-row">
@@ -1158,8 +1158,8 @@ function ServiceStatusTooltip({
       </span>
       <span className="service-status-tooltip-row">
         <span className="service-status-tooltip-label">Backend</span>
-        <span className={`service-status-tooltip-state ${wildflyState}`}>
-          {wildflyState}
+        <span className={`service-status-tooltip-state ${backendState}`}>
+          {backendState}
         </span>
       </span>
     </span>

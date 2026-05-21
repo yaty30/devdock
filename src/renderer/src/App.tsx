@@ -1803,7 +1803,7 @@ function App(): JSX.Element {
                   >
                     <div className="shutdown-service-label">
                       <strong>
-                        {entry.service === "wildfly" ? "WildFly" : "Frontend"}
+                        {entry.service === "backend" ? "Backend" : "Frontend"}
                       </strong>
                       <span>{entry.projectName}</span>
                     </div>
@@ -2267,7 +2267,6 @@ function applyDashboardOverviewStatusEvent(
 function createLoadingProjectState(): ProjectRuntimeState {
   return {
     settings: {
-      appLogFile: "",
       gitProjectDirectory: "",
       defaultBranch: "",
       remote: "",
@@ -2279,22 +2278,35 @@ function createLoadingProjectState(): ProjectRuntimeState {
           appUrl: "",
           autoStart: false,
         },
-        wildfly: {
+        backend: {
+          runtime: "wildfly",
           workingDirectory: "",
           command: "",
           healthUrl: "",
           appUrl: "",
-          managementUrl: "",
           autoStart: false,
+          logFile: "",
+          runtimeOptions: {
+            wildfly: {
+              managementUrl: "",
+              readyLogFragment: "Admin console listening on",
+              mavenExecutable: "",
+              mavenSettingsXml: "",
+              pomXml: "",
+              skipTests: false,
+            },
+            python: {
+              venvDirectory: "",
+              pythonExecutable: "",
+            },
+            node: {
+              packageManager: "npm",
+              nodeExecutable: "",
+            },
+          },
         },
       },
-      maven: {
-        executable: "",
-        settingsXml: "",
-        pomXml: "",
-        skipTests: false,
-      },
-      buildProfiles: [],
+      builders: [],
     },
     statuses: [],
     recentBuilds: [],
@@ -2308,7 +2320,7 @@ function createLoadingProjectState(): ProjectRuntimeState {
     },
     logs: {
       frontend: [],
-      wildfly: [],
+      backend: [],
       build: [],
       tail: [],
     },

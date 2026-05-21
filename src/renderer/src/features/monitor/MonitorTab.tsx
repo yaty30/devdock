@@ -778,7 +778,7 @@ export function MonitorTab({
           className="grid-splitter monitor-column-splitter monitor-column-splitter-one"
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize Frontend and WildFly monitor columns"
+          aria-label="Resize Frontend and Backend monitor columns"
           onPointerDown={(event) => startResize("column-1", event)}
           onPointerMove={resizeLayout}
           onPointerUp={stopResize}
@@ -788,7 +788,7 @@ export function MonitorTab({
           className="grid-splitter monitor-column-splitter monitor-column-splitter-two"
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize WildFly and Consoles monitor columns"
+          aria-label="Resize Backend and Consoles monitor columns"
           onPointerDown={(event) => startResize("column-2", event)}
           onPointerMove={resizeLayout}
           onPointerUp={stopResize}
@@ -829,8 +829,8 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
   const frontendStatus = projectState.statuses.find(
     (status) => status.service === "frontend",
   );
-  const wildflyStatus = projectState.statuses.find(
-    (status) => status.service === "wildfly",
+  const backendStatus = projectState.statuses.find(
+    (status) => status.service === "backend",
   );
   const lastBuild = projectState.recentBuilds[0];
 
@@ -856,18 +856,21 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
       ],
     },
     {
-      title: "WildFly",
+      title: `Backend (${runtimeLabel(projectState.settings.services.backend.runtime)})`,
       icon: <Layers3 size={26} />,
       rows: [
-        { label: "Status", value: statusPill(wildflyStatus?.state) },
+        { label: "Status", value: statusPill(backendStatus?.state) },
         {
           label: "Console",
           value:
-            projectState.settings.services.wildfly.managementUrl || "Not set",
+            projectState.settings.services.backend.runtime === "wildfly"
+              ? projectState.settings.services.backend.runtimeOptions.wildfly
+                  .managementUrl || "Not set"
+              : "Not set",
         },
         {
-          label: "KMU",
-          value: projectState.settings.services.wildfly.appUrl || "Not set",
+          label: "URL",
+          value: projectState.settings.services.backend.appUrl || "Not set",
         },
       ],
     },
@@ -880,8 +883,8 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
           value: formatUptime(frontendStatus?.startedAt, frontendStatus?.state),
         },
         {
-          label: "WildFly",
-          value: formatUptime(wildflyStatus?.startedAt, wildflyStatus?.state),
+          label: "Backend",
+          value: formatUptime(backendStatus?.startedAt, backendStatus?.state),
         },
       ],
     },
@@ -932,6 +935,16 @@ function statusPill(state: string | undefined): JSX.Element {
                 : "Unknown";
 
   return <span className={`status-pill ${statusClass}`}>{text}</span>;
+}
+
+function runtimeLabel(runtime: ProjectRuntimeState["settings"]["services"]["backend"]["runtime"]): string {
+  if (runtime === "wildfly") {
+    return "WildFly";
+  }
+  if (runtime === "python") {
+    return "Python";
+  }
+  return "Node";
 }
 
 function buildStatusClass(status: RecentBuildRecord["status"]): string {

@@ -33,8 +33,9 @@ import type {
   ActivityRecord,
   ActivityTone,
   ApiTesterSavedRequestRecord,
+  BackendRuntime,
+  BackendServiceConfig,
   BuildOutcomeType,
-  BuildProfileRecord,
   BuildQueryOptions,
   BuildQueryResult,
   BuildQuerySortKey,
@@ -59,7 +60,9 @@ import type {
   ProjectRuntimeState,
   ProjectSettingsRecord,
   RecentBuildRecord,
+  RuntimeBuilderRecord,
   ServiceAction,
+  ServiceConfig,
   ServiceName,
   ServiceState,
   ServiceStatusRecord,
@@ -262,7 +265,13 @@ const LOG_BATCH_FLUSH_MS = 50;
 const STATUS_INTERVAL_MS = 5000;
 const TAIL_INTERVAL_MS = 1000;
 const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
-const WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
+const DEFAULT_WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
+const PROJECT_SERVICES: ServiceName[] = ["frontend", "backend"];
+const PERSISTED_LOG_CHANNELS: Exclude<LogChannel, "tail">[] = [
+  "frontend",
+  "backend",
+  "build",
+];
 const RETENTION_DAYS = 3;
 const DATABASE_EXECUTION_HISTORY_LIMIT = 1000;
 const EMPTY_SHEET_CONTENT: SheetContentJson = {
@@ -1394,8 +1403,14 @@ export class DashboardBackend {
           frontendUrl:
             settings.services.frontend.appUrl ||
             settings.services.frontend.healthUrl,
-          wildflyConsoleUrl: settings.services.wildfly.managementUrl || "",
-          wildflyKmuUrl: settings.services.wildfly.appUrl || "",
+          backendUrl:
+            settings.services.backend.appUrl ||
+            settings.services.backend.healthUrl,
+          backendManagementUrl:
+            settings.services.backend.runtime === "wildfly"
+              ? settings.services.backend.runtimeOptions.wildfly
+                  .managementUrl || ""
+              : "",
         },
       };
     });
@@ -1404,7 +1419,7 @@ export class DashboardBackend {
   getProjectState(projectId: string): ProjectRuntimeState {
     const settings = this.getSettings(projectId);
     this.ensureStatusPolling(projectId);
-    this.ensureTail(projectId, settings.appLogFile);
+    this.ensureTail(projectId, settings.services.backend.logFile);
 
     return {
       settings,
@@ -1414,7 +1429,7 @@ export class DashboardBackend {
       gitStatus: this.getGitStatus(projectId),
       logs: {
         frontend: this.getLog(projectId, "frontend"),
-        wildfly: this.getLog(projectId, "wildfly"),
+        backend: this.getLog(projectId, "backend"),
         build: this.getLog(projectId, "build"),
         tail: [],
       },
@@ -1422,7 +1437,11 @@ export class DashboardBackend {
   }
 
   getWarDirectory(projectId: string): string | null {
-    const pomXml = this.getSettings(projectId).maven.pomXml.trim();
+    const backend = this.getSettings(projectId).services.backend;
+    if (backend.runtime !== "wildfly") {
+      return null;
+    }
+    const pomXml = backend.runtimeOptions.wildfly.pomXml.trim();
     if (!pomXml) {
       return null;
     }
@@ -1435,7 +1454,7 @@ export class DashboardBackend {
     const startedCommands = new Set<string>();
 
     for (const project of projects) {
-      for (const service of ["frontend", "wildfly"] as ServiceName[]) {
+      for (const service of PROJECT_SERVICES) {
         const settings = this.getSettings(project.id);
         const config = settings.services[service];
         if (!config.autoStart) continue;
@@ -1714,17 +1733,15 @@ export class DashboardBackend {
     settings: ProjectSettingsRecord,
   ): string[] {
     const errors = validateProjectIdentity(name.trim(), code.trim());
-    const appLogFile = settings.appLogFile.trim();
     const frontend = settings.services.frontend;
-    const wildfly = settings.services.wildfly;
+    const backend = settings.services.backend;
     const frontendDirectory = frontend.workingDirectory.trim();
-    const wildflyDirectory = wildfly.workingDirectory.trim();
+    const backendDirectory = backend.workingDirectory.trim();
+    const backendLogFile = backend.logFile.trim();
     const gitProjectDirectory = settings.gitProjectDirectory.trim();
 
-    if (!appLogFile) {
-      errors.push("Application log file is required");
-    } else if (!isExistingFile(appLogFile)) {
-      errors.push(`Application log file does not exist: ${appLogFile}`);
+    if (backendLogFile && !isExistingFile(backendLogFile)) {
+      errors.push(`Backend log file does not exist: ${backendLogFile}`);
     }
 
     if (frontendDirectory) {
@@ -1742,20 +1759,25 @@ export class DashboardBackend {
       }
     }
 
-    if (wildflyDirectory) {
-      if (!isExistingDirectory(wildflyDirectory)) {
-        errors.push(
-          `WildFly bin directory does not exist: ${wildflyDirectory}`,
-        );
+    if (backendDirectory) {
+      if (!isExistingDirectory(backendDirectory)) {
+        errors.push(`Backend directory does not exist: ${backendDirectory}`);
       }
-      if (!wildfly.command.trim()) {
-        errors.push("WildFly start command is required");
+      if (!backend.command.trim()) {
+        errors.push("Backend start command is required");
       }
-      if (!wildfly.healthUrl.trim()) {
-        errors.push("WildFly health URL is required");
+      if (!backend.healthUrl.trim()) {
+        errors.push("Backend health URL is required");
       }
-      errors.push(...validateMavenConfig(settings.maven));
+      if (backend.runtime === "wildfly") {
+        errors.push(...validateWildflyOptions(backend));
+      }
+      if (backend.runtime === "python") {
+        errors.push(...validatePythonOptions(backend));
+      }
     }
+
+    errors.push(...validateRuntimeBuilders(settings.builders));
 
     if (!gitProjectDirectory) {
       errors.push("Git project directory is required");
@@ -1770,7 +1792,7 @@ export class DashboardBackend {
 
   async deleteProject(projectId: string): Promise<void> {
     // stop any running services
-    for (const service of ["frontend", "wildfly"] as ServiceName[]) {
+    for (const service of PROJECT_SERVICES) {
       const key = `${projectId}:${service}`;
       const proc = this.serviceProcesses.get(key);
       if (proc) {
@@ -1812,7 +1834,7 @@ export class DashboardBackend {
       rmSync(configDir, { recursive: true, force: true });
     }
     // clear in-memory logs
-    for (const channel of ["frontend", "wildfly", "build"] as LogChannel[]) {
+    for (const channel of PERSISTED_LOG_CHANNELS) {
       const key = `${projectId}:${channel}`;
       this.logs.delete(key);
       this.logSeqMap.delete(key);
@@ -1826,7 +1848,7 @@ export class DashboardBackend {
     const previousSettings = this.getSettings(projectId);
     const activityEntries = settingsActivityEntries(previousSettings, settings);
     this.writeProjectConfig(projectId, settings);
-    this.ensureTail(projectId, settings.appLogFile, true);
+    this.ensureTail(projectId, settings.services.backend.logFile, true);
     this.send({ type: "settings", projectId, settings });
     for (const entry of activityEntries) {
       this.insertActivity(
@@ -1874,18 +1896,18 @@ export class DashboardBackend {
     }
 
     const settings = this.getSettings(projectId);
-    const profile = settings.buildProfiles.find(
+    const profile = settings.builders.find(
       (item) => item.id === profileId,
     );
     if (!profile) {
-      throw new Error(`Unknown build profile: ${profileId}`);
+      throw new Error(`Unknown builder: ${profileId}`);
     }
 
     const startedAt = new Date();
     const git = this.getGitStatus(projectId);
     const commitCleanliness = buildCleanlinessFromGitStatus(git);
-    const environment = environmentFromProfile(profile.profileName);
-    const commandText = composeMavenCommand(settings, profile);
+    const environment = environmentFromProfile(profile.buttonName);
+    const commandText = composeRuntimeBuildCommand(profile);
 
     this.clearLog(projectId, "build");
     this.appendLog(projectId, "build", stamp(`$ ${commandText}`));
@@ -1898,7 +1920,7 @@ export class DashboardBackend {
       )
       .run(
         projectId,
-        profile.profileName,
+        settings.services.backend.runtime,
         profile.buttonName,
         git.branch,
         git.commit,
@@ -2006,7 +2028,7 @@ export class DashboardBackend {
   async refreshStatus(projectId: string): Promise<ServiceStatusRecord[]> {
     const settings = this.getSettings(projectId);
     const statuses = await Promise.all(
-      (["frontend", "wildfly"] as ServiceName[]).map(async (service) => {
+      PROJECT_SERVICES.map(async (service) => {
         const config = settings.services[service];
         const processKey = serviceProcessKey(projectId, service);
         const runningProcess = this.serviceProcesses.get(processKey);
@@ -2070,13 +2092,19 @@ export class DashboardBackend {
         }
 
         const health = await checkUrl(config.healthUrl);
+        const wildflyBackend =
+          service === "backend" && settings.services.backend.runtime === "wildfly";
+        const readyFragment =
+          wildflyBackend
+            ? getWildflyReadyLogFragment(settings.services.backend)
+            : "";
         const reachable =
-          health.ok || (service === "wildfly" && health.reachable);
-        const wildflyReadyByLog =
-          service === "wildfly" && Boolean(runningProcess?.readyLogAt);
+          health.ok || (wildflyBackend && health.reachable);
+        const backendReadyByLog =
+          wildflyBackend && Boolean(runningProcess?.readyLogAt);
         const canReportRunning =
-          service === "wildfly"
-            ? wildflyReadyByLog || (!runningProcess && reachable)
+          wildflyBackend
+            ? backendReadyByLog || (!runningProcess && reachable)
             : reachable;
         const startedAt =
           runningProcess?.startedAt ||
@@ -2101,8 +2129,8 @@ export class DashboardBackend {
                 ? "failed"
                 : "stopped",
           message:
-            service === "wildfly" && reachable && !canReportRunning
-              ? `Waiting for "${WILDFLY_READY_LOG_FRAGMENT}"`
+            wildflyBackend && reachable && !canReportRunning
+              ? `Waiting for "${readyFragment}"`
               : health.message,
           url: config.healthUrl,
           checkedAt: new Date().toISOString(),
@@ -2127,9 +2155,9 @@ export class DashboardBackend {
 
   getLogFilePath(projectId: string, channel: LogChannel): string {
     if (channel === "tail") {
-      const appLogFile = this.getSettings(projectId).appLogFile.trim();
-      if (appLogFile) {
-        return appLogFile;
+      const logFile = this.getSettings(projectId).services.backend.logFile.trim();
+      if (logFile) {
+        return logFile;
       }
     }
     const filePath = this.projectLogPath(projectId, channel);
@@ -2566,7 +2594,6 @@ export class DashboardBackend {
 
   private defaultSettings(_projectId: string): ProjectSettingsRecord {
     return {
-      appLogFile: "",
       gitProjectDirectory: "",
       defaultBranch: "",
       remote: "",
@@ -2577,21 +2604,17 @@ export class DashboardBackend {
           healthUrl: "",
           appUrl: "",
         },
-        wildfly: {
+        backend: {
+          runtime: "wildfly",
           workingDirectory: "",
           command: "",
           healthUrl: "",
           appUrl: "",
-          managementUrl: "",
+          logFile: "",
+          runtimeOptions: defaultBackendRuntimeOptions(),
         },
       },
-      maven: {
-        executable: "",
-        settingsXml: "",
-        pomXml: "",
-        skipTests: false,
-      },
-      buildProfiles: [],
+      builders: [],
     };
   }
 
@@ -2599,9 +2622,7 @@ export class DashboardBackend {
     const configPath = this.projectConfigPath(projectId);
     if (existsSync(configPath)) {
       try {
-        return JSON.parse(
-          readFileSync(configPath, "utf8"),
-        ) as ProjectSettingsRecord;
+        return normalizeProjectSettings(JSON.parse(readFileSync(configPath, "utf8")));
       } catch (error) {
         console.error(
           `[settings:${projectId}] Failed to read app.config`,
@@ -2690,6 +2711,10 @@ export class DashboardBackend {
       cwd: config.workingDirectory,
       shell: true,
       windowsHide: true,
+      env:
+        service === "backend"
+          ? backendProcessEnv(settings.services.backend)
+          : process.env,
     }) as ChildProcessWithoutNullStreams;
     const startedAt = new Date().toISOString();
     this.explicitlyStoppedServices.delete(key);
@@ -2833,7 +2858,7 @@ export class DashboardBackend {
   private spawnBuild(
     projectId: string,
     settings: ProjectSettingsRecord,
-    profile: BuildProfileRecord,
+    profile: RuntimeBuilderRecord,
     rowId: number,
   ): Promise<BuildResult> {
     return new Promise((resolvePromise) => {
@@ -2847,70 +2872,28 @@ export class DashboardBackend {
         this.flushLogBuffer();
         resolvePromise(result);
       };
-      const executable = settings.maven.executable;
-      const pomDir = dirname(settings.maven.pomXml);
-
-      if (!executable || !existsSync(executable)) {
-        this.appendLog(
-          projectId,
-          "build",
-          stamp(`Maven executable does not exist: ${executable}`),
-        );
+      const command = profile.command.trim();
+      if (!command) {
+        this.appendLog(projectId, "build", stamp("Build command is empty"));
         resolveOnce("failed");
         return;
       }
 
-      if (!settings.maven.pomXml || !existsSync(settings.maven.pomXml)) {
-        this.appendLog(
-          projectId,
-          "build",
-          stamp(`pom.xml does not exist: ${settings.maven.pomXml}`),
-        );
-        resolveOnce("failed");
-        return;
-      }
-
-      if (
-        settings.maven.settingsXml &&
-        !existsSync(settings.maven.settingsXml)
-      ) {
-        this.appendLog(
-          projectId,
-          "build",
-          stamp(`settings.xml does not exist: ${settings.maven.settingsXml}`),
-        );
-        resolveOnce("failed");
-        return;
-      }
-
-      const args = ["-P", profile.profileName, ...splitCommand(profile.goals)];
-      if (settings.maven.settingsXml) {
-        args.push("--settings", settings.maven.settingsXml);
-      }
-      if (settings.maven.skipTests) {
-        args.push("-DskipTests");
-      }
-      args.push("-f", settings.maven.pomXml);
-
-      const isWindowsScript =
-        process.platform === "win32" && /\.(?:cmd|bat)$/i.test(executable);
+      const backend = settings.services.backend;
+      const cwd =
+        backend.workingDirectory && existsSync(backend.workingDirectory)
+          ? backend.workingDirectory
+          : settings.gitProjectDirectory && existsSync(settings.gitProjectDirectory)
+            ? settings.gitProjectDirectory
+            : undefined;
       let child: ChildProcessWithoutNullStreams;
       try {
-        child = isWindowsScript
-          ? spawn(
-              process.env.ComSpec ?? "cmd.exe",
-              ["/d", "/s", "/c", executable, ...args],
-              {
-                cwd: existsSync(pomDir) ? pomDir : undefined,
-                shell: false,
-                windowsHide: true,
-              },
-            )
-          : spawn(executable, args, {
-              cwd: existsSync(pomDir) ? pomDir : undefined,
-              shell: false,
-              windowsHide: true,
-            });
+        child = spawn(command, {
+          cwd,
+          shell: true,
+          windowsHide: true,
+          env: backendProcessEnv(backend),
+        }) as ChildProcessWithoutNullStreams;
       } catch (error) {
         this.appendLog(
           projectId,
@@ -2955,17 +2938,21 @@ export class DashboardBackend {
       )
       .all(projectId) as ServiceStatusRecord[];
 
-    if (rows.length > 0) {
-      return rows;
-    }
-
-    return (["frontend", "wildfly"] as ServiceName[]).map((service) =>
-      this.statusRecord(
-        service,
-        "unknown",
-        "Not checked",
-        this.getSettings(projectId).services[service].healthUrl,
-      ),
+    const rowMap = new Map(
+      rows
+        .filter((row) => PROJECT_SERVICES.includes(row.service))
+        .map((row) => [row.service, row]),
+    );
+    const settings = this.getSettings(projectId);
+    return PROJECT_SERVICES.map(
+      (service) =>
+        rowMap.get(service) ??
+        this.statusRecord(
+          service,
+          "unknown",
+          "Not checked",
+          settings.services[service].healthUrl,
+        ),
     );
   }
 
@@ -3025,21 +3012,27 @@ export class DashboardBackend {
   }
 
   private statusFromProcess(
-    _projectId: string,
+    projectId: string,
     service: ServiceName,
     processState: ServiceProcess | undefined,
     fallbackMessage: string,
   ): ServiceStatusRecord {
+    const settings = this.getSettings(projectId);
+    const wildflyBackend =
+      service === "backend" && settings.services.backend.runtime === "wildfly";
+    const waitingMessage = `Waiting for "${getWildflyReadyLogFragment(
+      settings.services.backend,
+    )}"`;
     return this.statusRecord(
       service,
       processState
-        ? service === "wildfly" && !processState.readyLogAt
+        ? wildflyBackend && !processState.readyLogAt
           ? "starting"
           : "running"
         : "unknown",
       processState
-        ? service === "wildfly" && !processState.readyLogAt
-          ? `Waiting for "${WILDFLY_READY_LOG_FRAGMENT}"`
+        ? wildflyBackend && !processState.readyLogAt
+          ? waitingMessage
           : "Process running"
         : fallbackMessage,
       undefined,
@@ -3288,22 +3281,26 @@ export class DashboardBackend {
     channel: LogChannel,
     line: string,
   ): void {
-    if (channel !== "frontend" && channel !== "wildfly") {
+    if (channel !== "frontend" && channel !== "backend") {
       return;
     }
 
     const processState = this.serviceProcesses.get(
       serviceProcessKey(projectId, channel),
     );
+    const settings = this.getSettings(projectId);
+    const backend = settings.services.backend;
+    const wildflyBackend = channel === "backend" && backend.runtime === "wildfly";
+    const readyFragment = getWildflyReadyLogFragment(backend);
 
     if (
-      channel === "wildfly" &&
-      line.includes(WILDFLY_READY_LOG_FRAGMENT) &&
+      wildflyBackend &&
+      line.includes(readyFragment) &&
       processState &&
       !processState.stopRequested
     ) {
       processState.readyLogAt = new Date().toISOString();
-      const healthUrl = this.getSettings(projectId).services[channel].healthUrl;
+      const healthUrl = settings.services[channel].healthUrl;
       this.upsertStatus(
         projectId,
         this.statusRecord(
@@ -3328,8 +3325,7 @@ export class DashboardBackend {
         currentStatus?.state !== "running" &&
         currentStatus?.state !== "starting"
       ) {
-        const healthUrl =
-          this.getSettings(projectId).services[channel].healthUrl;
+        const healthUrl = settings.services[channel].healthUrl;
         this.upsertStatus(
           projectId,
           this.statusRecord(
@@ -3471,7 +3467,8 @@ export class DashboardBackend {
 
   private tailReadCurrentLines(projectId: string): string[] {
     const state = this.tailStates.get(projectId);
-    const filePath = state?.path ?? this.getSettings(projectId).appLogFile;
+    const filePath =
+      state?.path ?? this.getSettings(projectId).services.backend.logFile;
     return filePath.trim() ? this.tailReadLines(filePath) : [];
   }
 
@@ -3680,24 +3677,8 @@ export class DashboardBackend {
   }
 }
 
-function composeMavenCommand(
-  settings: ProjectSettingsRecord,
-  profile: BuildProfileRecord,
-): string {
-  const parts = [
-    quote(settings.maven.executable),
-    "-P",
-    profile.profileName,
-    profile.goals,
-  ];
-  if (settings.maven.settingsXml) {
-    parts.push("--settings", quote(settings.maven.settingsXml));
-  }
-  if (settings.maven.skipTests) {
-    parts.push("-DskipTests");
-  }
-  parts.push("-f", quote(settings.maven.pomXml));
-  return parts.join(" ");
+function composeRuntimeBuildCommand(profile: RuntimeBuilderRecord): string {
+  return profile.command.trim();
 }
 
 type UrlCheckResult = {
@@ -3817,7 +3798,14 @@ function isServiceStartupLogLine(service: ServiceName, line: string): boolean {
   return (
     /\bwfly[a-z0-9]*\d+/.test(normalized) ||
     /\bwildfly\b/.test(normalized) ||
-    /\bjboss\b/.test(normalized)
+    /\bjboss\b/.test(normalized) ||
+    /\buvicorn\b/.test(normalized) ||
+    /\bgunicorn\b/.test(normalized) ||
+    /\bflask\b/.test(normalized) ||
+    /\bfastapi\b/.test(normalized) ||
+    /\bnode\b/.test(normalized) ||
+    /\bexpress\b/.test(normalized) ||
+    /\bnest\b/.test(normalized)
   );
 }
 
@@ -4689,32 +4677,56 @@ function validateProjectIdentity(name: string, code: string): string[] {
   return errors;
 }
 
-function validateMavenConfig(
-  settings: ProjectSettingsRecord["maven"],
-): string[] {
+function validateWildflyOptions(backend: BackendServiceConfig): string[] {
   const errors: string[] = [];
-  const executable = settings.executable.trim();
-  const settingsXml = settings.settingsXml.trim();
+  const settings = backend.runtimeOptions.wildfly;
+  const executable = settings.mavenExecutable.trim();
+  const settingsXml = settings.mavenSettingsXml.trim();
   const pomXml = settings.pomXml.trim();
 
-  if (!executable) {
-    errors.push("Maven executable is required");
-  } else if (!isExistingFile(executable)) {
+  if (executable && !isExistingFile(executable)) {
     errors.push(`Maven executable does not exist: ${executable}`);
   }
 
-  if (!settingsXml) {
-    errors.push("Maven settings.xml is required");
-  } else if (!isExistingFile(settingsXml)) {
+  if (settingsXml && !isExistingFile(settingsXml)) {
     errors.push(`Maven settings.xml does not exist: ${settingsXml}`);
   }
 
-  if (!pomXml) {
-    errors.push("Maven pom.xml is required");
-  } else if (!isExistingFile(pomXml)) {
+  if (pomXml && !isExistingFile(pomXml)) {
     errors.push(`Maven pom.xml does not exist: ${pomXml}`);
   }
 
+  return errors;
+}
+
+function validatePythonOptions(backend: BackendServiceConfig): string[] {
+  const errors: string[] = [];
+  const { venvDirectory, pythonExecutable } = backend.runtimeOptions.python;
+  if (venvDirectory.trim() && !isExistingDirectory(venvDirectory.trim())) {
+    errors.push(`Python venv directory does not exist: ${venvDirectory}`);
+  }
+  if (pythonExecutable.trim() && !isExistingFile(pythonExecutable.trim())) {
+    errors.push(`Python executable does not exist: ${pythonExecutable}`);
+  }
+  return errors;
+}
+
+function validateRuntimeBuilders(builders: RuntimeBuilderRecord[]): string[] {
+  const errors: string[] = [];
+  const seenNames = new Set<string>();
+  for (const builder of builders) {
+    const name = builder.buttonName.trim();
+    if (!name) {
+      errors.push("Builders: name is required");
+    } else if (seenNames.has(name.toLowerCase())) {
+      errors.push(`Builders: duplicate name "${name}"`);
+    } else {
+      seenNames.add(name.toLowerCase());
+    }
+    if (!builder.command.trim()) {
+      errors.push(`Builders: command is required for "${name || "Unnamed"}"`);
+    }
+  }
   return errors;
 }
 
@@ -4742,6 +4754,234 @@ function slugifyProjectId(value: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function defaultBackendRuntimeOptions(): BackendServiceConfig["runtimeOptions"] {
+  return {
+    wildfly: {
+      managementUrl: "",
+      readyLogFragment: DEFAULT_WILDFLY_READY_LOG_FRAGMENT,
+      mavenExecutable: "",
+      mavenSettingsXml: "",
+      pomXml: "",
+      skipTests: false,
+    },
+    python: {
+      venvDirectory: "",
+      pythonExecutable: "",
+    },
+    node: {
+      packageManager: "npm",
+      nodeExecutable: "",
+    },
+  };
+}
+
+function normalizeProjectSettings(raw: unknown): ProjectSettingsRecord {
+  const value = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  const services = (value.services &&
+  typeof value.services === "object"
+    ? value.services
+    : {}) as Record<string, Record<string, unknown> | undefined>;
+  const frontend = normalizeServiceConfig(services.frontend);
+  const legacyWildfly = services.wildfly;
+  const backendRaw = services.backend ?? legacyWildfly;
+  const runtimeOptions = defaultBackendRuntimeOptions();
+  const legacyMaven = (value.maven &&
+  typeof value.maven === "object"
+    ? value.maven
+    : {}) as Record<string, unknown>;
+
+  runtimeOptions.wildfly = {
+    managementUrl: stringValue(
+      backendRaw?.managementUrl,
+      runtimeOptions.wildfly.managementUrl,
+    ),
+    readyLogFragment: stringValue(
+      backendRaw?.readyLogFragment,
+      DEFAULT_WILDFLY_READY_LOG_FRAGMENT,
+    ),
+    mavenExecutable: stringValue(
+      legacyMaven.executable,
+      runtimeOptions.wildfly.mavenExecutable,
+    ),
+    mavenSettingsXml: stringValue(
+      legacyMaven.settingsXml,
+      runtimeOptions.wildfly.mavenSettingsXml,
+    ),
+    pomXml: stringValue(legacyMaven.pomXml, runtimeOptions.wildfly.pomXml),
+    skipTests: booleanValue(
+      legacyMaven.skipTests,
+      runtimeOptions.wildfly.skipTests,
+    ),
+  };
+
+  const backendRuntime = normalizeBackendRuntime(
+    stringValue(backendRaw?.runtime, legacyWildfly ? "wildfly" : "wildfly"),
+  );
+  const backend: BackendServiceConfig = {
+    ...normalizeServiceConfig(backendRaw),
+    runtime: backendRuntime,
+    logFile: stringValue(value.appLogFile, stringValue(backendRaw?.logFile, "")),
+    runtimeOptions: {
+      ...runtimeOptions,
+      ...((backendRaw?.runtimeOptions &&
+      typeof backendRaw.runtimeOptions === "object"
+        ? backendRaw.runtimeOptions
+        : {}) as Partial<BackendServiceConfig["runtimeOptions"]>),
+      wildfly: {
+        ...runtimeOptions.wildfly,
+        ...(((backendRaw?.runtimeOptions as Record<string, unknown> | undefined)
+          ?.wildfly ?? {}) as Partial<
+          BackendServiceConfig["runtimeOptions"]["wildfly"]
+        >),
+      },
+      python: {
+        ...runtimeOptions.python,
+        ...(((backendRaw?.runtimeOptions as Record<string, unknown> | undefined)
+          ?.python ?? {}) as Partial<
+          BackendServiceConfig["runtimeOptions"]["python"]
+        >),
+      },
+      node: {
+        ...runtimeOptions.node,
+        ...(((backendRaw?.runtimeOptions as Record<string, unknown> | undefined)
+          ?.node ?? {}) as Partial<
+          BackendServiceConfig["runtimeOptions"]["node"]
+        >),
+      },
+    },
+  };
+
+  return {
+    gitProjectDirectory: stringValue(value.gitProjectDirectory, ""),
+    defaultBranch: stringValue(value.defaultBranch, ""),
+    remote: stringValue(value.remote, ""),
+    services: { frontend, backend },
+    builders: normalizeRuntimeBuilders(
+      Array.isArray(value.builders) ? value.builders : value.buildProfiles,
+      runtimeOptions.wildfly,
+    ),
+  };
+}
+
+function normalizeServiceConfig(raw: unknown): ServiceConfig {
+  const value = (raw && typeof raw === "object" ? raw : {}) as Record<
+    string,
+    unknown
+  >;
+  return {
+    workingDirectory: stringValue(value.workingDirectory, ""),
+    command: stringValue(value.command, ""),
+    healthUrl: stringValue(value.healthUrl, ""),
+    appUrl: stringValue(value.appUrl, ""),
+    autoStart: booleanValue(value.autoStart, false),
+  };
+}
+
+function normalizeRuntimeBuilders(
+  raw: unknown,
+  wildfly: BackendServiceConfig["runtimeOptions"]["wildfly"],
+): RuntimeBuilderRecord[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.map((item, index) => {
+    const value = (item && typeof item === "object" ? item : {}) as Record<
+      string,
+      unknown
+    >;
+    const profileName = stringValue(value.profileName, "");
+    const goals = stringValue(value.goals, "");
+    return {
+      id: stringValue(value.id, `builder-${index + 1}`),
+      buttonName: stringValue(value.buttonName, ""),
+      command: stringValue(
+        value.command,
+        profileName || goals ? legacyMavenCommand(wildfly, profileName, goals) : "",
+      ),
+      confirm: booleanValue(value.confirm, false),
+      outcomeType:
+        value.outcomeType === "build-and-deploy"
+          ? "build-and-deploy"
+          : "build-only",
+    };
+  });
+}
+
+function legacyMavenCommand(
+  wildfly: BackendServiceConfig["runtimeOptions"]["wildfly"],
+  profileName: string,
+  goals: string,
+): string {
+  const parts = [quote(wildfly.mavenExecutable)];
+  if (profileName.trim()) {
+    parts.push("-P", profileName.trim());
+  }
+  if (goals.trim()) {
+    parts.push(goals.trim());
+  }
+  if (wildfly.mavenSettingsXml.trim()) {
+    parts.push("--settings", quote(wildfly.mavenSettingsXml.trim()));
+  }
+  if (wildfly.skipTests) {
+    parts.push("-DskipTests");
+  }
+  if (wildfly.pomXml.trim()) {
+    parts.push("-f", quote(wildfly.pomXml.trim()));
+  }
+  return parts.filter(Boolean).join(" ");
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function booleanValue(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeBackendRuntime(value: string): BackendRuntime {
+  return value === "python" || value === "node" ? value : "wildfly";
+}
+
+function getWildflyReadyLogFragment(backend: BackendServiceConfig): string {
+  return (
+    backend.runtimeOptions.wildfly.readyLogFragment.trim() ||
+    DEFAULT_WILDFLY_READY_LOG_FRAGMENT
+  );
+}
+
+function backendProcessEnv(
+  backend: BackendServiceConfig,
+): NodeJS.ProcessEnv | undefined {
+  if (backend.runtime !== "python") {
+    return process.env;
+  }
+
+  const venvDirectory = backend.runtimeOptions.python.venvDirectory.trim();
+  if (!venvDirectory) {
+    return process.env;
+  }
+
+  const binDir = join(
+    venvDirectory,
+    process.platform === "win32" ? "Scripts" : "bin",
+  );
+  const pathKey =
+    Object.keys(process.env).find((key) => key.toLowerCase() === "path") ??
+    "PATH";
+  return {
+    ...process.env,
+    VIRTUAL_ENV: venvDirectory,
+    [pathKey]: [binDir, process.env[pathKey]].filter(Boolean).join(
+      process.platform === "win32" ? ";" : ":",
+    ),
+  };
+}
+
 function settingsActivityEntries(
   previous: ProjectSettingsRecord,
   next: ProjectSettingsRecord,
@@ -4767,12 +5007,6 @@ function settingsActivityEntries(
   };
 
   addIfChanged(
-    previous.appLogFile,
-    next.appLogFile,
-    "Project settings updated",
-    "Application log file updated",
-  );
-  addIfChanged(
     previous.gitProjectDirectory,
     next.gitProjectDirectory,
     "Git settings updated",
@@ -4791,32 +5025,7 @@ function settingsActivityEntries(
     "Git remote updated",
   );
 
-  addIfChanged(
-    previous.maven.executable,
-    next.maven.executable,
-    "Maven settings updated",
-    "Maven executable path updated",
-  );
-  addIfChanged(
-    previous.maven.settingsXml,
-    next.maven.settingsXml,
-    "Maven settings updated",
-    "settings.xml path updated",
-  );
-  addIfChanged(
-    previous.maven.pomXml,
-    next.maven.pomXml,
-    "Maven settings updated",
-    "pom.xml path updated",
-  );
-  if (previous.maven.skipTests !== next.maven.skipTests) {
-    add(
-      "Maven settings updated",
-      `Skip tests turned ${next.maven.skipTests ? "on" : "off"}`,
-    );
-  }
-
-  for (const service of ["frontend", "wildfly"] as ServiceName[]) {
+  for (const service of PROJECT_SERVICES) {
     const before = previous.services[service];
     const after = next.services[service];
     const label = serviceLabel(service);
@@ -4841,25 +5050,28 @@ function settingsActivityEntries(
       `${label} health URL updated`,
     );
 
-    if (service === "frontend") {
+    addIfChanged(before.appUrl, after.appUrl, title, `${label} app URL updated`);
+
+    if (service === "backend") {
+      const beforeBackend = before as BackendServiceConfig;
+      const afterBackend = after as BackendServiceConfig;
       addIfChanged(
-        before.appUrl,
-        after.appUrl,
+        beforeBackend.logFile,
+        afterBackend.logFile,
         title,
-        "Frontend app URL updated",
+        "Backend log file updated",
       );
-    } else {
+      if (beforeBackend.runtime !== afterBackend.runtime) {
+        add(
+          title,
+          `Backend runtime changed to ${runtimeLabel(afterBackend.runtime)}`,
+        );
+      }
       addIfChanged(
-        before.appUrl,
-        after.appUrl,
+        beforeBackend.runtimeOptions.wildfly.managementUrl,
+        afterBackend.runtimeOptions.wildfly.managementUrl,
         title,
-        "WildFly KMU URL updated",
-      );
-      addIfChanged(
-        before.managementUrl,
-        after.managementUrl,
-        title,
-        "WildFly admin console URL updated",
+        "Backend management URL updated",
       );
     }
 
@@ -4872,18 +5084,18 @@ function settingsActivityEntries(
   }
 
   const previousProfiles = new Map(
-    previous.buildProfiles.map((profile) => [profile.id, profile]),
+    previous.builders.map((profile) => [profile.id, profile]),
   );
   const nextProfiles = new Map(
-    next.buildProfiles.map((profile) => [profile.id, profile]),
+    next.builders.map((profile) => [profile.id, profile]),
   );
 
-  for (const profile of next.buildProfiles) {
+  for (const profile of next.builders) {
     const before = previousProfiles.get(profile.id);
     if (!before) {
       add(
-        "Build profile added",
-        `Profile "${profileDisplayName(profile)}" added`,
+        "Builder added",
+        `Builder "${profileDisplayName(profile)}" added`,
         "success",
       );
       continue;
@@ -4895,23 +5107,23 @@ function settingsActivityEntries(
         profileChangeCount(before, profile) === 1
       ) {
         add(
-          "Build profile renamed",
-          `Profile "${profileDisplayName(before)}" renamed to "${profileDisplayName(profile)}"`,
+          "Builder renamed",
+          `Builder "${profileDisplayName(before)}" renamed to "${profileDisplayName(profile)}"`,
         );
       } else {
         add(
-          "Build profile updated",
-          `Profile "${profileDisplayName(profile)}" updated`,
+          "Builder updated",
+          `Builder "${profileDisplayName(profile)}" updated`,
         );
       }
     }
   }
 
-  for (const profile of previous.buildProfiles) {
+  for (const profile of previous.builders) {
     if (!nextProfiles.has(profile.id)) {
       add(
-        "Build profile deleted",
-        `Profile "${profileDisplayName(profile)}" deleted`,
+        "Builder deleted",
+        `Builder "${profileDisplayName(profile)}" deleted`,
         "failed",
       );
     }
@@ -4928,25 +5140,24 @@ function settingsActivityEntries(
       ];
 }
 
-function profileDisplayName(profile: BuildProfileRecord): string {
-  return profile.buttonName.trim() || profile.profileName.trim() || "Unnamed";
+function profileDisplayName(profile: RuntimeBuilderRecord): string {
+  return profile.buttonName.trim() || "Unnamed";
 }
 
 function buildProfileChanged(
-  previous: BuildProfileRecord,
-  next: BuildProfileRecord,
+  previous: RuntimeBuilderRecord,
+  next: RuntimeBuilderRecord,
 ): boolean {
   return profileChangeCount(previous, next) > 0;
 }
 
 function profileChangeCount(
-  previous: BuildProfileRecord,
-  next: BuildProfileRecord,
+  previous: RuntimeBuilderRecord,
+  next: RuntimeBuilderRecord,
 ): number {
   return (
     Number(previous.buttonName !== next.buttonName) +
-    Number(previous.profileName !== next.profileName) +
-    Number(previous.goals !== next.goals) +
+    Number(previous.command !== next.command) +
     Number(previous.confirm !== next.confirm) +
     Number(previous.outcomeType !== next.outcomeType)
   );
@@ -4965,7 +5176,17 @@ function stamp(message: string): string {
 }
 
 function serviceLabel(service: ServiceName): string {
-  return service === "wildfly" ? "WildFly" : "Frontend";
+  return service === "backend" ? "Backend" : "Frontend";
+}
+
+function runtimeLabel(runtime: BackendRuntime): string {
+  if (runtime === "wildfly") {
+    return "WildFly";
+  }
+  if (runtime === "python") {
+    return "Python";
+  }
+  return "Node";
 }
 
 function formatDuration(totalSeconds: number): string {
