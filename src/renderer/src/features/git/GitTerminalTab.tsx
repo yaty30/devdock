@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy } from "lucide-react";
+import {
+  Copy,
+  History,
+  LoaderCircle,
+  PanelRightClose,
+  PanelRightOpen,
+} from "lucide-react";
 import { FindControls } from "../../components/common/FindControls";
 import type { GitStatusRecord } from "../../types";
 import {
@@ -46,6 +52,7 @@ export function GitTerminalTab({
   const [history, setHistory] = useState<GitCommandHistoryItem[]>([]);
   const [findTerm, setFindTerm] = useState("");
   const [activeMatchIndex, setActiveMatchIndex] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(true);
   const [visibleHistoryCount, setVisibleHistoryCount] = useState(
     GIT_HISTORY_PAGE_SIZE,
   );
@@ -219,7 +226,9 @@ export function GitTerminalTab({
   const hasMoreHistory = visibleHistoryCount < history.length;
 
   return (
-    <section className="git-terminal-screen">
+    <section
+      className={`git-terminal-screen${historyOpen ? "" : " history-collapsed"}`}
+    >
       <div className="git-terminal-header">
         <div className="git-status-strip">
           <div className="git-status-item">
@@ -256,7 +265,9 @@ export function GitTerminalTab({
       </div>
 
       <div className="git-terminal-layout">
-        <section className="panel git-terminal-panel">
+        <section
+          className={`panel git-terminal-panel${running ? " loading" : ""}`}
+        >
           <div className="git-tools-row">
             <div className="quick-command-row" aria-label="Quick git commands">
               {quickGitCommands.map((quickCommand) => (
@@ -299,63 +310,90 @@ export function GitTerminalTab({
               );
             })}
           </div>
+          {running ? (
+            <div className="git-terminal-loading" role="status">
+              <LoaderCircle className="button-spinner" size={22} />
+              <span>Running git command...</span>
+            </div>
+          ) : null}
         </section>
 
         <aside
-          className="panel git-history-panel"
+          className={`panel git-history-panel${historyOpen ? "" : " collapsed"}`}
+          id="git-command-history-panel"
           aria-label="Git command history"
         >
           <div className="git-history-header">
-            <h2>Git Command History</h2>
-          </div>
-          <div className="git-history-list">
-            {history.length === 0 ? (
-              <p className="git-history-empty">No commands run yet.</p>
+            {historyOpen ? (
+              <h2>Git Command History</h2>
             ) : (
-              historyRows.map((row) =>
-                row.type === "divider" ? (
-                  <div
-                    className="activity-date-divider git-history-date-divider"
-                    key={row.key}
-                  >
-                    <span>{row.label}</span>
-                  </div>
-                ) : (
-                  <article
-                    className="git-history-item"
-                    key={row.item.id}
-                    onClick={() => setCommand(row.item.input)}
-                  >
-                    <div
-                      className={`git-history-dot ${historyStatusClass(row.item.status)}`}
-                    />
-                    <div className="git-history-copy">
-                      <strong>{row.item.command}</strong>
-                      <span>{formatHistoryTime(row.item.executedAt)}</span>
-                    </div>
-                    <button
-                      type="button"
-                      aria-label={`Copy ${row.item.command}`}
-                      title="Copy command"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        copyCommand(row.item.command);
-                      }}
-                    >
-                      <Copy size={13} />
-                    </button>
-                  </article>
-                ),
-              )
+              <History size={16} aria-hidden="true" />
             )}
-            {hasMoreHistory ? (
-              <div
-                ref={historySentinelRef}
-                className="activity-scroll-sentinel"
-                aria-hidden="true"
-              />
-            ) : null}
+            <button
+              className="git-history-toggle"
+              type="button"
+              aria-controls="git-command-history-panel"
+              aria-expanded={historyOpen}
+              title={historyOpen ? "Hide command history" : "Show command history"}
+              onClick={() => setHistoryOpen((current) => !current)}
+            >
+              {historyOpen ? (
+                <PanelRightClose size={15} />
+              ) : (
+                <PanelRightOpen size={15} />
+              )}
+            </button>
           </div>
+          {historyOpen ? (
+            <div className="git-history-list">
+              {history.length === 0 ? (
+                <p className="git-history-empty">No commands run yet.</p>
+              ) : (
+                historyRows.map((row) =>
+                  row.type === "divider" ? (
+                    <div
+                      className="activity-date-divider git-history-date-divider"
+                      key={row.key}
+                    >
+                      <span>{row.label}</span>
+                    </div>
+                  ) : (
+                    <article
+                      className="git-history-item"
+                      key={row.item.id}
+                      onClick={() => setCommand(row.item.input)}
+                    >
+                      <div
+                        className={`git-history-dot ${historyStatusClass(row.item.status)}`}
+                      />
+                      <div className="git-history-copy">
+                        <strong>{row.item.command}</strong>
+                        <span>{formatHistoryTime(row.item.executedAt)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label={`Copy ${row.item.command}`}
+                        title="Copy command"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          copyCommand(row.item.command);
+                        }}
+                      >
+                        <Copy size={13} />
+                      </button>
+                    </article>
+                  ),
+                )
+              )}
+              {hasMoreHistory ? (
+                <div
+                  ref={historySentinelRef}
+                  className="activity-scroll-sentinel"
+                  aria-hidden="true"
+                />
+              ) : null}
+            </div>
+          ) : null}
         </aside>
       </div>
 
