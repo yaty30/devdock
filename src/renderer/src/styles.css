@@ -231,8 +231,8 @@
 
 :root[data-theme="dark"][data-accent="black"],
 [data-theme="dark"][data-accent="black"] {
-  --accent: #a5a5a5;
-  --accent-soft: #25272d;
+  --accent: #727272;
+  --accent-soft: #131314;
   --accent-border: #4b5563;
 }
 
