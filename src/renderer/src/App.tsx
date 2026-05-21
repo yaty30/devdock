@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  Check,
   CheckCircle2,
   ChefHat,
   ChevronUp,
   Grid3X3,
   List,
   Minimize2,
+  Moon,
   Package,
   PackageCheck,
   Plus,
   Send,
+  Sun,
 } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
@@ -97,6 +100,24 @@ type DatabaseRuntimeStatus =
   | "error";
 type ApiTesterView = "test" | "history" | "saved";
 type CompareView = "compare";
+type AccentColor =
+  | "blue"
+  | "green"
+  | "yellow"
+  | "orange"
+  | "purple"
+  | "pink"
+  | "black";
+
+const ACCENT_OPTIONS: ReadonlyArray<{ value: AccentColor; label: string }> = [
+  { value: "blue", label: "Blue" },
+  { value: "green", label: "Green" },
+  { value: "yellow", label: "Yellow" },
+  { value: "orange", label: "Orange" },
+  { value: "purple", label: "Purple" },
+  { value: "pink", label: "Pink" },
+  { value: "black", label: "Black" },
+];
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
@@ -148,10 +169,14 @@ function App(): JSX.Element {
     string | null
   >(null);
   const [theme, setTheme] = useState<Theme>(() => readStoredTheme());
+  const [accentColor, setAccentColor] = useState<AccentColor>(() =>
+    readStoredAccentColor(),
+  );
   const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>(() =>
     readStoredFontSizeMode(),
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [interfaceSettingsOpen, setInterfaceSettingsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [panelResetVersion, setPanelResetVersion] = useState(0);
@@ -381,6 +406,11 @@ function App(): JSX.Element {
     window.localStorage.setItem("ivs-dashboard-theme", theme);
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem("ivs-dashboard-accent", accentColor);
+    document.documentElement.dataset.accent = accentColor;
+  }, [accentColor]);
 
   useEffect(() => {
     window.localStorage.setItem("ivs-dashboard-font-size", fontSizeMode);
@@ -1269,12 +1299,23 @@ function App(): JSX.Element {
         onDismissRecord={dismissBuildMiniRecord}
       />
     ) : null;
+  const interfaceSettingsModal = (
+    <InterfaceSettingsModal
+      open={interfaceSettingsOpen}
+      theme={theme}
+      accentColor={accentColor}
+      onThemeChange={setTheme}
+      onAccentColorChange={setAccentColor}
+      onClose={() => setInterfaceSettingsOpen(false)}
+    />
+  );
   if (!selectedProject && !initialStateLoaded) {
     return (
       <div
         ref={appShellRef}
         className="app-shell"
         data-theme={theme}
+        data-accent={accentColor}
         data-font-size={fontSizeMode}
       >
         <main className="main-content project-loading">
@@ -1292,6 +1333,7 @@ function App(): JSX.Element {
         ref={appShellRef}
         className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
         data-theme={theme}
+        data-accent={accentColor}
         data-font-size={fontSizeMode}
       >
         <Sidebar
@@ -1303,7 +1345,6 @@ function App(): JSX.Element {
             activeSection === "project" ? "dashboard" : activeSection
           }
           activeTool={activeTool}
-          theme={theme}
           collapsed={sidebarCollapsed}
           debugEnabled={debugEnabled}
           onProjectChange={switchProject}
@@ -1315,9 +1356,7 @@ function App(): JSX.Element {
           onAddProject={openAddProjectDialog}
           onAddDatabaseConnection={handleAddDatabaseConnection}
           onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
-          onThemeToggle={() =>
-            setTheme((current) => (current === "light" ? "dark" : "light"))
-          }
+          onInterfaceSettings={() => setInterfaceSettingsOpen(true)}
           onDebugBuildNotification={showDebugBuildNotification}
         />
         <main className="main-content">
@@ -1456,6 +1495,7 @@ function App(): JSX.Element {
         ) : null}
         {databaseConnectionDialog}
         {cookieModal}
+        {interfaceSettingsModal}
         {databaseDeleteDialog}
         {buildMiniPanel}
         {splashOverlay}
@@ -1468,6 +1508,7 @@ function App(): JSX.Element {
       ref={appShellRef}
       className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
       data-theme={theme}
+      data-accent={accentColor}
       data-font-size={fontSizeMode}
     >
       <Sidebar
@@ -1477,7 +1518,6 @@ function App(): JSX.Element {
         selectedDatabaseConnectionId={selectedDatabaseConnectionId}
         activeSection={activeSection}
         activeTool={activeTool}
-        theme={theme}
         collapsed={sidebarCollapsed}
         projectStatuses={sidebarProjectStatuses}
         projectFrontendEnabled={sidebarProjectFrontendEnabled}
@@ -1491,9 +1531,7 @@ function App(): JSX.Element {
         onAddProject={openAddProjectDialog}
         onAddDatabaseConnection={handleAddDatabaseConnection}
         onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
-        onThemeToggle={() =>
-          setTheme((current) => (current === "light" ? "dark" : "light"))
-        }
+        onInterfaceSettings={() => setInterfaceSettingsOpen(true)}
         onDebugBuildNotification={showDebugBuildNotification}
       />
       <main
@@ -1769,6 +1807,7 @@ function App(): JSX.Element {
 
       {databaseConnectionDialog}
       {cookieModal}
+      {interfaceSettingsModal}
 
       {snackbar ? (
         <div
@@ -1831,6 +1870,84 @@ function App(): JSX.Element {
       ) : null}
       {splashOverlay}
     </div>
+  );
+}
+
+function InterfaceSettingsModal({
+  open,
+  theme,
+  accentColor,
+  onThemeChange,
+  onAccentColorChange,
+  onClose,
+}: {
+  open: boolean;
+  theme: Theme;
+  accentColor: AccentColor;
+  onThemeChange: (theme: Theme) => void;
+  onAccentColorChange: (color: AccentColor) => void;
+  onClose: () => void;
+}): JSX.Element {
+  return (
+    <Modal
+      open={open}
+      title="Interface settings"
+      size="sm"
+      className="interface-settings-modal"
+      contentClassName="interface-settings-modal-content"
+      closeLabel="Close interface settings"
+      onClose={onClose}
+    >
+      <div className="interface-settings-panel">
+        <section className="interface-settings-section">
+          <h3>Interface theme</h3>
+          <div className="interface-theme-options" role="group">
+            <button
+              className={`interface-theme-option${theme === "light" ? " active" : ""}`}
+              type="button"
+              aria-pressed={theme === "light"}
+              onClick={() => onThemeChange("light")}
+            >
+              <Sun size={16} />
+              <span>Light</span>
+            </button>
+            <button
+              className={`interface-theme-option${theme === "dark" ? " active" : ""}`}
+              type="button"
+              aria-pressed={theme === "dark"}
+              onClick={() => onThemeChange("dark")}
+            >
+              <Moon size={16} />
+              <span>Dark</span>
+            </button>
+          </div>
+        </section>
+
+        <section className="interface-settings-section">
+          <h3>Accent color</h3>
+          <div className="accent-color-grid" role="group">
+            {ACCENT_OPTIONS.map((option) => {
+              const selected = accentColor === option.value;
+              return (
+                <button
+                  key={option.value}
+                  className={`accent-color-option ${option.value}${selected ? " active" : ""}`}
+                  type="button"
+                  aria-label={`${option.label} accent`}
+                  aria-pressed={selected}
+                  title={option.label}
+                  onClick={() => onAccentColorChange(option.value)}
+                >
+                  <span className="accent-color-swatch" />
+                  <span>{option.label}</span>
+                  {selected ? <Check size={15} /> : null}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      </div>
+    </Modal>
   );
 }
 
@@ -2472,6 +2589,22 @@ export default App;
 function readStoredTheme(): Theme {
   const stored = window.localStorage.getItem("ivs-dashboard-theme");
   return stored === "dark" ? "dark" : "light";
+}
+
+function readStoredAccentColor(): AccentColor {
+  const stored = window.localStorage.getItem("ivs-dashboard-accent");
+  if (
+    stored === "green" ||
+    stored === "yellow" ||
+    stored === "orange" ||
+    stored === "purple" ||
+    stored === "pink" ||
+    stored === "black"
+  ) {
+    return stored;
+  }
+
+  return "blue";
 }
 
 function readStoredFontSizeMode(): FontSizeMode {

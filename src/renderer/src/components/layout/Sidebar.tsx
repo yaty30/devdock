@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import {
-  Atom,
   BarChart3,
   Binary,
   Boxes,
@@ -10,12 +9,11 @@ import {
   FlaskConical,
   FolderKanban,
   GitCompare,
-  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   PlugZap,
   Plus,
-  Sun,
+  Settings,
   Unplug,
   Wrench,
 } from "lucide-react";
@@ -26,7 +24,6 @@ import type {
   DatabaseConnection,
   Project,
   ServiceStatusRecord,
-  Theme,
   ToolId,
 } from "../../types";
 
@@ -43,7 +40,6 @@ export function Sidebar({
   selectedDatabaseConnectionId,
   activeSection,
   activeTool,
-  theme,
   collapsed,
   debugEnabled = false,
   projectStatuses = {},
@@ -57,7 +53,7 @@ export function Sidebar({
   onAddProject,
   onAddDatabaseConnection,
   onCollapseToggle,
-  onThemeToggle,
+  onInterfaceSettings,
   onDebugBuildNotification,
 }: {
   projects: Project[];
@@ -66,7 +62,6 @@ export function Sidebar({
   selectedDatabaseConnectionId: string | null;
   activeSection: AppSection;
   activeTool: ToolId;
-  theme: Theme;
   collapsed: boolean;
   debugEnabled?: boolean;
   projectStatuses?: Record<string, ServiceStatusRecord[]>;
@@ -80,7 +75,7 @@ export function Sidebar({
   onAddProject: () => void;
   onAddDatabaseConnection: () => void;
   onCollapseToggle: () => void;
-  onThemeToggle: () => void;
+  onInterfaceSettings: () => void;
   onDebugBuildNotification?: () => void;
 }): JSX.Element {
   const sidebarRef = useRef<HTMLElement>(null);
@@ -898,28 +893,30 @@ export function Sidebar({
             <span className="sidebar-version">v{APP_VERSION}</span>
           )
         ) : null}
-        <button
-          className="theme-toggle sidebar-icon-button"
-          type="button"
-          onClick={onCollapseToggle}
-          aria-label={collapsed ? "Expand side menu" : "Collapse side menu"}
-          title={collapsed ? "Expand side menu" : "Collapse side menu"}
-        >
-          {collapsed ? (
-            <PanelLeftOpen size={18} />
-          ) : (
-            <PanelLeftClose size={18} />
-          )}
-        </button>
-        <button
-          className="theme-toggle sidebar-icon-button"
-          type="button"
-          onClick={onThemeToggle}
-          aria-label="Toggle theme"
-          title="Toggle theme"
-        >
-          {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-        </button>
+        <div className="sidebar-footer-actions">
+          <button
+            className="theme-toggle sidebar-icon-button"
+            type="button"
+            onClick={onCollapseToggle}
+            aria-label={collapsed ? "Expand side menu" : "Collapse side menu"}
+            title={collapsed ? "Expand side menu" : "Collapse side menu"}
+          >
+            {collapsed ? (
+              <PanelLeftOpen size={18} />
+            ) : (
+              <PanelLeftClose size={18} />
+            )}
+          </button>
+          <button
+            className="theme-toggle sidebar-icon-button"
+            type="button"
+            onClick={onInterfaceSettings}
+            aria-label="Interface settings"
+            title="Interface settings"
+          >
+            <Settings size={18} />
+          </button>
+        </div>
       </div>
     </aside>
   );
