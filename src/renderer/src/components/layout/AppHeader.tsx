@@ -6,18 +6,24 @@ import { SegmentedTabs } from "../navigation/SegmentedTabs";
 export function AppHeader({
   activeTab,
   onTabChange,
+  projectTabLabel,
   children,
   actions,
 }: {
   activeTab?: DashboardTab;
   onTabChange?: (tab: DashboardTab) => void;
+  projectTabLabel?: string;
   children?: ReactNode;
   actions?: ReactNode;
 }): JSX.Element {
   const tabs =
     children ??
     (activeTab && onTabChange ? (
-      <SegmentedTabs activeTab={activeTab} onTabChange={onTabChange} />
+      <SegmentedTabs
+        activeTab={activeTab}
+        projectTabLabel={projectTabLabel}
+        onTabChange={onTabChange}
+      />
     ) : null);
 
   return (

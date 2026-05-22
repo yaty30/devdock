@@ -159,6 +159,11 @@ const api: DashboardApi = {
     ipcRenderer.on("dashboard:shutdown-service-stopped", handler);
     return () => ipcRenderer.off("dashboard:shutdown-service-stopped", handler);
   },
+  onAppExit: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("dashboard:app-exit", handler);
+    return () => ipcRenderer.off("dashboard:app-exit", handler);
+  },
   onChatOpenRequest: (listener: (conversationId: string) => void) => {
     const handler = (
       _event: Electron.IpcRendererEvent,

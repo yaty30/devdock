@@ -634,6 +634,7 @@ export type DashboardApi = {
   onShutdownServiceStopped: (
     listener: (projectId: string, service: ServiceName) => void,
   ) => () => void;
+  onAppExit: (listener: () => void) => () => void;
   onChatOpenRequest: (listener: (conversationId: string) => void) => () => void;
   onWindowMaximizedChange: (listener: (maximized: boolean) => void) => () => void;
 };

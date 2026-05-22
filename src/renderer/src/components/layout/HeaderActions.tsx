@@ -562,7 +562,7 @@ function BuildActionsDropdown({
                 ? `Run ${latestProfileUsedToday.buttonName} Build`
                 : undefined
           }
-          disabled={buildDisabled || stoppingBuild}
+          disabled={false}
           onClick={() => {
             if (buildRunning) {
               stopBuild();

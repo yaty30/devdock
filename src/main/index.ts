@@ -1503,6 +1503,8 @@ const createWindow = (): void => {
       return;
     }
 
+    win.webContents.send("dashboard:app-exit");
+
     const entries = be.getShutdownEntries();
     if (entries.length === 0) {
       be.shutdown();

@@ -61,6 +61,7 @@ import type {
   DatabaseExecutionRecord,
   DatabaseWorkspaceTab,
   FontSizeMode,
+  LogChannel,
   Project,
   ProjectDashboardSummary,
   ProjectRecord,
@@ -79,6 +80,11 @@ const SPLASH_LOGO_SIZE = "min(56px, 7vw)";
 const INITIAL_STATE_LOAD_TIMEOUT_MS = 10000;
 const PROJECT_STATE_LOAD_TIMEOUT_MS = 8000;
 const DATABASE_IDLE_DISCONNECT_MS = 2 * 60 * 1000;
+const PROJECT_DASHBOARD_EXIT_LOG_CHANNELS: LogChannel[] = [
+  "frontend",
+  "build",
+  "wildfly",
+];
 
 type SplashPhase = "visible" | "exiting" | "hidden";
 type SnackbarState = {
@@ -207,6 +213,7 @@ function App(): JSX.Element {
   const snackbarCloseTimerRef = useRef<number | null>(null);
   const buildMiniPanelBuildIdRef = useRef<string | null>(null);
   const buildMiniPanelSessionStartedAtRef = useRef(Date.now());
+  const appExitStartedRef = useRef(false);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarTransitionReadyRef = useRef(false);
   const databaseSleepTimerRef = useRef<number | null>(null);
@@ -520,6 +527,19 @@ function App(): JSX.Element {
   }, [selectedProject, activeSection]);
 
   useEffect(() => {
+    function clearProjectDashboardForAppExit(): void {
+      appExitStartedRef.current = true;
+      const projectId = selectedProjectIdRef.current;
+      if (projectId) {
+        PROJECT_DASHBOARD_EXIT_LOG_CHANNELS.forEach((channel) => {
+          clearViewport(projectId, channel);
+        });
+      }
+      setProjectState((current) =>
+        current ? { ...current, recentBuilds: [] } : current,
+      );
+    }
+
     const unsubscribe = window.ivsDashboard.onEvent((event) => {
       if (event.type === "status") {
         setDashboardOverview((current) =>
@@ -536,6 +556,9 @@ function App(): JSX.Element {
       }
       // Log events go to the log store; they never touch React project state.
       if (event.type === "log-batch") {
+        if (appExitStartedRef.current) {
+          return;
+        }
         appendLiveBatch(event.projectId, event.channel, event.lines);
         return;
       }
@@ -563,10 +586,15 @@ function App(): JSX.Element {
       },
     );
 
+    const unsubAppExit = window.ivsDashboard.onAppExit(
+      clearProjectDashboardForAppExit,
+    );
+
     return () => {
       unsubscribe();
       unsubShutdownStarted();
       unsubShutdownStopped();
+      unsubAppExit();
       if (projectLoadingTimerRef.current !== null) {
         window.clearTimeout(projectLoadingTimerRef.current);
       }
@@ -1544,6 +1572,7 @@ function App(): JSX.Element {
         <AppHeader
           activeTab={activeSection === "project" ? activeTab : undefined}
           onTabChange={activeSection === "project" ? setActiveTab : undefined}
+          projectTabLabel={selectedProject.name}
           actions={
             <>
               {activeSection === "project" && activeProjectState ? (

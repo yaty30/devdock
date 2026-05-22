@@ -8,6 +8,7 @@ import {
   type ClipboardEvent,
   type CSSProperties,
   type PointerEvent,
+  type ReactNode,
 } from "react";
 import { Modal } from "../../components/dialogs/Modal";
 
@@ -36,6 +37,10 @@ import {
   AppSelect,
   type AppSelectOption,
 } from "../../components/common/AppSelect";
+import {
+  DataTable,
+  type DataTableColumn,
+} from "../../components/common/DataTable";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Panel } from "../../components/common/Panel";
 import { copyTextToClipboard } from "../../utils/copyToClipboard";
@@ -213,6 +218,21 @@ const API_HISTORY_COLUMNS: ApiHistoryColumn[] = [
   { key: "message", label: "Message", width: 280, minWidth: 160 },
   { key: "rerun", label: "Re-run", width: 88, minWidth: 76 },
 ];
+
+const API_SAVED_REQUEST_COLUMN_WIDTHS = {
+  name: 180,
+  method: 104,
+  url: 360,
+  params: 88,
+  headers: 88,
+  body: 88,
+  saved: 168,
+  actions: 104,
+} as const;
+
+const API_SAVED_REQUEST_TABLE_WIDTH = Object.values(
+  API_SAVED_REQUEST_COLUMN_WIDTHS,
+).reduce((total, width) => total + width, 0);
 
 const DEFAULT_PARAMS: ApiKeyValueRow[] = [createRow("", "", false)];
 
@@ -1407,109 +1427,170 @@ function ApiTesterSavedRequestsView({
   onOpen: (request: SavedApiTesterRequest) => void;
   onRemove: (id: string) => void;
 }): JSX.Element {
+  const savedScrollRef = useRef<HTMLDivElement>(null);
+  const [savedScrollWidth, setSavedScrollWidth] = useState(0);
+
+  useEffect(() => {
+    const element = savedScrollRef.current;
+    if (!element) {
+      return undefined;
+    }
+
+    const updateWidth = (): void => {
+      setSavedScrollWidth(Math.floor(element.clientWidth));
+    };
+
+    updateWidth();
+    if (!window.ResizeObserver) {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(updateWidth);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const savedUrlWidth = Math.max(
+    API_SAVED_REQUEST_COLUMN_WIDTHS.url,
+    API_SAVED_REQUEST_COLUMN_WIDTHS.url +
+      Math.max(0, savedScrollWidth - API_SAVED_REQUEST_TABLE_WIDTH),
+  );
+  const savedTableWidth =
+    API_SAVED_REQUEST_TABLE_WIDTH -
+    API_SAVED_REQUEST_COLUMN_WIDTHS.url +
+    savedUrlWidth;
+
+  const savedRequestColumns: DataTableColumn<SavedApiRequestRecord>[] = [
+    {
+      key: "name",
+      header: renderApiTableHeader("Name"),
+      width: API_SAVED_REQUEST_COLUMN_WIDTHS.name,
+      render: (item) => item.name,
+    },
+    {
+      key: "method",
+      header: renderApiTableHeader("Method"),
+      width: API_SAVED_REQUEST_COLUMN_WIDTHS.method,
+      align: "center",
+      render: (item) => (
+        <span
+          className={`api-history-method ${item.request.method.toLowerCase()}`}
+        >
+          {item.request.method}
+        </span>
+      ),
+    },
+    {
+      key: "url",
+      header: renderApiTableHeader("URL"),
+      width: savedUrlWidth,
+      cellClassName: "api-history-url-cell",
+      cellTitle: (item) => item.request.url,
+      render: (item) => item.request.url,
+    },
+    {
+      key: "params",
+      header: renderApiTableHeader("Params"),
+      width: API_SAVED_REQUEST_COLUMN_WIDTHS.params,
+      align: "center",
+      render: (item) =>
+        item.request.params.filter((row) => row.enabled && row.key.trim())
+          .length,
+    },
+    {
+      key: "headers",
+      header: renderApiTableHeader("Headers"),
+      width: API_SAVED_REQUEST_COLUMN_WIDTHS.headers,
+      align: "center",
+      render: (item) =>
+        item.request.headers.filter((row) => row.enabled && row.key.trim())
+          .length,
+    },
+    {
+      key: "body",
+      header: renderApiTableHeader("Body"),
+      width: API_SAVED_REQUEST_COLUMN_WIDTHS.body,
+      align: "center",
+      render: (item) => {
+        const hasBody = canMethodSendBody(item.request.method)
+          ? Boolean(
+              item.request.body.trim() ||
+                hasBodyParamRows(item.request.mediaFields ?? []),
+            )
+          : false;
+        if (!hasBody) {
+          return "--";
+        }
+        return item.request.bodyMode === "media" ? "Form" : "Raw";
+      },
+    },
+    {
+      key: "saved",
+      header: renderApiTableHeader("Saved"),
+      width: API_SAVED_REQUEST_COLUMN_WIDTHS.saved,
+      render: (item) => formatCompactDateTime(item.updatedAt),
+    },
+    {
+      key: "actions",
+      header: renderApiTableHeader(""),
+      width: API_SAVED_REQUEST_COLUMN_WIDTHS.actions,
+      align: "center",
+      cellClassName: "api-saved-requests-actions-cell",
+      render: (item) => (
+        <div className="api-saved-requests-actions">
+          <button
+            className="icon-button secondary database-history-rerun"
+            type="button"
+            title="Open request"
+            onClick={() => onOpen(item.request)}
+          >
+            <FolderSearch size={14} />
+          </button>
+          <button
+            className="icon-button secondary database-history-rerun"
+            type="button"
+            title="Remove saved request"
+            aria-label="Remove saved request"
+            onClick={() => onRemove(item.id)}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ),
+    },
+  ];
+
   return (
-    <section className="api-history-screen api-saved-requests-screen">
+    <section className="api-tester-history-screen api-saved-requests-screen">
       <Panel
         title="Saved API Requests"
         titleMeta={<span>{`${savedRequests.length} saved`}</span>}
-        className="api-history-panel api-saved-requests-panel"
+        className="database-history-panel api-history-panel api-saved-requests-panel"
       >
-        <div className="database-history-scroll api-saved-requests-tab-wrap">
-          <table
-            className="recent-builds-table database-history-table api-history-table api-saved-requests-table"
-          >
-            <colgroup>
-              <col style={{ width: "180px" }} />
-              <col style={{ width: "104px" }} />
-              <col />
-              <col style={{ width: "88px" }} />
-              <col style={{ width: "88px" }} />
-              <col style={{ width: "88px" }} />
-              <col style={{ width: "168px" }} />
-              <col style={{ width: "104px" }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Method</th>
-                <th>URL</th>
-                <th>Params</th>
-                <th>Headers</th>
-                <th>Body</th>
-                <th>Saved</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {savedRequests.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>No saved API requests.</td>
-                </tr>
-              ) : null}
-              {savedRequests.map((item) => {
-                const enabledParams = item.request.params.filter(
-                  (row) => row.enabled && row.key.trim(),
-                ).length;
-                const enabledHeaders = item.request.headers.filter(
-                  (row) => row.enabled && row.key.trim(),
-                ).length;
-                const hasBody = canMethodSendBody(item.request.method)
-                  ? Boolean(
-                      item.request.body.trim() ||
-                      hasBodyParamRows(item.request.mediaFields ?? []),
-                    )
-                  : false;
-
-                return (
-                  <tr key={item.id}>
-                    <td>{item.name}</td>
-                    <td>
-                      <span
-                        className={`api-history-method ${item.request.method.toLowerCase()}`}
-                      >
-                        {item.request.method}
-                      </span>
-                    </td>
-                    <td className="api-history-url-cell" title={item.request.url}>
-                      {item.request.url}
-                    </td>
-                    <td>{enabledParams}</td>
-                    <td>{enabledHeaders}</td>
-                    <td>
-                      {hasBody
-                        ? item.request.bodyMode === "media"
-                          ? "Form"
-                          : "Raw"
-                        : "--"}
-                    </td>
-                    <td>{formatCompactDateTime(item.updatedAt)}</td>
-                    <td className="api-saved-requests-actions-cell">
-                      <div className="api-saved-requests-actions">
-                        <button
-                          className="icon-button secondary database-history-rerun"
-                          type="button"
-                          title="Open request"
-                          onClick={() => onOpen(item.request)}
-                        >
-                          <FolderSearch size={14} />
-                        </button>
-                        <button
-                          className="icon-button secondary database-history-rerun"
-                          type="button"
-                          title="Remove saved request"
-                          aria-label="Remove saved request"
-                          onClick={() => onRemove(item.id)}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          columns={savedRequestColumns}
+          rows={savedRequests}
+          getRowKey={(item) => item.id}
+          className="api-list-table-shell"
+          scrollRef={savedScrollRef}
+          tableClassName="api-history-table"
+          tableStyle={{
+            width: `${savedTableWidth}px`,
+            minWidth: `${savedTableWidth}px`,
+          }}
+          emptyState={
+            savedRequests.length === 0 ? (
+              <p className="database-empty-state">No saved API requests.</p>
+            ) : null
+          }
+          footer={
+            <div className="table-footer">
+              <span>Showing {savedRequests.length} saved requests</span>
+              <span>Updated first</span>
+            </div>
+          }
+        />
       </Panel>
     </section>
   );
@@ -1552,6 +1633,42 @@ function ApiTesterHistoryView({
     (total, column) => total + column.width,
     0,
   );
+  const historyDataTableColumns: DataTableColumn<ApiTesterHistoryMetadata>[] =
+    resolvedHistoryColumns.map((column) => ({
+      key: column.key,
+      width: column.width,
+      align:
+        column.key === "method" || column.key === "status"
+          ? "center"
+          : undefined,
+      cellClassName:
+        column.key === "url"
+          ? "api-history-url-cell"
+          : column.key === "message"
+            ? "database-history-message-cell"
+            : undefined,
+      cellTitle: column.key === "url" ? (entry) => entry.url : undefined,
+      render: (entry) => renderHistoryCell(entry, column.key),
+      header: (
+        <span className="database-result-th-content api-history-th-content">
+          <span className="database-result-column-label">{column.label}</span>
+          <span
+            className="database-column-resize-handle api-history-column-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={`Resize ${column.label} column`}
+            onPointerDown={(event) => startHistoryColumnResize(column, event)}
+            onPointerMove={resizeHistoryColumn}
+            onPointerUp={stopHistoryColumnResize}
+            onPointerCancel={stopHistoryColumnResize}
+            onDoubleClick={() => resetHistoryColumnWidth(column)}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <ArrowLeftRight size={13} />
+          </span>
+        </span>
+      ),
+    }));
 
   useEffect(() => {
     if (!selectedId || history.some((entry) => entry.id === selectedId)) {
@@ -1687,6 +1804,57 @@ function ApiTesterHistoryView({
     writeHistoryColumnWidths(storageScopeId, next);
   }
 
+  function renderHistoryCell(
+    entry: ApiTesterHistoryMetadata,
+    key: ApiHistoryColumnKey,
+  ): ReactNode {
+    switch (key) {
+      case "time":
+        return formatCompactDateTime(entry.createdAt);
+      case "method":
+        return (
+          <span className={`api-history-method ${entry.method.toLowerCase()}`}>
+            {entry.method}
+          </span>
+        );
+      case "url":
+        return entry.url;
+      case "status":
+        return (
+          <span
+            className={`status-pill ${
+              entry.status !== null && entry.status < 400 ? "success" : "failed"
+            }`}
+          >
+            {entry.status === null ? "Error" : entry.status}
+          </span>
+        );
+      case "duration":
+        return entry.durationMs === null ? "--" : `${entry.durationMs} ms`;
+      case "size":
+        return entry.responseSizeBytes === null
+          ? "--"
+          : formatBytes(entry.responseSizeBytes);
+      case "message":
+        return entry.message;
+      case "rerun":
+        return (
+          <button
+            className="icon-button secondary database-history-rerun"
+            type="button"
+            aria-label={`Re-run API test from ${formatCompactDateTime(entry.createdAt)}`}
+            title="Re-run API test"
+            onClick={(event) => {
+              event.stopPropagation();
+              void rerunHistoryEntry(entry);
+            }}
+          >
+            <Redo2 size={14} />
+          </button>
+        );
+    }
+  }
+
   const selectedMetadata =
     history.find((entry) => entry.id === selectedId) ?? null;
 
@@ -1712,132 +1880,34 @@ function ApiTesterHistoryView({
           </button>
         }
       >
-        <div className="database-history-scroll" ref={historyScrollRef}>
-          <table
-            className="recent-builds-table database-history-table api-history-table"
-            style={{
-              width: `${historyTableWidth}px`,
-              minWidth: `${historyTableWidth}px`,
-            }}
-          >
-            <colgroup>
-              {resolvedHistoryColumns.map((column) => (
-                <col key={column.key} style={{ width: `${column.width}px` }} />
-              ))}
-            </colgroup>
-            <thead>
-              <tr>
-                {resolvedHistoryColumns.map((column) => (
-                  <th key={column.key}>
-                    <span className="database-result-th-content api-history-th-content">
-                      <span className="database-result-column-label">
-                        {column.label}
-                      </span>
-                      <span
-                        className="database-column-resize-handle api-history-column-resize-handle"
-                        role="separator"
-                        aria-orientation="vertical"
-                        aria-label={`Resize ${column.label} column`}
-                        onPointerDown={(event) =>
-                          startHistoryColumnResize(column, event)
-                        }
-                        onPointerMove={resizeHistoryColumn}
-                        onPointerUp={stopHistoryColumnResize}
-                        onPointerCancel={stopHistoryColumnResize}
-                        onDoubleClick={() => resetHistoryColumnWidth(column)}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <ArrowLeftRight size={13} />
-                      </span>
-                    </span>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {history.map((entry) => {
-                const canRerun = true;
-
-                return (
-                  <tr
-                    key={entry.id}
-                    className={
-                      entry.id === selectedId
-                        ? "recent-build-row-active"
-                        : undefined
-                    }
-                    onClick={() => selectHistoryEntry(entry.id)}
-                  >
-                    <td>{formatCompactDateTime(entry.createdAt)}</td>
-                    <td>
-                      <span
-                        className={`api-history-method ${entry.method.toLowerCase()}`}
-                      >
-                        {entry.method}
-                      </span>
-                    </td>
-                    <td className="api-history-url-cell" title={entry.url}>
-                      {entry.url}
-                    </td>
-                    <td>
-                      <span
-                        className={`status-pill ${
-                          entry.status !== null && entry.status < 400
-                            ? "success"
-                            : "failed"
-                        }`}
-                      >
-                        {entry.status === null ? "Error" : entry.status}
-                      </span>
-                    </td>
-                    <td>
-                      {entry.durationMs === null
-                        ? "--"
-                        : `${entry.durationMs} ms`}
-                    </td>
-                    <td>
-                      {entry.responseSizeBytes === null
-                        ? "--"
-                        : formatBytes(entry.responseSizeBytes)}
-                    </td>
-                    <td className="database-history-message-cell">
-                      {entry.message}
-                    </td>
-                    <td>
-                      <button
-                        className="icon-button secondary database-history-rerun"
-                        type="button"
-                        aria-label={`Re-run API test from ${formatCompactDateTime(entry.createdAt)}`}
-                        title={
-                          canRerun
-                            ? "Re-run API test"
-                            : "API test cannot be re-run"
-                        }
-                        disabled={!canRerun}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          if (!canRerun) {
-                            return;
-                          }
-                          void rerunHistoryEntry(entry);
-                        }}
-                      >
-                        <Redo2 size={14} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {history.length === 0 ? (
-            <p className="database-empty-state">No API tests yet.</p>
-          ) : null}
-        </div>
-        <div className="table-footer">
-          <span>Showing {history.length} API tests</span>
-          <span>Newest first</span>
-        </div>
+        <DataTable
+          columns={historyDataTableColumns}
+          rows={history}
+          getRowKey={(entry) => entry.id}
+          rowClassName={(entry) =>
+            entry.id === selectedId ? "recent-build-row-active" : undefined
+          }
+          onRowClick={(entry) => selectHistoryEntry(entry.id)}
+          className="api-list-table-shell"
+          scrollRef={historyScrollRef}
+          tableClassName="api-history-table"
+          tableStyle={{
+            width: `${historyTableWidth}px`,
+            minWidth: `${historyTableWidth}px`,
+          }}
+          rowCursor="pointer"
+          emptyState={
+            history.length === 0 ? (
+              <p className="database-empty-state">No API tests yet.</p>
+            ) : null
+          }
+          footer={
+            <div className="table-footer">
+              <span>Showing {history.length} API tests</span>
+              <span>Newest first</span>
+            </div>
+          }
+        />
       </Panel>
       {selectedMetadata ? (
         <ApiTesterHistoryDetailPanel
@@ -1865,6 +1935,14 @@ function ApiTesterHistoryView({
         />
       ) : null}
     </section>
+  );
+}
+
+function renderApiTableHeader(label: ReactNode): ReactNode {
+  return (
+    <span className="database-result-th-content api-history-th-content">
+      <span className="database-result-column-label">{label}</span>
+    </span>
   );
 }
 

@@ -2,9 +2,11 @@ import type { DashboardTab } from "../../types";
 
 export function SegmentedTabs({
   activeTab,
+  projectTabLabel = "Dashboard",
   onTabChange,
 }: {
   activeTab: DashboardTab;
+  projectTabLabel?: string;
   onTabChange: (tab: DashboardTab) => void;
 }): JSX.Element {
   return (
@@ -16,7 +18,7 @@ export function SegmentedTabs({
         aria-selected={activeTab === "dashboard"}
         onClick={() => onTabChange("dashboard")}
       >
-        Dashboard
+        {projectTabLabel}
       </button>
       <button
         className={`tab${activeTab === "monitor" ? " active" : ""}`}

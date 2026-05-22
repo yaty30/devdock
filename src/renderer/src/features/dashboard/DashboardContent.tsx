@@ -18,6 +18,7 @@ import {
   GitBranch,
   Layers3,
   Minus,
+  Server,
   SquareTerminal,
 } from "lucide-react";
 import { ActionLink } from "../../components/common/ActionLink";
@@ -852,7 +853,7 @@ function DatabaseStatusRow({
       <header className="dashboard-project-card-header">
         <div className="dashboard-project-title-group">
           <span className="dashboard-project-code dashboard-database-code">
-            DB
+            <Database size={18} />
           </span>
           <div>
             <h2>{connection.name}</h2>
@@ -957,7 +958,7 @@ function ProjectStatusRow({
     <article className="dashboard-project-card">
       <header className="dashboard-project-card-header">
         <div className="dashboard-project-title-group">
-          <span className="dashboard-project-code">{summary.project.code}</span>
+          <span className="dashboard-project-code"><Server size={18} /></span>
           <div>
             <h2>{summary.project.name}</h2>
             <div className="dashboard-project-meta">
