@@ -9,6 +9,7 @@ import {
 } from "react";
 import {
   Activity,
+  AlertTriangle,
   CheckCircle2,
   CircleDot,
   Clock3,
@@ -41,6 +42,7 @@ import type { LogLine } from "../../../../shared/dashboardTypes";
 import {
   getProjectBackendLabel,
   getProjectBackendServiceName,
+  getPythonServerTypeLabel,
   isProjectFrontendEnabled,
 } from "../../../../shared/projectFrontend";
 import type {
@@ -646,11 +648,13 @@ function BuildLogPanel({
 
 function TailLogPanel({
   projectId,
+  configured = true,
   suspendAutoFollow = false,
   className = "tail-log-panel",
   onZoom,
 }: {
   projectId: string;
+  configured?: boolean;
   suspendAutoFollow?: boolean;
   className?: string;
   onZoom?: () => void;
@@ -677,36 +681,48 @@ function TailLogPanel({
   return (
     <Panel
       title="Tail Log"
-      titleMeta={<span className="status-pill success">Live</span>}
+      titleMeta={
+        <span className={`status-pill ${configured ? "success" : "idle"}`}>
+          {configured ? "Live" : "Idle"}
+        </span>
+      }
       action={
-        <div className="log-panel-actions">
-          <ColorizeToggle active={colorizeActive} onClick={toggleColorize} />
-          <ActionLink
-            onClick={() => void window.ivsDashboard.openLog(projectId, "tail")}
-          >
-            Open full log
-          </ActionLink>
-          {onZoom ? <LogZoomButton onClick={onZoom} /> : null}
-        </div>
+        configured ? (
+          <div className="log-panel-actions">
+            <ColorizeToggle active={colorizeActive} onClick={toggleColorize} />
+            <ActionLink
+              onClick={() =>
+                void window.ivsDashboard.openLog(projectId, "tail")
+              }
+            >
+              Open full log
+            </ActionLink>
+            {onZoom ? <LogZoomButton onClick={onZoom} /> : null}
+          </div>
+        ) : undefined
       }
       className={className}
-      findBar={find.findBar}
+      findBar={configured ? find.findBar : undefined}
     >
-      <VirtualizedLogViewer
-        lines={viewport.lines}
-        dense
-        colorize={colorizeActive}
-        highlight={find.term}
-        activeMatchSeq={find.activeSeq}
-        isLoadingOlder={viewport.isLoadingOlder}
-        hasMoreOlder={viewport.hasMoreOlder}
-        unseenCount={viewport.unseenNewLineCount}
-        isFollowing={viewport.isFollowing}
-        suspendAutoFollow={suspendAutoFollow}
-        onLoadOlder={handleLoadOlder}
-        onJumpToBottom={handleJumpToBottom}
-        onFollowingChange={handleFollowingChange}
-      />
+      {configured ? (
+        <VirtualizedLogViewer
+          lines={viewport.lines}
+          dense
+          colorize={colorizeActive}
+          highlight={find.term}
+          activeMatchSeq={find.activeSeq}
+          isLoadingOlder={viewport.isLoadingOlder}
+          hasMoreOlder={viewport.hasMoreOlder}
+          unseenCount={viewport.unseenNewLineCount}
+          isFollowing={viewport.isFollowing}
+          suspendAutoFollow={suspendAutoFollow}
+          onLoadOlder={handleLoadOlder}
+          onJumpToBottom={handleJumpToBottom}
+          onFollowingChange={handleFollowingChange}
+        />
+      ) : (
+        <div className="empty-panel-state">No application log configured.</div>
+      )}
     </Panel>
   );
 }
@@ -958,8 +974,18 @@ function ProjectStatusRow({
   const frontend = serviceStatus(summary, "frontend");
   const backend = serviceStatus(summary, summary.project.backendType);
   const backendLabel = summary.serviceUrls.backendLabel;
+  const isPython = summary.project.backendType === "python";
+  const showBuildSummary = !isPython;
   const overallStatus = projectOverallStatus(summary);
   const lastBuild = summary.lastBuild;
+  const healthConfigured = Boolean(summary.serviceUrls.backendHealthUrl);
+  const healthState = !healthConfigured
+    ? "unknown"
+    : backend?.state === "running"
+      ? "success"
+      : backend?.state === "failed"
+        ? "failed"
+        : backend?.state;
 
   return (
     <article className="dashboard-project-card">
@@ -992,14 +1018,25 @@ function ProjectStatusRow({
               {overallStatus.label}
             </strong>
           </div>
-          <div className="dashboard-status-group">
-            <span>Last Build Status</span>
-            {lastBuild ? (
-              buildStatusPill(lastBuild.status)
-            ) : (
-              <strong className="dashboard-status-value idle">No builds</strong>
-            )}
-          </div>
+          {showBuildSummary ? (
+            <div className="dashboard-status-group">
+              <span>Last Build Status</span>
+              {lastBuild ? (
+                buildStatusPill(lastBuild.status)
+              ) : (
+                <strong className="dashboard-status-value idle">No builds</strong>
+              )}
+            </div>
+          ) : (
+            <div className="dashboard-status-group">
+              <span>Health Check</span>
+              {healthConfigured ? (
+                statusPill(healthState)
+              ) : (
+                <strong className="dashboard-status-value idle">Not configured</strong>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
@@ -1082,6 +1119,11 @@ function ProjectStatusRow({
               <strong>Not set</strong>
             )}
           </DashboardDetailRow>
+          {isPython ? (
+            <DashboardDetailRow label="Server type">
+              <strong>{summary.serviceUrls.backendServerType || "Custom"}</strong>
+            </DashboardDetailRow>
+          ) : null}
         </section>
 
         <section className="dashboard-project-detail">
@@ -1101,23 +1143,45 @@ function ProjectStatusRow({
           </DashboardDetailRow>
         </section>
 
-        <section className="dashboard-project-detail">
-          <header>
-            <Clock3 size={18} />
-            <h3>Last Build</h3>
-            {lastBuild ? (
-              buildStatusPill(lastBuild.status)
-            ) : (
-              <strong className="dashboard-status-value idle">No builds</strong>
-            )}
-          </header>
-          <DashboardDetailRow label="Duration">
-            <strong>{lastBuild?.duration ?? "--"}</strong>
-          </DashboardDetailRow>
-          <DashboardDetailRow label="Completed">
-            <strong>{lastBuild?.completed ?? "No builds recorded"}</strong>
-          </DashboardDetailRow>
-        </section>
+        {showBuildSummary ? (
+          <section className="dashboard-project-detail">
+            <header>
+              <Clock3 size={18} />
+              <h3>Last Build</h3>
+              {lastBuild ? (
+                buildStatusPill(lastBuild.status)
+              ) : (
+                <strong className="dashboard-status-value idle">No builds</strong>
+              )}
+            </header>
+            <DashboardDetailRow label="Duration">
+              <strong>{lastBuild?.duration ?? "--"}</strong>
+            </DashboardDetailRow>
+            <DashboardDetailRow label="Completed">
+              <strong>{lastBuild?.completed ?? "No builds recorded"}</strong>
+            </DashboardDetailRow>
+          </section>
+        ) : (
+          <section className="dashboard-project-detail">
+            <header>
+              <Activity size={18} />
+              <h3>Health Check</h3>
+              {healthConfigured ? statusPill(healthState) : null}
+            </header>
+            <DashboardDetailRow label="Status">
+              <strong>{healthConfigured ? (backend?.state === "running" ? "Healthy" : "Unknown") : "Not configured"}</strong>
+            </DashboardDetailRow>
+            <DashboardDetailRow label="Response">
+              <strong>{healthConfigured && backend?.state === "running" ? "200 OK" : "--"}</strong>
+            </DashboardDetailRow>
+            <DashboardDetailRow label="Last Check">
+              <strong>{backend?.checkedAt ? formatDate(backend.checkedAt) : "--"}</strong>
+            </DashboardDetailRow>
+            <DashboardDetailRow label="Health URL">
+              <strong>{summary.serviceUrls.backendHealthUrl || "--"}</strong>
+            </DashboardDetailRow>
+          </section>
+        )}
       </div>
     </article>
   );
@@ -1277,6 +1341,65 @@ function serviceStatus(
   return summary.statuses.find((status) => status.service === service);
 }
 
+function PythonRuntimePanel({
+  status,
+  settings,
+}: {
+  status: ProjectRuntimeState["statuses"][number] | undefined;
+  settings: ProjectRuntimeState["settings"];
+}): JSX.Element {
+  const hasHealthUrl = Boolean(settings.python.healthCheckUrl?.trim());
+  return (
+    <Panel title="Runtime Status" className="python-runtime-panel">
+      <div className="python-runtime-list">
+        <DashboardDetailRow label="Server type">
+          <strong>{getPythonServerTypeLabel(settings.python.serverType)}</strong>
+        </DashboardDetailRow>
+        <DashboardDetailRow label="Process">
+          {statusPill(status?.state)}
+        </DashboardDetailRow>
+        <DashboardDetailRow label="Uptime">
+          <strong>{formatServiceUptime(status, Date.now())}</strong>
+        </DashboardDetailRow>
+        <DashboardDetailRow label="App URL">
+          <strong>{settings.python.appUrl || "--"}</strong>
+        </DashboardDetailRow>
+        <DashboardDetailRow label="Health Check">
+          <strong>{hasHealthUrl ? settings.python.healthCheckUrl : "Not configured"}</strong>
+        </DashboardDetailRow>
+      </div>
+    </Panel>
+  );
+}
+
+function PythonErrorsPanel({
+  lines,
+}: {
+  lines: string[];
+}): JSX.Element {
+  const errorLines = lines
+    .filter((line) => /\b(error|exception|traceback|failed|failure)\b/i.test(line))
+    .slice(-8)
+    .reverse();
+
+  return (
+    <Panel title="Recent Errors" className="python-errors-panel">
+      {errorLines.length > 0 ? (
+        <div className="python-error-list">
+          {errorLines.map((line, index) => (
+            <div className="python-error-row" key={`${index}-${line}`}>
+              <AlertTriangle size={15} />
+              <span>{line}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-panel-state">No recent errors detected.</div>
+      )}
+    </Panel>
+  );
+}
+
 export function ProjectDashboardContent({
   projectId,
   resetVersion,
@@ -1294,6 +1417,10 @@ export function ProjectDashboardContent({
   const frontendRunning =
     frontendEnabled && frontendStatus?.state === "running";
   const backendRunning = backendStatus?.state === "running";
+  const showBuildPanels =
+    projectState.settings.backendType !== "python" ||
+    Boolean(projectState.settings.python.buildCommand?.trim());
+  const tailLogConfigured = Boolean(projectState.settings.appLogFile.trim());
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
@@ -1414,7 +1541,9 @@ export function ProjectDashboardContent({
         ? gridRef.current?.querySelector<HTMLElement>(".frontend-panel")
         : null,
       gridRef.current?.querySelector<HTMLElement>(".tail-log-panel"),
-      gridRef.current?.querySelector<HTMLElement>(".build-status-panel"),
+      gridRef.current?.querySelector<HTMLElement>(
+        showBuildPanels ? ".build-status-panel" : ".python-runtime-panel",
+      ),
     ];
     const startColumnWidths = columnPanels.map(
       (panel) => panel?.getBoundingClientRect().width ?? 0,
@@ -1562,22 +1691,34 @@ export function ProjectDashboardContent({
             }
           />
         ) : null}
-        <BuildLogPanel
-          projectId={projectId}
-          suspendAutoFollow={isResizing}
-          onZoom={() =>
-            setZoomLog({
-              title: "Build Log",
-              channel: "build",
-              footer: "Open build log",
-              className: "build-log-panel log-zoom-panel",
-              dense: true,
-            })
-          }
-        />
-        <BuildStatusPanel projectId={projectId} projectState={projectState} />
+        {showBuildPanels ? (
+          <BuildLogPanel
+            projectId={projectId}
+            suspendAutoFollow={isResizing}
+            onZoom={() =>
+              setZoomLog({
+                title: "Build Log",
+                channel: "build",
+                footer: "Open build log",
+                className: "build-log-panel log-zoom-panel",
+                dense: true,
+              })
+            }
+          />
+        ) : null}
+        {showBuildPanels ? (
+          <BuildStatusPanel projectId={projectId} projectState={projectState} />
+        ) : (
+          <>
+            <PythonErrorsPanel lines={projectState.logs.python} />
+            <PythonRuntimePanel
+              status={backendStatus}
+              settings={projectState.settings}
+            />
+          </>
+        )}
         <LogPanel
-          title={backendLabel}
+          title={backendService === "python" ? "Server Log" : backendLabel}
           projectId={projectId}
           channel={backendService}
           footer="Open full log"
@@ -1592,7 +1733,7 @@ export function ProjectDashboardContent({
           }
           onZoom={() =>
             setZoomLog({
-              title: backendLabel,
+              title: backendService === "python" ? "Server Log" : backendLabel,
               channel: backendService,
               footer: "Open full log",
               className: "wildfly-panel log-zoom-panel",
@@ -1605,15 +1746,19 @@ export function ProjectDashboardContent({
         />
         <TailLogPanel
           projectId={projectId}
+          configured={tailLogConfigured}
           suspendAutoFollow={isResizing}
-          onZoom={() =>
-            setZoomLog({
-              title: "Tail Log",
-              channel: "tail",
-              footer: "Open full log",
-              className: "tail-log-panel log-zoom-panel",
-              dense: true,
-            })
+          onZoom={
+            tailLogConfigured
+              ? () =>
+                  setZoomLog({
+                    title: "Tail Log",
+                    channel: "tail",
+                    footer: "Open full log",
+                    className: "tail-log-panel log-zoom-panel",
+                    dense: true,
+                  })
+              : undefined
           }
         />
         {frontendEnabled ? (

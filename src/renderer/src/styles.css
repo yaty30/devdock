@@ -3519,6 +3519,25 @@ body {
   padding: 13px;
 }
 
+.python-errors-panel {
+  grid-column: 5;
+  grid-row: 1;
+  padding: 13px;
+  min-height: 0;
+}
+
+.python-runtime-panel {
+  grid-column: 5;
+  grid-row: 3;
+  padding: 13px;
+  min-height: 0;
+}
+
+.dashboard-grid.frontend-disabled .python-errors-panel,
+.dashboard-grid.frontend-disabled .python-runtime-panel {
+  grid-column: 3;
+}
+
 .wildfly-panel {
   grid-column: 1 / 4;
   grid-row: 3;
@@ -3527,6 +3546,32 @@ body {
 .tail-log-panel {
   grid-column: 3;
   grid-row: 1;
+}
+
+.python-runtime-list,
+.python-error-list {
+  display: grid;
+  min-height: 0;
+  gap: 10px;
+}
+
+.python-error-list {
+  overflow: auto;
+  scrollbar-color: var(--accent-soft) transparent;
+  scrollbar-width: thin;
+}
+
+.python-error-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .dashboard-grid.frontend-disabled .tail-log-panel {
@@ -5615,6 +5660,55 @@ select option {
 .activity-feed-panel {
   grid-column: 5 / 8;
   grid-row: 3;
+  padding: 16px 18px 14px;
+}
+
+.python-monitor-primary-panels,
+.python-monitor-secondary-panels {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+}
+
+.python-monitor-primary-panels {
+  align-content: stretch;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.python-monitor-secondary-panels {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.python-monitor-primary-panels {
+  grid-column: 1 / 4;
+  grid-row: 3;
+}
+
+.python-monitor-secondary-panels {
+  grid-column: 5 / 8;
+  grid-row: 3;
+}
+
+.python-monitor-primary-panels .panel,
+.python-monitor-secondary-panels .panel {
+  min-height: 0;
+}
+
+.python-monitor-primary-panels .recent-builds-panel,
+.python-monitor-primary-panels .api-fetch-panel {
+  grid-column: auto;
+  grid-row: auto;
+  min-height: 0;
+}
+
+.python-monitor-secondary-panels .activity-feed-panel {
+  grid-column: auto;
+  grid-row: auto;
+  min-height: 0;
+}
+
+.python-monitor-runtime-panel {
   padding: 16px 18px 14px;
 }
 

@@ -7,6 +7,11 @@ import type {
 export type BackendType = "wildfly" | "python";
 export type BackendServiceName = BackendType;
 export type ServiceName = "frontend" | BackendServiceName;
+export type PythonServerType =
+  | "fastapi"
+  | "flask-api"
+  | "django-rest"
+  | "custom";
 export type ServiceAction = "start" | "stop" | "restart";
 export type ServiceState =
   | "running"
@@ -73,6 +78,19 @@ export type ServiceConfig = {
   autoStart?: boolean;
 };
 
+export type PythonWebServerConfig = {
+  enabled: boolean;
+  serverType: PythonServerType;
+  directory: string;
+  venvPath?: string;
+  installCommand?: string;
+  startCommand: string;
+  appUrl: string;
+  healthCheckUrl?: string;
+  autoStart?: boolean;
+  buildCommand?: string;
+};
+
 export type ProjectFrontendConfig = {
   enabled: boolean;
   path?: string;
@@ -104,6 +122,7 @@ export type ProjectSettingsRecord = {
   defaultBranch: string;
   remote: string;
   frontend: ProjectFrontendConfig;
+  python: PythonWebServerConfig;
   services: Record<ServiceName, ServiceConfig>;
   maven: MavenConfig;
   buildProfiles: BuildProfileRecord[];
@@ -156,6 +175,39 @@ export type BuildQueryResult = {
   hasMore: boolean;
 };
 
+export type ApiFetchRecord = {
+  id: string;
+  capturedAt: string;
+  method: string;
+  path: string;
+  status: number | null;
+  durationMs: number | null;
+  source: string;
+};
+
+export type ApiFetchSortKey =
+  | "capturedAt"
+  | "method"
+  | "path"
+  | "status"
+  | "durationMs"
+  | "source";
+
+export type ApiFetchQueryOptions = {
+  search?: string;
+  status?: "All" | "2xx" | "3xx" | "4xx" | "5xx";
+  sortBy?: ApiFetchSortKey;
+  sortDirection?: "asc" | "desc";
+  offset?: number;
+  limit?: number;
+};
+
+export type ApiFetchQueryResult = {
+  fetches: ApiFetchRecord[];
+  total: number;
+  hasMore: boolean;
+};
+
 export type ActivityRecord = {
   id: number;
   title: string;
@@ -193,6 +245,8 @@ export type ProjectDashboardSummary = {
     backendUrl: string;
     backendManagementUrl: string;
     backendLabel: string;
+    backendServerType: string;
+    backendHealthUrl: string;
   };
 };
 
@@ -489,6 +543,11 @@ export type DashboardEvent =
       type: "settings";
       projectId: string;
       settings: ProjectSettingsRecord;
+    }
+  | {
+      type: "api-fetch";
+      projectId: string;
+      fetches: ApiFetchRecord[];
     };
 
 export type DashboardApi = {
@@ -582,6 +641,10 @@ export type DashboardApi = {
     projectId: string,
     options?: BuildQueryOptions,
   ) => Promise<BuildQueryResult>;
+  getApiFetches: (
+    projectId: string,
+    options?: ApiFetchQueryOptions,
+  ) => Promise<ApiFetchQueryResult>;
   refreshStatus: (projectId: string) => Promise<ServiceStatusRecord[]>;
   getGitStatus: (projectId: string) => Promise<GitStatusRecord>;
   runGitCommand: (projectId: string, args: string) => Promise<GitStatusRecord>;
@@ -605,6 +668,7 @@ export type DashboardApi = {
     name: string,
     code: string,
     backendType: BackendType,
+    pythonServerType?: PythonServerType,
   ) => Promise<ProjectRecord>;
   updateProject: (
     projectId: string,

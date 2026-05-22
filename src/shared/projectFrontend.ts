@@ -3,6 +3,8 @@ import type {
   BackendType,
   ProjectFrontendConfig,
   ProjectSettingsRecord,
+  PythonServerType,
+  PythonWebServerConfig,
   ServiceConfig,
   ServiceName,
 } from "./dashboardTypes";
@@ -48,7 +50,33 @@ export function getProjectBackendLabel(
   return backendType === "python" ? "Python" : "WildFly";
 }
 
+export function getPythonServerTypeLabel(serverType: PythonServerType): string {
+  switch (serverType) {
+    case "fastapi":
+      return "FastAPI";
+    case "flask-api":
+      return "Flask API";
+    case "django-rest":
+      return "Django REST";
+    default:
+      return "Custom";
+  }
+}
+
+export function normalizePythonServerType(value: unknown): PythonServerType {
+  return value === "fastapi" ||
+    value === "flask-api" ||
+    value === "django-rest" ||
+    value === "custom"
+    ? value
+    : "custom";
+}
+
 export function getProjectBackendUrl(settings: ProjectSettingsRecord): string {
+  if (settings.backendType === "python") {
+    return settings.python.appUrl || settings.python.healthCheckUrl || "";
+  }
+
   const backend = settings.services[getProjectBackendServiceName(settings)];
   return backend.appUrl || backend.healthUrl || "";
 }
@@ -88,6 +116,7 @@ export function normalizeProjectSettings(
   const rawPythonService = isRecord(rawServices.python)
     ? rawServices.python
     : {};
+  const rawPythonConfig = isRecord(raw.python) ? raw.python : {};
   const rawFrontendConfig = isRecord(raw.frontend) ? raw.frontend : {};
   const rawMaven = isRecord(raw.maven) ? raw.maven : {};
   const backendType = normalizeBackendType(defaults.backendType);
@@ -135,10 +164,22 @@ export function normalizeProjectSettings(
     defaults.services.wildfly,
     { enabled: true },
   );
+  const python = normalizePythonWebServerConfig(
+    rawPythonConfig,
+    rawPythonService,
+    defaults.python,
+  );
   const pythonService = normalizeServiceConfig(
     rawPythonService,
     defaults.services.python,
-    { enabled: true },
+    {
+      enabled: python.enabled,
+      workingDirectory: python.directory,
+      command: python.startCommand,
+      healthUrl: python.healthCheckUrl ?? "",
+      appUrl: python.appUrl,
+      autoStart: python.autoStart ?? false,
+    },
   );
 
   return {
@@ -152,6 +193,7 @@ export function normalizeProjectSettings(
     defaultBranch: stringValue(raw.defaultBranch, defaults.defaultBranch),
     remote: stringValue(raw.remote, defaults.remote),
     frontend,
+    python,
     services: {
       frontend: frontendService,
       wildfly: wildflyService,
@@ -169,6 +211,48 @@ export function normalizeProjectSettings(
     buildProfiles: Array.isArray(raw.buildProfiles)
       ? raw.buildProfiles
       : defaults.buildProfiles,
+  };
+}
+
+function normalizePythonWebServerConfig(
+  rawPythonConfig: UnknownRecord,
+  rawPythonService: UnknownRecord,
+  defaults: PythonWebServerConfig,
+): PythonWebServerConfig {
+  return {
+    enabled: booleanValue(rawPythonConfig.enabled, defaults.enabled),
+    serverType: normalizePythonServerType(
+      rawPythonConfig.serverType ?? rawPythonService.serverType,
+    ),
+    directory: stringValue(
+      rawPythonConfig.directory,
+      stringValue(rawPythonService.workingDirectory, defaults.directory),
+    ),
+    venvPath: stringValue(rawPythonConfig.venvPath, defaults.venvPath),
+    installCommand: stringValue(
+      rawPythonConfig.installCommand,
+      defaults.installCommand,
+    ),
+    startCommand: stringValue(
+      rawPythonConfig.startCommand,
+      stringValue(rawPythonService.command, defaults.startCommand),
+    ),
+    appUrl: stringValue(
+      rawPythonConfig.appUrl,
+      stringValue(rawPythonService.appUrl, defaults.appUrl),
+    ),
+    healthCheckUrl: stringValue(
+      rawPythonConfig.healthCheckUrl,
+      stringValue(rawPythonService.healthUrl, defaults.healthCheckUrl),
+    ),
+    autoStart: booleanValue(
+      rawPythonConfig.autoStart,
+      booleanValue(rawPythonService.autoStart, defaults.autoStart ?? false),
+    ),
+    buildCommand: stringValue(
+      rawPythonConfig.buildCommand,
+      defaults.buildCommand,
+    ),
   };
 }
 

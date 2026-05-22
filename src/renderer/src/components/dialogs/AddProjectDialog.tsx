@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { AppSelect, type AppSelectOption } from "../common/AppSelect";
-import type { BackendType } from "../../types";
+import type { BackendType, PythonServerType } from "../../types";
 
 const BACKEND_TYPE_OPTIONS: Array<AppSelectOption<BackendType>> = [
   { value: "wildfly", label: "WildFly", dotColor: "#8b5cf6" },
   { value: "python", label: "Python", dotColor: "#10b981" },
+];
+
+const PYTHON_SERVER_TYPE_OPTIONS: Array<AppSelectOption<PythonServerType>> = [
+  { value: "fastapi", label: "FastAPI", dotColor: "#059669" },
+  { value: "flask-api", label: "Flask API", dotColor: "#2563eb" },
+  { value: "django-rest", label: "Django REST", dotColor: "#16a34a" },
+  { value: "custom", label: "Custom Python web server", dotColor: "var(--muted)" },
 ];
 
 export function AddProjectDialog({
@@ -15,12 +22,15 @@ export function AddProjectDialog({
     name: string,
     code: string,
     backendType: BackendType,
+    pythonServerType?: PythonServerType,
   ) => Promise<boolean>;
   onClose: () => void;
 }): JSX.Element {
   const [projectName, setProjectName] = useState("");
   const [projectCode, setProjectCode] = useState("");
   const [backendType, setBackendType] = useState<BackendType>("wildfly");
+  const [pythonServerType, setPythonServerType] =
+    useState<PythonServerType>("fastapi");
   const [isClosing, setIsClosing] = useState(false);
   const [saving, setSaving] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
@@ -48,7 +58,12 @@ export function AddProjectDialog({
     }
 
     setSaving(true);
-    const created = await onCreate(projectName, projectCode, backendType);
+    const created = await onCreate(
+      projectName,
+      projectCode,
+      backendType,
+      backendType === "python" ? pythonServerType : undefined,
+    );
     setSaving(false);
     if (created) {
       closeDialog();
@@ -109,6 +124,18 @@ export function AddProjectDialog({
               minDropdownWidth={160}
             />
           </label>
+          {backendType === "python" ? (
+            <label>
+              <span>Python server type *</span>
+              <AppSelect
+                value={pythonServerType}
+                options={PYTHON_SERVER_TYPE_OPTIONS}
+                onChange={setPythonServerType}
+                ariaLabel="Python server type"
+                minDropdownWidth={220}
+              />
+            </label>
+          ) : null}
         </div>
         <p>
           Project folder and app.config will be created automatically after you

@@ -17,6 +17,7 @@ import {
   Layers3,
   Package,
   RotateCcw,
+  Server,
   SquareTerminal,
 } from "lucide-react";
 import { FindControls } from "../../components/common/FindControls";
@@ -27,6 +28,8 @@ import {
 } from "../../components/common/AppSelect";
 import type {
   ActivityRecord,
+  ApiFetchRecord,
+  ApiFetchSortKey,
   BuildQuerySortKey,
   MonitorCard,
   ProjectRuntimeState,
@@ -37,6 +40,7 @@ import { clamp } from "../../utils/math";
 import {
   getProjectBackendLabel,
   getProjectBackendServiceName,
+  getPythonServerTypeLabel,
   isProjectFrontendEnabled,
 } from "../../../../shared/projectFrontend";
 
@@ -493,6 +497,336 @@ function ActivityFeedPanel({
   );
 }
 
+type ApiFetchStatusFilter = "All" | "2xx" | "3xx" | "4xx" | "5xx";
+
+const API_FETCH_STATUS_OPTIONS: Array<AppSelectOption<ApiFetchStatusFilter>> = [
+  { value: "All", label: "All statuses", dotColor: null },
+  { value: "2xx", label: "2xx Success", dotColor: "#22c55e" },
+  { value: "3xx", label: "3xx Redirect", dotColor: "#0ea5e9" },
+  { value: "4xx", label: "4xx Client error", dotColor: "#f59e0b" },
+  { value: "5xx", label: "5xx Server error", dotColor: "#ef4444" },
+];
+
+function ApiFetchStatusSelect({
+  value,
+  onChange,
+}: {
+  value: ApiFetchStatusFilter;
+  onChange: (value: ApiFetchStatusFilter) => void;
+}): JSX.Element {
+  return (
+    <AppSelect
+      value={value}
+      options={API_FETCH_STATUS_OPTIONS}
+      onChange={onChange}
+      ariaLabel="API fetch status filter"
+    />
+  );
+}
+
+function apiFetchStatusClass(status: number | null): string {
+  if (status === null) return "neutral";
+  if (status >= 500) return "failed";
+  if (status >= 400) return "stopped";
+  if (status >= 300) return "running";
+  if (status >= 200) return "success";
+  return "neutral";
+}
+
+function formatApiFetchTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString();
+}
+
+function formatApiFetchDuration(value: number | null): string {
+  if (value === null) return "—";
+  if (value < 1) return "<1 ms";
+  return `${Math.round(value)} ms`;
+}
+
+const API_FETCH_PAGE_SIZE = 30;
+
+function ApiFetchPanel({ projectId }: { projectId: string }): JSX.Element {
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState<ApiFetchStatusFilter>("All");
+  const [sortBy, setSortBy] = useState<ApiFetchSortKey>("capturedAt");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [fetches, setFetches] = useState<ApiFetchRecord[]>([]);
+  const [total, setTotal] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const activeRowRef = useRef<HTMLTableRowElement>(null);
+  const requestSeqRef = useRef(0);
+
+  const fetchPage = useCallback(
+    async (offset: number): Promise<void> => {
+      const requestSeq = ++requestSeqRef.current;
+      setLoading(true);
+      try {
+        const result = await window.ivsDashboard.getApiFetches(projectId, {
+          search: searchTerm,
+          status: statusFilter,
+          sortBy,
+          sortDirection,
+          offset,
+          limit: API_FETCH_PAGE_SIZE,
+        });
+        if (requestSeq !== requestSeqRef.current) {
+          return;
+        }
+        setFetches((current) =>
+          offset === 0 ? result.fetches : [...current, ...result.fetches],
+        );
+        setTotal(result.total);
+        setHasMore(result.hasMore);
+      } catch (error) {
+        console.error(error);
+      } finally {
+        if (requestSeq === requestSeqRef.current) {
+          setLoading(false);
+        }
+      }
+    },
+    [projectId, searchTerm, sortBy, sortDirection, statusFilter],
+  );
+
+  useEffect(() => {
+    setFetches([]);
+    setTotal(0);
+    setHasMore(false);
+    setActiveIndex(0);
+    scrollRef.current?.scrollTo({ top: 0 });
+    void fetchPage(0);
+  }, [fetchPage, refreshKey]);
+
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [projectId, searchTerm, sortBy, sortDirection, statusFilter]);
+
+  useEffect(() => {
+    const matchLimit = Math.min(total, fetches.length);
+    if (activeIndex >= matchLimit) {
+      setActiveIndex(matchLimit > 0 ? matchLimit - 1 : 0);
+    }
+  }, [activeIndex, fetches.length, total]);
+
+  useEffect(() => {
+    activeRowRef.current?.scrollIntoView({
+      block: "nearest",
+      inline: "nearest",
+    });
+  }, [activeIndex, fetches]);
+
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    const root = scrollRef.current;
+    if (!sentinel || !root) {
+      return undefined;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasMore && !loading) {
+          void fetchPage(fetches.length);
+        }
+      },
+      { root, threshold: 0.1 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetches.length, fetchPage, hasMore, loading]);
+
+  useEffect(() => {
+    const unsubscribe = window.ivsDashboard.onEvent((event) => {
+      if (event.type === "api-fetch" && event.projectId === projectId) {
+        setRefreshKey((value) => value + 1);
+      }
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [projectId]);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        findInputRef.current?.focus();
+        findInputRef.current?.select();
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  function handleSort(column: ApiFetchSortKey): void {
+    if (sortBy === column) {
+      setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+      return;
+    }
+
+    setSortBy(column);
+    setSortDirection(column === "capturedAt" ? "desc" : "asc");
+  }
+
+  function renderSortLabel(
+    column: ApiFetchSortKey,
+    label: string,
+  ): JSX.Element {
+    const isActive = sortBy === column;
+
+    return (
+      <button
+        className={`table-sort-button${isActive ? " active" : ""}`}
+        type="button"
+        onClick={() => handleSort(column)}
+      >
+        <span>{label}</span>
+        {isActive ? (
+          <span className="table-sort-direction">
+            {sortDirection === "asc" ? "Asc" : "Desc"}
+          </span>
+        ) : null}
+        {isActive ? <ArrowDownAZ size={14} /> : <ArrowUpDown size={14} />}
+      </button>
+    );
+  }
+
+  function handleReset(): void {
+    setSearchTerm("");
+    setActiveIndex(0);
+    setStatusFilter("All");
+    setSortBy("capturedAt");
+    setSortDirection("desc");
+  }
+
+  function navigateFind(delta: -1 | 1): void {
+    const matchLimit = Math.min(total, fetches.length);
+    if (matchLimit === 0) {
+      return;
+    }
+
+    setActiveIndex((current) => (current + delta + matchLimit) % matchLimit);
+  }
+
+  const isFiltered =
+    searchTerm !== "" ||
+    statusFilter !== "All" ||
+    sortBy !== "capturedAt" ||
+    sortDirection !== "desc";
+  const findMatchCount = searchTerm.trim() ? total : 0;
+  const activeFetchId =
+    findMatchCount > 0
+      ? fetches[Math.min(activeIndex, fetches.length - 1)]?.id
+      : undefined;
+
+  return (
+    <Panel
+      title="API Fetch"
+      className="recent-builds-panel api-fetch-panel"
+      findBar={
+        <div className="log-find-row">
+          <FindControls
+            id="api-fetch-search"
+            value={searchTerm}
+            activeIndex={activeIndex}
+            matchCount={findMatchCount}
+            inputRef={findInputRef}
+            onChange={setSearchTerm}
+            onPrevious={() => navigateFind(-1)}
+            onNext={() => navigateFind(1)}
+            onClear={() => {
+              setSearchTerm("");
+              setActiveIndex(0);
+            }}
+          />
+          <ApiFetchStatusSelect
+            value={statusFilter}
+            onChange={setStatusFilter}
+          />
+          <button
+            className="table-reset-button"
+            type="button"
+            onClick={handleReset}
+            title="Reset filters and sorting"
+            disabled={!isFiltered}
+          >
+            <RotateCcw size={14} />
+            <span>Reset</span>
+          </button>
+        </div>
+      }
+    >
+      <div className="recent-builds-table-scroll" ref={scrollRef}>
+        <table className="recent-builds-table">
+          <thead>
+            <tr>
+              <th>{renderSortLabel("capturedAt", "Time")}</th>
+              <th>{renderSortLabel("method", "Method")}</th>
+              <th>{renderSortLabel("path", "Path")}</th>
+              <th>{renderSortLabel("status", "Status")}</th>
+              <th>{renderSortLabel("durationMs", "Duration")}</th>
+              <th>{renderSortLabel("source", "Source")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {fetches.map((entry) => (
+              <tr
+                key={entry.id}
+                className={
+                  entry.id === activeFetchId
+                    ? "recent-build-row-active"
+                    : undefined
+                }
+                ref={
+                  entry.id === activeFetchId ? activeRowRef : undefined
+                }
+              >
+                <td>{formatApiFetchTime(entry.capturedAt)}</td>
+                <td>{entry.method}</td>
+                <td title={entry.path}>{entry.path}</td>
+                <td>
+                  <span
+                    className={`status-pill build-status ${apiFetchStatusClass(entry.status)}`}
+                  >
+                    {entry.status ?? "—"}
+                  </span>
+                </td>
+                <td>{formatApiFetchDuration(entry.durationMs)}</td>
+                <td>{entry.source || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div
+          ref={sentinelRef}
+          className="recent-builds-sentinel"
+          aria-hidden="true"
+        />
+        {fetches.length === 0 && !loading ? (
+          <p className="recent-builds-empty">
+            No API requests captured yet.
+          </p>
+        ) : null}
+      </div>
+      <div className="table-footer">
+        <span>
+          {loading && fetches.length === 0
+            ? "Loading requests"
+            : `Showing ${fetches.length} of ${total} requests`}
+        </span>
+        {loading && fetches.length > 0 ? <span>Loading more...</span> : null}
+      </div>
+    </Panel>
+  );
+}
+
 function groupActivityFeedByDate(items: ActivityRecord[]): ActivityFeedRow[] {
   const rows: ActivityFeedRow[] = [];
   let previousKey: string | null = null;
@@ -759,6 +1093,9 @@ export function MonitorTab({
     "--monitor-row-template": monitorRowTemplate(),
   } as CSSProperties;
   const monitorCards = createMonitorCards(projectState);
+  const showBuildHistory =
+    projectState.settings.backendType !== "python" ||
+    Boolean(projectState.settings.python.buildCommand?.trim());
 
   return (
     <section className="monitor-screen resizable-panel-screen">
@@ -774,11 +1111,23 @@ export function MonitorTab({
             key={card.title}
           />
         ))}
-        <RecentBuildsPanel
-          projectId={projectId}
-          recentBuilds={projectState.recentBuilds}
-        />
-        <ActivityFeedPanel activityFeed={projectState.activityFeed} />
+        {showBuildHistory ? (
+          <RecentBuildsPanel
+            projectId={projectId}
+            recentBuilds={projectState.recentBuilds}
+          />
+        ) : (
+          <div className="python-monitor-primary-panels">
+            <ApiFetchPanel projectId={projectId} />
+          </div>
+        )}
+        {showBuildHistory ? (
+          <ActivityFeedPanel activityFeed={projectState.activityFeed} />
+        ) : (
+          <div className="python-monitor-secondary-panels">
+            <ActivityFeedPanel activityFeed={projectState.activityFeed} />
+          </div>
+        )}
         <div
           className="grid-splitter monitor-column-splitter monitor-column-splitter-one"
           role="separator"
@@ -833,7 +1182,10 @@ function readStoredMonitorLayout(projectId: string): MonitorLayout {
 function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
   const frontendEnabled = isProjectFrontendEnabled(projectState.settings);
   const backendService = getProjectBackendServiceName(projectState.settings);
-  const backendLabel = getProjectBackendLabel(projectState.settings);
+  const isPython = projectState.settings.backendType === "python";
+  const backendLabel = isPython
+    ? "Python Server"
+    : getProjectBackendLabel(projectState.settings);
   const backendConfig = projectState.settings.services[backendService];
   const frontendStatus = projectState.statuses.find(
     (status) => status.service === "frontend",
@@ -842,6 +1194,12 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
     (status) => status.service === backendService,
   );
   const lastBuild = projectState.recentBuilds[0];
+  const healthConfigured = Boolean(projectState.settings.python.healthCheckUrl?.trim());
+  const healthState = !healthConfigured
+    ? undefined
+    : backendStatus?.state === "running"
+      ? "success"
+      : backendStatus?.state;
 
   return [
     {
@@ -885,6 +1243,16 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
               },
             ]
           : []),
+        ...(isPython
+          ? [
+              {
+                label: "Server type",
+                value: getPythonServerTypeLabel(
+                  projectState.settings.python.serverType,
+                ),
+              },
+            ]
+          : []),
         {
           label: backendService === "wildfly" ? "KMU" : "App URL",
           value: backendConfig.appUrl || backendConfig.healthUrl || "Not set",
@@ -907,18 +1275,37 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
         },
       ],
     },
-    {
-      title: "Last Build",
-      icon: <CheckCircle2 size={26} />,
-      rows: [
-        {
-          label: "Status",
-          value: statusPill(lastBuild?.status.toLowerCase()),
+    isPython
+      ? {
+          title: "Health Check",
+          icon: <Server size={26} />,
+          rows: [
+            {
+              label: "Status",
+              value: healthConfigured ? statusPill(healthState) : "Not configured",
+            },
+            {
+              label: "URL",
+              value: projectState.settings.python.healthCheckUrl || "Not configured",
+            },
+            {
+              label: "Last Check",
+              value: backendStatus ? formatDate(backendStatus.checkedAt) : "Not checked",
+            },
+          ],
+        }
+      : {
+          title: "Last Build",
+          icon: <CheckCircle2 size={26} />,
+          rows: [
+            {
+              label: "Status",
+              value: statusPill(lastBuild?.status.toLowerCase()),
+            },
+            { label: "Duration", value: lastBuild?.duration ?? "No builds" },
+            { label: "Completed", value: lastBuild?.completed ?? "No builds" },
+          ],
         },
-        { label: "Duration", value: lastBuild?.duration ?? "No builds" },
-        { label: "Completed", value: lastBuild?.completed ?? "No builds" },
-      ],
-    },
   ];
 }
 

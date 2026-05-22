@@ -6,6 +6,10 @@ import {
   type ComponentProps,
 } from "react";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
+import {
+  AppSelect,
+  type AppSelectOption,
+} from "../../components/common/AppSelect";
 import { Panel } from "../../components/common/Panel";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import type {
@@ -13,12 +17,14 @@ import type {
   ConfirmDialogState,
   Project,
   ProjectSettingsRecord,
+  PythonServerType,
   ServiceName,
   SettingsTab,
 } from "../../types";
 import {
   getProjectBackendLabel,
   getProjectBackendServiceName,
+  getPythonServerTypeLabel,
   isProjectFrontendEnabled,
 } from "../../../../shared/projectFrontend";
 
@@ -56,7 +62,106 @@ function FieldRow({
   );
 }
 
+function shouldApplyPythonDefault(
+  currentValue: string,
+  previousDefault: string,
+): boolean {
+  return currentValue.trim() === "" || currentValue === previousDefault;
+}
+
+function normalizePythonVenvPath(venvPath: string | undefined): string {
+  return (venvPath ?? "").trim().replace(/[\\/]+$/, "") || ".venv";
+}
+
+function shellQuoteIfNeeded(value: string): string {
+  return /\s/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
+function pythonActivationCommand(venvPath: string | undefined): string {
+  const normalizedVenvPath = normalizePythonVenvPath(venvPath);
+  return shellQuoteIfNeeded(`${normalizedVenvPath}\\Scripts\\activate`);
+}
+
 const PROFILE_ROW_EXIT_MS = 180;
+
+const PYTHON_SERVER_TYPE_OPTIONS: Array<AppSelectOption<PythonServerType>> = [
+  { value: "fastapi", label: "FastAPI", dotColor: "#059669" },
+  { value: "flask-api", label: "Flask API", dotColor: "#2563eb" },
+  { value: "django-rest", label: "Django REST", dotColor: "#16a34a" },
+  { value: "custom", label: "Custom", dotColor: "var(--muted)" },
+];
+
+const PYTHON_SERVER_DEFAULTS: Record<
+  PythonServerType,
+  {
+    installCommand: string;
+    command: string;
+    appUrl: string;
+    healthCheckUrl: string;
+  }
+> = {
+  fastapi: {
+    installCommand: "pip install -r requirements.txt",
+    command: "uvicorn app.main:app --reload",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "http://127.0.0.1:8000/health",
+  },
+  "flask-api": {
+    installCommand: "pip install -r requirements.txt",
+    command: "flask --app app run --debug --host 127.0.0.1 --port 8000",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "http://127.0.0.1:8000",
+  },
+  "django-rest": {
+    installCommand: "pip install -r requirements.txt",
+    command: "python manage.py runserver 127.0.0.1:8000",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "http://127.0.0.1:8000",
+  },
+  custom: {
+    installCommand: "pip install -r requirements.txt",
+    command: "",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "",
+  },
+};
+
+function getPythonServerDefaults(
+  serverType: PythonServerType,
+  venvPath: string | undefined,
+): {
+  installCommand: string;
+  startCommand: string;
+  appUrl: string;
+  healthCheckUrl: string;
+} {
+  const defaults = PYTHON_SERVER_DEFAULTS[serverType];
+  return {
+    installCommand: defaults.installCommand,
+    startCommand: defaults.command
+      ? `${pythonActivationCommand(venvPath)} && ${defaults.command}`
+      : "",
+    appUrl: defaults.appUrl,
+    healthCheckUrl: defaults.healthCheckUrl,
+  };
+}
+
+function isGeneratedPythonStartCommand(
+  currentValue: string,
+  serverType: PythonServerType,
+  venvPath: string | undefined,
+): boolean {
+  const current = currentValue.trim();
+  if (!current) {
+    return true;
+  }
+
+  return [venvPath, ""].some(
+    (candidateVenvPath) =>
+      currentValue ===
+      getPythonServerDefaults(serverType, candidateVenvPath).startCommand,
+  );
+}
 
 type BuildProfileField = "buttonName" | "profileName" | "goals";
 type BuildProfileFieldErrors = Partial<
@@ -247,6 +352,135 @@ export function SettingsContent({
         },
       },
     }));
+  }
+
+  function updatePythonConfig(
+    patch: Partial<ProjectSettingsRecord["python"]>,
+  ): void {
+    setDraft((current) => {
+      const python = { ...current.python, ...patch };
+      return {
+        ...current,
+        python,
+        services: {
+          ...current.services,
+          python: {
+            ...current.services.python,
+            enabled: python.enabled,
+            workingDirectory: python.directory,
+            command: python.startCommand,
+            healthUrl: python.healthCheckUrl ?? "",
+            appUrl: python.appUrl,
+            autoStart: python.autoStart ?? false,
+          },
+        },
+      };
+    });
+  }
+
+  function updatePythonServerType(serverType: PythonServerType): void {
+    setDraft((current) => {
+      const previousDefaults = getPythonServerDefaults(
+        current.python.serverType,
+        current.python.venvPath,
+      );
+      const nextDefaults = getPythonServerDefaults(
+        serverType,
+        current.python.venvPath,
+      );
+      const currentPython = current.python;
+      const shouldUpdateStartCommand =
+        shouldApplyPythonDefault(
+          currentPython.startCommand,
+          previousDefaults.startCommand,
+        ) ||
+        isGeneratedPythonStartCommand(
+          currentPython.startCommand,
+          currentPython.serverType,
+          currentPython.venvPath,
+        );
+      const python = {
+        ...currentPython,
+        serverType,
+        installCommand: shouldApplyPythonDefault(
+          currentPython.installCommand ?? "",
+          previousDefaults.installCommand,
+        )
+          ? nextDefaults.installCommand
+          : currentPython.installCommand,
+        startCommand: shouldUpdateStartCommand
+          ? nextDefaults.startCommand
+          : currentPython.startCommand,
+        appUrl: shouldApplyPythonDefault(
+          currentPython.appUrl,
+          previousDefaults.appUrl,
+        )
+          ? nextDefaults.appUrl
+          : currentPython.appUrl,
+        healthCheckUrl: shouldApplyPythonDefault(
+          currentPython.healthCheckUrl ?? "",
+          previousDefaults.healthCheckUrl,
+        )
+          ? nextDefaults.healthCheckUrl
+          : currentPython.healthCheckUrl,
+      };
+      return {
+        ...current,
+        python,
+        services: {
+          ...current.services,
+          python: {
+            ...current.services.python,
+            workingDirectory: python.directory,
+            command: python.startCommand,
+            healthUrl: python.healthCheckUrl ?? "",
+            appUrl: python.appUrl,
+            autoStart: python.autoStart ?? false,
+          },
+        },
+      };
+    });
+  }
+
+  function updatePythonVenvPath(venvPath: string): void {
+    setDraft((current) => {
+      const previousDefaults = getPythonServerDefaults(
+        current.python.serverType,
+        current.python.venvPath,
+      );
+      const nextDefaults = getPythonServerDefaults(
+        current.python.serverType,
+        venvPath,
+      );
+      const shouldUpdateStartCommand =
+        isGeneratedPythonStartCommand(
+          current.python.startCommand,
+          current.python.serverType,
+          current.python.venvPath,
+        ) ||
+        shouldApplyPythonDefault(
+          current.python.startCommand,
+          previousDefaults.startCommand,
+        );
+      const python = {
+        ...current.python,
+        venvPath,
+        startCommand: shouldUpdateStartCommand
+          ? nextDefaults.startCommand
+          : current.python.startCommand,
+      };
+      return {
+        ...current,
+        python,
+        services: {
+          ...current.services,
+          python: {
+            ...current.services.python,
+            command: python.startCommand,
+          },
+        },
+      };
+    });
   }
 
   function updateFrontendEnabled(enabled: boolean): void {
@@ -845,40 +1079,102 @@ export function SettingsContent({
               )}
             </Panel>
 
-            <Panel title={backendLabel} className="settings-form-panel">
-              <FieldRow
-                label={
-                  backendService === "wildfly" ? "Bin Directory" : "Directory"
-                }
-                value={backendConfig.workingDirectory}
-                browse
-                onChange={(value) =>
-                  updateService(backendService, "workingDirectory", value)
-                }
-                onBrowse={() =>
-                  browseDirectory(
-                    `Select ${backendLabel} directory`,
-                    backendConfig.workingDirectory,
-                    (value) =>
-                      updateService(backendService, "workingDirectory", value),
-                  )
-                }
-              />
-              <FieldRow
-                label="Start Command"
-                value={backendConfig.command}
-                onChange={(value) =>
-                  updateService(backendService, "command", value)
-                }
-              />
-              <FieldRow
-                label="Health URL"
-                value={backendConfig.healthUrl}
-                onChange={(value) =>
-                  updateService(backendService, "healthUrl", value)
-                }
-              />
-              {backendService === "wildfly" ? (
+            <Panel
+              title={backendService === "python" ? "Python Web Server" : backendLabel}
+              className="settings-form-panel"
+            >
+              {backendService === "python" ? (
+                <>
+                  <FieldRow
+                    label="Directory"
+                    value={draft.python.directory}
+                    browse
+                    onChange={(value) => updatePythonConfig({ directory: value })}
+                    onBrowse={() =>
+                      browseDirectory(
+                        "Select Python server directory",
+                        draft.python.directory,
+                        (value) => updatePythonConfig({ directory: value }),
+                      )
+                    }
+                  />
+                  <label className="settings-field-row">
+                    <span>Python server type</span>
+                    <AppSelect
+                      value={draft.python.serverType}
+                      options={PYTHON_SERVER_TYPE_OPTIONS}
+                      onChange={updatePythonServerType}
+                      ariaLabel="Python server type"
+                      minDropdownWidth={180}
+                    />
+                    <span />
+                  </label>
+                  <FieldRow
+                    label="Virtual environment path"
+                    value={draft.python.venvPath ?? ""}
+                    browse
+                    onChange={updatePythonVenvPath}
+                    onBrowse={() =>
+                      browseDirectory(
+                        "Select Python virtual environment",
+                        draft.python.venvPath ?? "",
+                        updatePythonVenvPath,
+                      )
+                    }
+                  />
+                  <FieldRow
+                    label="Install command"
+                    value={draft.python.installCommand ?? ""}
+                    onChange={(value) => updatePythonConfig({ installCommand: value })}
+                  />
+                  <FieldRow
+                    label="Start command"
+                    value={draft.python.startCommand}
+                    onChange={(value) => updatePythonConfig({ startCommand: value })}
+                  />
+                  <FieldRow
+                    label="App URL"
+                    value={draft.python.appUrl}
+                    onChange={(value) => updatePythonConfig({ appUrl: value })}
+                  />
+                  <FieldRow
+                    label="Health Check URL"
+                    value={draft.python.healthCheckUrl ?? ""}
+                    onChange={(value) => updatePythonConfig({ healthCheckUrl: value })}
+                  />
+                </>
+              ) : (
+                <>
+                  <FieldRow
+                    label="Bin Directory"
+                    value={backendConfig.workingDirectory}
+                    browse
+                    onChange={(value) =>
+                      updateService(backendService, "workingDirectory", value)
+                    }
+                    onBrowse={() =>
+                      browseDirectory(
+                        `Select ${backendLabel} directory`,
+                        backendConfig.workingDirectory,
+                        (value) =>
+                          updateService(backendService, "workingDirectory", value),
+                      )
+                    }
+                  />
+                  <FieldRow
+                    label="Start Command"
+                    value={backendConfig.command}
+                    onChange={(value) =>
+                      updateService(backendService, "command", value)
+                    }
+                  />
+                  <FieldRow
+                    label="Health URL"
+                    value={backendConfig.healthUrl}
+                    onChange={(value) =>
+                      updateService(backendService, "healthUrl", value)
+                    }
+                  />
                 <FieldRow
                   label="Admin Console URL"
                   value={backendConfig.managementUrl ?? ""}
@@ -886,14 +1182,15 @@ export function SettingsContent({
                     updateService(backendService, "managementUrl", value)
                   }
                 />
-              ) : null}
-              <FieldRow
-                label={backendService === "wildfly" ? "KMU URL" : "App URL"}
-                value={backendConfig.appUrl ?? ""}
-                onChange={(value) =>
-                  updateService(backendService, "appUrl", value)
-                }
-              />
+                  <FieldRow
+                    label="KMU URL"
+                    value={backendConfig.appUrl ?? ""}
+                    onChange={(value) =>
+                      updateService(backendService, "appUrl", value)
+                    }
+                  />
+                </>
+              )}
             </Panel>
           </div>
         ) : null}

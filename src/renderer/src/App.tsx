@@ -67,6 +67,7 @@ import type {
   ProjectDashboardSummary,
   ProjectRecord,
   ProjectRuntimeState,
+  PythonServerType,
   RecentBuildRecord,
   ServiceStatusRecord,
   ShutdownEntry,
@@ -1178,6 +1179,7 @@ function App(): JSX.Element {
     name: string,
     code: string,
     backendType: BackendType,
+    pythonServerType?: PythonServerType,
   ): Promise<boolean> {
     const trimmedName = name.trim();
     const trimmedCode = code.trim().toUpperCase();
@@ -1213,6 +1215,7 @@ function App(): JSX.Element {
         trimmedName,
         trimmedCode,
         backendType,
+        pythonServerType,
       );
       if (projectLoadingTimerRef.current !== null) {
         window.clearTimeout(projectLoadingTimerRef.current);
@@ -2460,6 +2463,18 @@ function createLoadingProjectState(): ProjectRuntimeState {
         path: "",
         installCommand: "",
         devCommand: "",
+        buildCommand: "",
+      },
+      python: {
+        enabled: true,
+        serverType: "custom",
+        directory: "",
+        venvPath: "",
+        installCommand: "pip install -r requirements.txt",
+        startCommand: "",
+        appUrl: "http://127.0.0.1:8000",
+        healthCheckUrl: "",
+        autoStart: false,
         buildCommand: "",
       },
       services: {

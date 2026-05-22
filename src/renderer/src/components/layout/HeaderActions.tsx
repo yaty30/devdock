@@ -61,6 +61,8 @@ export function HeaderActions({
   showSettingsButton?: boolean;
   disabled?: boolean;
 }): JSX.Element {
+  const showBuildActions =
+    settings.backendType !== "python" || Boolean(settings.python.buildCommand?.trim());
   return (
     <div className="header-actions">
       <ServiceControlGroup
@@ -70,14 +72,16 @@ export function HeaderActions({
         onServiceWarning={onServiceWarning}
         disabled={disabled}
       />
-      <BuildActionsDropdown
-        projectId={projectId}
-        settings={settings}
-        statuses={statuses}
-        recentBuilds={recentBuilds}
-        gitStatus={gitStatus}
-        disabled={disabled}
-      />
+      {showBuildActions ? (
+        <BuildActionsDropdown
+          projectId={projectId}
+          settings={settings}
+          statuses={statuses}
+          recentBuilds={recentBuilds}
+          gitStatus={gitStatus}
+          disabled={disabled}
+        />
+      ) : null}
       <HeaderUtilityActions
         fontSizeMode={fontSizeMode}
         onFontSizeChange={onFontSizeChange}

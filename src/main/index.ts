@@ -21,6 +21,7 @@ import { ChatService } from "./chatService";
 import os from "os";
 import type {
   BuildQueryOptions,
+  ApiFetchQueryOptions,
   DatabaseConnection,
   DatabaseObjectCollectionName,
   ProjectSettingsRecord,
@@ -35,6 +36,7 @@ import type {
   ApiTesterResponse,
   ApiTesterResponseHeader,
   BackendType,
+  PythonServerType,
   RecentBuildRecord,
 } from "../shared/dashboardTypes";
 import type {
@@ -366,6 +368,13 @@ function registerIpc(): void {
         getBackend().getBuilds(projectId, options),
       ),
   );
+  ipcMain.handle(
+    "dashboard:getApiFetches",
+    (_event, projectId: string, options?: ApiFetchQueryOptions) =>
+      withLoggedErrors("dashboard:getApiFetches", () =>
+        getBackend().getApiFetches(projectId, options),
+      ),
+  );
   ipcMain.handle("dashboard:refreshStatus", (_event, projectId: string) =>
     withLoggedErrors("dashboard:refreshStatus", () =>
       getBackend().refreshStatus(projectId),
@@ -486,9 +495,15 @@ function registerIpc(): void {
   );
   ipcMain.handle(
     "dashboard:createProject",
-    (_event, name: string, code: string, backendType: BackendType) =>
+    (
+      _event,
+      name: string,
+      code: string,
+      backendType: BackendType,
+      pythonServerType?: PythonServerType,
+    ) =>
       withLoggedErrors("dashboard:createProject", () =>
-        getBackend().createProject(name, code, backendType),
+        getBackend().createProject(name, code, backendType, pythonServerType),
       ),
   );
   ipcMain.handle(

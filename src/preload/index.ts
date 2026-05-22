@@ -3,6 +3,7 @@ import type {
   DashboardApi,
   DashboardEvent,
   BuildQueryOptions,
+  ApiFetchQueryOptions,
   LogChannel,
   ProjectSettingsRecord,
   ServiceAction,
@@ -76,6 +77,8 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:stopBuild", projectId),
   getBuilds: (projectId: string, options?: BuildQueryOptions) =>
     ipcRenderer.invoke("dashboard:getBuilds", projectId, options),
+  getApiFetches: (projectId: string, options?: ApiFetchQueryOptions) =>
+    ipcRenderer.invoke("dashboard:getApiFetches", projectId, options),
   refreshStatus: (projectId) =>
     ipcRenderer.invoke("dashboard:refreshStatus", projectId),
   getGitStatus: (projectId) =>
@@ -103,8 +106,14 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:openLog", projectId, channel),
   deleteProject: (projectId) =>
     ipcRenderer.invoke("dashboard:deleteProject", projectId),
-  createProject: (name, code, backendType) =>
-    ipcRenderer.invoke("dashboard:createProject", name, code, backendType),
+  createProject: (name, code, backendType, pythonServerType) =>
+    ipcRenderer.invoke(
+      "dashboard:createProject",
+      name,
+      code,
+      backendType,
+      pythonServerType,
+    ),
   updateProject: (projectId, name, code) =>
     ipcRenderer.invoke("dashboard:updateProject", projectId, name, code),
   validateProjectSettings: (projectId, name, code, settings) =>

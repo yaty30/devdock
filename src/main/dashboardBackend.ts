@@ -39,6 +39,9 @@ import type {
   BuildQueryOptions,
   BuildQueryResult,
   BuildQuerySortKey,
+  ApiFetchRecord,
+  ApiFetchQueryOptions,
+  ApiFetchQueryResult,
   DashboardEvent,
   DatabaseConnection,
   DatabaseConnectionTestResult,
@@ -60,6 +63,8 @@ import type {
   ProjectDashboardSummary,
   ProjectRuntimeState,
   ProjectSettingsRecord,
+  PythonServerType,
+  PythonWebServerConfig,
   RecentBuildRecord,
   ServiceAction,
   ServiceName,
@@ -81,9 +86,11 @@ import {
   getProjectBackendServiceName,
   getProjectBackendUrl,
   getProjectFrontendUrl,
+  getPythonServerTypeLabel,
   getProjectServiceNames,
   isProjectFrontendEnabled,
   normalizeBackendType,
+  normalizePythonServerType,
   normalizeProjectSettings,
 } from "../shared/projectFrontend";
 
@@ -301,6 +308,7 @@ type SettingsActivityEntry = {
 
 const LOG_LIMIT = 5000;
 const LOG_BATCH_FLUSH_MS = 50;
+const API_FETCH_LIMIT = 1000;
 const STATUS_INTERVAL_MS = 5000;
 const TAIL_INTERVAL_MS = 1000;
 const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
@@ -318,6 +326,41 @@ const EMPTY_SHEET_CONTENT: SheetContentJson = {
   content: [{ type: "paragraph" }],
 };
 
+const PYTHON_WEB_SERVER_DEFAULTS: Record<
+  PythonServerType,
+  Pick<
+    PythonWebServerConfig,
+    "installCommand" | "startCommand" | "appUrl" | "healthCheckUrl"
+  >
+> = {
+  fastapi: {
+    installCommand: "pip install -r requirements.txt",
+    startCommand: ".\\venv\\Scripts\\activate && uvicorn app.main:app --reload",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "http://127.0.0.1:8000/health",
+  },
+  "flask-api": {
+    installCommand: "pip install -r requirements.txt",
+    startCommand:
+      ".\\venv\\Scripts\\activate && flask --app app run --debug --host 127.0.0.1 --port 8000",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "http://127.0.0.1:8000",
+  },
+  "django-rest": {
+    installCommand: "pip install -r requirements.txt",
+    startCommand:
+      ".\\venv\\Scripts\\activate && python manage.py runserver 127.0.0.1:8000",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "http://127.0.0.1:8000",
+  },
+  custom: {
+    installCommand: "pip install -r requirements.txt",
+    startCommand: "",
+    appUrl: "http://127.0.0.1:8000",
+    healthCheckUrl: "",
+  },
+};
+
 const CHANNEL_NAME = "dashboard:event";
 
 export class DashboardBackend {
@@ -332,6 +375,10 @@ export class DashboardBackend {
   private readonly tailStates = new Map<string, TailState>();
   private readonly statusTimers = new Map<string, NodeJS.Timeout>();
   private readonly logBuffer = new Map<string, LogLine[]>();
+  private readonly apiFetches = new Map<string, ApiFetchRecord[]>();
+  private apiFetchSeq = 0;
+  private apiFetchEventBuffer = new Map<string, ApiFetchRecord[]>();
+  private apiFetchEventTimer: NodeJS.Timeout | null = null;
   private readonly estimatedRowCountOverrides = new Map<string, number>();
   private readonly estimatedRowCountSnapshots = new Map<
     string,
@@ -1524,6 +1571,14 @@ export class DashboardBackend {
           backendUrl: getProjectBackendUrl(settings),
           backendManagementUrl: getProjectBackendManagementUrl(settings),
           backendLabel: getProjectBackendLabel(settings),
+          backendServerType:
+            settings.backendType === "python"
+              ? getPythonServerTypeLabel(settings.python.serverType)
+              : "",
+          backendHealthUrl:
+            settings.backendType === "python"
+              ? (settings.python.healthCheckUrl ?? "")
+              : settings.services.wildfly.healthUrl,
         },
       };
     });
@@ -1676,6 +1731,7 @@ export class DashboardBackend {
     name: string,
     code: string,
     backendType: BackendType,
+    pythonServerType?: PythonServerType,
   ): ProjectRecord {
     const trimmedName = name.trim();
     const trimmedCode = code.trim().toUpperCase();
@@ -1703,7 +1759,7 @@ export class DashboardBackend {
       .run(id, trimmedName, trimmedCode, normalizedBackendType, now);
     this.writeProjectConfig(
       id,
-      this.defaultSettings(id, normalizedBackendType),
+      this.defaultSettings(id, normalizedBackendType, pythonServerType),
     );
     this.insertActivity(
       id,
@@ -1883,9 +1939,7 @@ export class DashboardBackend {
     const backendDirectory = backend.workingDirectory.trim();
     const gitProjectDirectory = normalizedSettings.gitProjectDirectory.trim();
 
-    if (!appLogFile) {
-      errors.push("Application log file is required");
-    } else if (!isExistingFile(appLogFile)) {
+    if (appLogFile && !isExistingFile(appLogFile)) {
       errors.push(`Application log file does not exist: ${appLogFile}`);
     }
 
@@ -1904,7 +1958,23 @@ export class DashboardBackend {
       }
     }
 
-    if (backendDirectory) {
+    if (backendService === "python") {
+      const python = normalizedSettings.python;
+      if (!python.serverType) {
+        errors.push("Python server type is required");
+      }
+      if (!python.directory.trim()) {
+        errors.push("Python directory is required");
+      } else if (!isExistingDirectory(python.directory.trim())) {
+        errors.push(`Python directory does not exist: ${python.directory.trim()}`);
+      }
+      if (!python.startCommand.trim()) {
+        errors.push("Python start command is required");
+      }
+      if (!python.appUrl.trim()) {
+        errors.push("Python app URL is required");
+      }
+    } else if (backendDirectory) {
       if (!isExistingDirectory(backendDirectory)) {
         errors.push(
           `${getProjectBackendLabel(normalizedSettings)} directory does not exist: ${backendDirectory}`,
@@ -1920,9 +1990,7 @@ export class DashboardBackend {
           `${getProjectBackendLabel(normalizedSettings)} health URL is required`,
         );
       }
-      if (backendService === "wildfly") {
-        errors.push(...validateMavenConfig(normalizedSettings.maven));
-      }
+      errors.push(...validateMavenConfig(normalizedSettings.maven));
     }
 
     if (!gitProjectDirectory) {
@@ -2193,6 +2261,97 @@ export class DashboardBackend {
   ): BuildQueryResult {
     this.pruneBuilds(projectId);
     return this.queryBuilds(projectId, options);
+  }
+
+  getApiFetches(
+    projectId: string,
+    options: ApiFetchQueryOptions = {},
+  ): ApiFetchQueryResult {
+    const all = this.apiFetches.get(projectId) ?? [];
+    const search = (options.search ?? "").trim().toLowerCase();
+    const statusBucket = options.status ?? "All";
+
+    const filtered = all.filter((record) => {
+      if (search) {
+        const haystack =
+          `${record.method} ${record.path} ${record.status ?? ""} ${record.source}`.toLowerCase();
+        if (!haystack.includes(search)) {
+          return false;
+        }
+      }
+      if (statusBucket !== "All") {
+        const status = record.status ?? 0;
+        const bucketDigit = Number.parseInt(statusBucket.charAt(0), 10);
+        if (Math.floor(status / 100) !== bucketDigit) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    const sortBy = options.sortBy ?? "capturedAt";
+    const direction = options.sortDirection ?? "desc";
+    const dirMultiplier = direction === "asc" ? 1 : -1;
+
+    filtered.sort((a, b) => {
+      const cmp = compareApiFetchValues(a, b, sortBy);
+      return cmp * dirMultiplier;
+    });
+
+    const offset = Math.max(0, options.offset ?? 0);
+    const limit = Math.max(1, options.limit ?? 50);
+    const page = filtered.slice(offset, offset + limit);
+    return {
+      fetches: page,
+      total: filtered.length,
+      hasMore: offset + page.length < filtered.length,
+    };
+  }
+
+  private captureApiFetchFromLine(
+    projectId: string,
+    channel: LogChannel,
+    line: string,
+  ): void {
+    if (channel !== "python") {
+      return;
+    }
+    const record = parseAccessLogLine(line);
+    if (!record) {
+      return;
+    }
+    const id = `apifetch-${++this.apiFetchSeq}`;
+    const captured: ApiFetchRecord = {
+      id,
+      capturedAt: record.capturedAt ?? new Date().toISOString(),
+      method: record.method,
+      path: record.path,
+      status: record.status,
+      durationMs: record.durationMs,
+      source: record.source,
+    };
+    const list = this.apiFetches.get(projectId) ?? [];
+    list.push(captured);
+    if (list.length > API_FETCH_LIMIT) {
+      list.splice(0, list.length - API_FETCH_LIMIT);
+    }
+    this.apiFetches.set(projectId, list);
+
+    const pending = this.apiFetchEventBuffer.get(projectId) ?? [];
+    pending.push(captured);
+    this.apiFetchEventBuffer.set(projectId, pending);
+    if (this.apiFetchEventTimer === null) {
+      this.apiFetchEventTimer = setTimeout(() => this.flushApiFetchEvents(), 200);
+    }
+  }
+
+  private flushApiFetchEvents(): void {
+    this.apiFetchEventTimer = null;
+    for (const [projectId, fetches] of this.apiFetchEventBuffer) {
+      if (fetches.length === 0) continue;
+      this.send({ type: "api-fetch", projectId, fetches: [...fetches] });
+    }
+    this.apiFetchEventBuffer.clear();
   }
 
   async refreshStatus(projectId: string): Promise<ServiceStatusRecord[]> {
@@ -2805,8 +2964,11 @@ export class DashboardBackend {
   private defaultSettings(
     projectId: string,
     backendType = this.getProjectBackendType(projectId),
+    pythonServerType: PythonServerType = "custom",
   ): ProjectSettingsRecord {
     const normalizedBackendType = normalizeBackendType(backendType);
+    const normalizedPythonServerType = normalizePythonServerType(pythonServerType);
+    const pythonDefaults = PYTHON_WEB_SERVER_DEFAULTS[normalizedPythonServerType];
     return {
       backendType: normalizedBackendType,
       appLogFile: "",
@@ -2818,6 +2980,18 @@ export class DashboardBackend {
         path: "",
         installCommand: "",
         devCommand: "",
+        buildCommand: "",
+      },
+      python: {
+        enabled: true,
+        serverType: normalizedPythonServerType,
+        directory: "",
+        venvPath: "",
+        installCommand: pythonDefaults.installCommand,
+        startCommand: pythonDefaults.startCommand,
+        appUrl: pythonDefaults.appUrl,
+        healthCheckUrl: pythonDefaults.healthCheckUrl,
+        autoStart: false,
         buildCommand: "",
       },
       services: {
@@ -2839,9 +3013,9 @@ export class DashboardBackend {
         python: {
           enabled: true,
           workingDirectory: "",
-          command: "",
-          healthUrl: "",
-          appUrl: "",
+          command: pythonDefaults.startCommand,
+          healthUrl: pythonDefaults.healthCheckUrl ?? "",
+          appUrl: pythonDefaults.appUrl,
         },
       },
       maven: {
@@ -2960,10 +3134,22 @@ export class DashboardBackend {
 
     this.clearLog(projectId, service);
     this.appendLog(projectId, service, stamp(`$ ${config.command}`));
+    // Python's stdout/stderr is block-buffered when not attached to a TTY,
+    // which hides uvicorn/flask/django access logs until the buffer flushes.
+    // Force line-buffered output and UTF-8 so request logs stream live.
+    const spawnEnv =
+      service === "python"
+        ? {
+            ...process.env,
+            PYTHONUNBUFFERED: "1",
+            PYTHONIOENCODING: "utf-8",
+          }
+        : process.env;
     const child = spawn(config.command, {
       cwd: config.workingDirectory,
       shell: true,
       windowsHide: true,
+      env: spawnEnv,
     }) as ChildProcessWithoutNullStreams;
     const startedAt = new Date().toISOString();
     this.explicitlyStoppedServices.delete(key);
@@ -3582,6 +3768,7 @@ export class DashboardBackend {
     for (const line of chunk.toString().split(/\r?\n/)) {
       if (line.trim().length > 0) {
         this.observeServiceLogLine(projectId, channel, line);
+        this.captureApiFetchFromLine(projectId, channel, line);
         this.appendLog(projectId, channel, line, silent);
       }
     }
@@ -4978,6 +5165,110 @@ function normalizeBuildStatus(
     return "stopped";
   }
   return null;
+}
+
+const UVICORN_ACCESS_REGEX =
+  /^(?:INFO[:\s]+)?\s*([\d.]+|[a-f0-9:]+|\[[^\]]+\]):\d+\s*-\s*"([A-Z]+)\s+(\S+)\s+HTTP\/[\d.]+"\s+(\d{3})/i;
+const COMMON_LOG_REGEX =
+  /^(\S+)\s+\S+\s+\S+\s+\[([^\]]+)\]\s+"([A-Z]+)\s+(\S+)\s+HTTP\/[\d.]+"\s+(\d{3})\s+(\S+)/;
+const DJANGO_ACCESS_REGEX =
+  /\[(\d{2}\/[A-Za-z]+\/\d{4}\s+\d{2}:\d{2}:\d{2})\]\s+"([A-Z]+)\s+(\S+)\s+HTTP\/[\d.]+"\s+(\d{3})/;
+
+type ParsedAccessLog = {
+  capturedAt?: string;
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number | null;
+  source: string;
+};
+
+function parseAccessLogLine(line: string): ParsedAccessLog | null {
+  const stripped = line.replace(/\u001b\[[0-9;]*m/g, "");
+
+  const uvicorn = UVICORN_ACCESS_REGEX.exec(stripped);
+  if (uvicorn) {
+    return {
+      method: uvicorn[2].toUpperCase(),
+      path: uvicorn[3],
+      status: Number.parseInt(uvicorn[4], 10),
+      durationMs: null,
+      source: uvicorn[1],
+    };
+  }
+
+  const common = COMMON_LOG_REGEX.exec(stripped);
+  if (common) {
+    return {
+      capturedAt: parseCommonLogDate(common[2]),
+      method: common[3].toUpperCase(),
+      path: common[4],
+      status: Number.parseInt(common[5], 10),
+      durationMs: null,
+      source: common[1],
+    };
+  }
+
+  const django = DJANGO_ACCESS_REGEX.exec(stripped);
+  if (django) {
+    return {
+      capturedAt: parseCommonLogDate(django[1]),
+      method: django[2].toUpperCase(),
+      path: django[3],
+      status: Number.parseInt(django[4], 10),
+      durationMs: null,
+      source: "",
+    };
+  }
+
+  return null;
+}
+
+function parseCommonLogDate(value: string): string | undefined {
+  // Examples: "22/May/2026 10:00:00" or "22/May/2026:10:00:00 +0000"
+  const match = /^(\d{2})\/([A-Za-z]+)\/(\d{4})[\s:](\d{2}):(\d{2}):(\d{2})/.exec(value);
+  if (!match) return undefined;
+  const months: Record<string, number> = {
+    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+  };
+  const month = months[match[2] as keyof typeof months];
+  if (month === undefined) return undefined;
+  const date = new Date(
+    Number(match[3]),
+    month,
+    Number(match[1]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+  );
+  if (Number.isNaN(date.getTime())) return undefined;
+  return date.toISOString();
+}
+
+function compareApiFetchValues(
+  a: ApiFetchRecord,
+  b: ApiFetchRecord,
+  sortBy: NonNullable<ApiFetchQueryOptions["sortBy"]>,
+): number {
+  switch (sortBy) {
+    case "status":
+      return (a.status ?? 0) - (b.status ?? 0);
+    case "durationMs":
+      return (a.durationMs ?? 0) - (b.durationMs ?? 0);
+    case "capturedAt":
+      return (
+        new Date(a.capturedAt).getTime() - new Date(b.capturedAt).getTime()
+      );
+    case "method":
+      return a.method.localeCompare(b.method);
+    case "path":
+      return a.path.localeCompare(b.path);
+    case "source":
+      return a.source.localeCompare(b.source);
+    default:
+      return 0;
+  }
 }
 
 function formatBuildRow(row: BuildRow): RecentBuildRecord {
