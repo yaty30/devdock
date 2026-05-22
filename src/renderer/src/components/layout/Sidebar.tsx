@@ -18,11 +18,14 @@ import {
   Wrench,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
+import { getProjectBackendLabel } from "../../../../shared/projectFrontend";
 import { Tooltip } from "../common/Tooltip";
 import type {
   AppSection,
+  BackendServiceName,
   DatabaseConnection,
   Project,
+  ServiceName,
   ServiceStatusRecord,
   ToolId,
 } from "../../types";
@@ -372,6 +375,7 @@ export function Sidebar({
                       <ServiceStatusTooltip
                         statuses={projectStatuses[project.id]}
                         frontendEnabled={frontendEnabled}
+                        backendType={project.backendType}
                       />
                     }
                   >
@@ -398,7 +402,7 @@ export function Sidebar({
                               />
                             ) : null}
                             <span
-                              className={`project-service-dot ${getServiceState(projectStatuses[project.id], "wildfly")}`}
+                              className={`project-service-dot ${getServiceState(projectStatuses[project.id], project.backendType)}`}
                             />
                           </div>
                         </div>
@@ -719,10 +723,10 @@ export function Sidebar({
                     />
                   ) : null}
                   <ProjectServiceRow
-                    label="Backend"
+                    label={getProjectBackendLabel(project.backendType)}
                     state={getServiceState(
                       projectStatuses[project.id],
-                      "wildfly",
+                      project.backendType,
                     )}
                   />
                 </button>
@@ -1135,7 +1139,7 @@ function formatDatabaseConnectionTarget(
 
 function getServiceState(
   statuses: ServiceStatusRecord[] | undefined,
-  service: "frontend" | "wildfly",
+  service: ServiceName,
 ): string {
   return statuses?.find((s) => s.service === service)?.state ?? "unknown";
 }
@@ -1155,12 +1159,14 @@ function formatStatusLabel(status: string): string {
 function ServiceStatusTooltip({
   statuses,
   frontendEnabled,
+  backendType,
 }: {
   statuses: ServiceStatusRecord[] | undefined;
   frontendEnabled: boolean;
+  backendType: BackendServiceName;
 }): JSX.Element {
   const frontendState = getServiceState(statuses, "frontend");
-  const wildflyState = getServiceState(statuses, "wildfly");
+  const backendState = getServiceState(statuses, backendType);
   return (
     <span className="service-status-tooltip">
       {frontendEnabled ? (
@@ -1172,9 +1178,11 @@ function ServiceStatusTooltip({
         </span>
       ) : null}
       <span className="service-status-tooltip-row">
-        <span className="service-status-tooltip-label">Backend</span>
-        <span className={`service-status-tooltip-state ${wildflyState}`}>
-          {wildflyState}
+        <span className="service-status-tooltip-label">
+          {getProjectBackendLabel(backendType)}
+        </span>
+        <span className={`service-status-tooltip-state ${backendState}`}>
+          {backendState}
         </span>
       </span>
     </span>

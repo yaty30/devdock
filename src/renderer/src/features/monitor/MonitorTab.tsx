@@ -34,7 +34,11 @@ import type {
   ServiceState,
 } from "../../types";
 import { clamp } from "../../utils/math";
-import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
+import {
+  getProjectBackendLabel,
+  getProjectBackendServiceName,
+  isProjectFrontendEnabled,
+} from "../../../../shared/projectFrontend";
 
 type MonitorLayout = {
   columnWidths: [number, number, number, number] | null;
@@ -828,11 +832,14 @@ function readStoredMonitorLayout(projectId: string): MonitorLayout {
 
 function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
   const frontendEnabled = isProjectFrontendEnabled(projectState.settings);
+  const backendService = getProjectBackendServiceName(projectState.settings);
+  const backendLabel = getProjectBackendLabel(projectState.settings);
+  const backendConfig = projectState.settings.services[backendService];
   const frontendStatus = projectState.statuses.find(
     (status) => status.service === "frontend",
   );
-  const wildflyStatus = projectState.statuses.find(
-    (status) => status.service === "wildfly",
+  const backendStatus = projectState.statuses.find(
+    (status) => status.service === backendService,
   );
   const lastBuild = projectState.recentBuilds[0];
 
@@ -843,7 +850,9 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
       rows: [
         {
           label: "Status",
-          value: frontendEnabled ? statusPill(frontendStatus?.state) : "Not configured",
+          value: frontendEnabled
+            ? statusPill(frontendStatus?.state)
+            : "Not configured",
         },
         {
           label: "URL",
@@ -864,18 +873,21 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
       ],
     },
     {
-      title: "WildFly",
+      title: backendLabel,
       icon: <Layers3 size={26} />,
       rows: [
-        { label: "Status", value: statusPill(wildflyStatus?.state) },
+        { label: "Status", value: statusPill(backendStatus?.state) },
+        ...(backendService === "wildfly"
+          ? [
+              {
+                label: "Console",
+                value: backendConfig.managementUrl || "Not set",
+              },
+            ]
+          : []),
         {
-          label: "Console",
-          value:
-            projectState.settings.services.wildfly.managementUrl || "Not set",
-        },
-        {
-          label: "KMU",
-          value: projectState.settings.services.wildfly.appUrl || "Not set",
+          label: backendService === "wildfly" ? "KMU" : "App URL",
+          value: backendConfig.appUrl || backendConfig.healthUrl || "Not set",
         },
       ],
     },
@@ -890,8 +902,8 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
             : "Not configured",
         },
         {
-          label: "WildFly",
-          value: formatUptime(wildflyStatus?.startedAt, wildflyStatus?.state),
+          label: backendLabel,
+          value: formatUptime(backendStatus?.startedAt, backendStatus?.state),
         },
       ],
     },

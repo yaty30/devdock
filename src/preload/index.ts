@@ -103,8 +103,8 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:openLog", projectId, channel),
   deleteProject: (projectId) =>
     ipcRenderer.invoke("dashboard:deleteProject", projectId),
-  createProject: (name, code) =>
-    ipcRenderer.invoke("dashboard:createProject", name, code),
+  createProject: (name, code, backendType) =>
+    ipcRenderer.invoke("dashboard:createProject", name, code, backendType),
   updateProject: (projectId, name, code) =>
     ipcRenderer.invoke("dashboard:updateProject", projectId, name, code),
   validateProjectSettings: (projectId, name, code, settings) =>
@@ -173,10 +173,8 @@ const api: DashboardApi = {
     return () => ipcRenderer.off("chat:open-conversation", handler);
   },
   onWindowMaximizedChange: (listener: (maximized: boolean) => void) => {
-    const handler = (
-      _event: Electron.IpcRendererEvent,
-      maximized: boolean,
-    ) => listener(maximized);
+    const handler = (_event: Electron.IpcRendererEvent, maximized: boolean) =>
+      listener(maximized);
     ipcRenderer.on("window:maximized-changed", handler);
     return () => ipcRenderer.off("window:maximized-changed", handler);
   },

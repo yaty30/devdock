@@ -170,7 +170,7 @@ export function AppSelect<T extends string>({
         right: "auto",
         width,
         minWidth: width,
-        zIndex: 1200,
+        zIndex: 1500,
       });
     }
 

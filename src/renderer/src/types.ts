@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { BackendType as DashboardBackendType } from "../../shared/dashboardTypes";
 export type {
   ActivityKind,
   ActivityRecord,
@@ -8,6 +9,8 @@ export type {
   ApiTesterFormDataPart,
   ApiTesterResponse,
   ApiTesterResponseHeader,
+  BackendServiceName,
+  BackendType,
   BuildQueryOptions,
   BuildQueryResult,
   BuildQuerySortKey,
@@ -70,14 +73,7 @@ export type AppSection = "dashboard" | "project" | "database" | "tools";
 export type ToolId = "comparing" | "api-tester" | "cryptographic";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal" | "notes";
 export type DatabaseWorkspaceTab = "connection" | "monitor";
-export type FontSizeMode =
-  | "50"
-  | "70"
-  | "90"
-  | "100"
-  | "120"
-  | "140"
-  | "160";
+export type FontSizeMode = "50" | "70" | "90" | "100" | "120" | "140" | "160";
 export type SettingsTab = "general" | "services" | "git" | "builders";
 export type Theme = "light" | "dark";
 
@@ -91,6 +87,7 @@ export type Project = {
   id: string;
   name: string;
   code: string;
+  backendType: DashboardBackendType;
 };
 
 export type MonitorCard = {

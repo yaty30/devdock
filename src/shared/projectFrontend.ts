@@ -1,4 +1,6 @@
 import type {
+  BackendServiceName,
+  BackendType,
   ProjectFrontendConfig,
   ProjectSettingsRecord,
   ServiceConfig,
@@ -24,9 +26,42 @@ export function isProjectFrontendEnabled(
 export function getProjectServiceNames(
   settings: ProjectSettingsRecord,
 ): ServiceName[] {
+  const backendService = getProjectBackendServiceName(settings);
   return isProjectFrontendEnabled(settings)
-    ? ["frontend", "wildfly"]
-    : ["wildfly"];
+    ? ["frontend", backendService]
+    : [backendService];
+}
+
+export function getProjectBackendServiceName(
+  settings: ProjectSettingsRecord,
+): BackendServiceName {
+  return normalizeBackendType(settings.backendType);
+}
+
+export function getProjectBackendLabel(
+  backendTypeOrSettings: BackendType | ProjectSettingsRecord,
+): string {
+  const backendType =
+    typeof backendTypeOrSettings === "string"
+      ? backendTypeOrSettings
+      : getProjectBackendServiceName(backendTypeOrSettings);
+  return backendType === "python" ? "Python" : "WildFly";
+}
+
+export function getProjectBackendUrl(settings: ProjectSettingsRecord): string {
+  const backend = settings.services[getProjectBackendServiceName(settings)];
+  return backend.appUrl || backend.healthUrl || "";
+}
+
+export function getProjectBackendManagementUrl(
+  settings: ProjectSettingsRecord,
+): string {
+  const backend = settings.services[getProjectBackendServiceName(settings)];
+  return backend.managementUrl || "";
+}
+
+export function normalizeBackendType(value: unknown): BackendType {
+  return value === "python" ? "python" : "wildfly";
 }
 
 export function getProjectFrontendUrl(settings: ProjectSettingsRecord): string {
@@ -50,8 +85,12 @@ export function normalizeProjectSettings(
   const rawWildflyService = isRecord(rawServices.wildfly)
     ? rawServices.wildfly
     : {};
+  const rawPythonService = isRecord(rawServices.python)
+    ? rawServices.python
+    : {};
   const rawFrontendConfig = isRecord(raw.frontend) ? raw.frontend : {};
   const rawMaven = isRecord(raw.maven) ? raw.maven : {};
+  const backendType = normalizeBackendType(defaults.backendType);
 
   const frontendEnabled = resolveFrontendEnabled(
     rawFrontendConfig,
@@ -96,9 +135,15 @@ export function normalizeProjectSettings(
     defaults.services.wildfly,
     { enabled: true },
   );
+  const pythonService = normalizeServiceConfig(
+    rawPythonService,
+    defaults.services.python,
+    { enabled: true },
+  );
 
   return {
     ...defaults,
+    backendType,
     appLogFile: stringValue(raw.appLogFile, defaults.appLogFile),
     gitProjectDirectory: stringValue(
       raw.gitProjectDirectory,
@@ -110,6 +155,7 @@ export function normalizeProjectSettings(
     services: {
       frontend: frontendService,
       wildfly: wildflyService,
+      python: pythonService,
     },
     maven: {
       executable: stringValue(rawMaven.executable, defaults.maven.executable),

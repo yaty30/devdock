@@ -38,7 +38,11 @@ import {
   useLogViewport,
 } from "../../hooks/useLogStore";
 import type { LogLine } from "../../../../shared/dashboardTypes";
-import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
+import {
+  getProjectBackendLabel,
+  getProjectBackendServiceName,
+  isProjectFrontendEnabled,
+} from "../../../../shared/projectFrontend";
 import type {
   BuildStage,
   DatabaseConnection,
@@ -515,7 +519,9 @@ function BuildStatusPanel({
       title="Build Status"
       titleMeta={
         <div className="build-status-title-meta">
-          <span className={`status-pill build-status ${buildStatusClass(buildStatusLabel)}`}>
+          <span
+            className={`status-pill build-status ${buildStatusClass(buildStatusLabel)}`}
+          >
             {buildStatusLabel}
           </span>
           <span className="elapsed-pill">{elapsed}</span>
@@ -950,7 +956,8 @@ function ProjectStatusRow({
 }): JSX.Element {
   const frontendEnabled = summary.frontendEnabled;
   const frontend = serviceStatus(summary, "frontend");
-  const wildfly = serviceStatus(summary, "wildfly");
+  const backend = serviceStatus(summary, summary.project.backendType);
+  const backendLabel = summary.serviceUrls.backendLabel;
   const overallStatus = projectOverallStatus(summary);
   const lastBuild = summary.lastBuild;
 
@@ -958,7 +965,9 @@ function ProjectStatusRow({
     <article className="dashboard-project-card">
       <header className="dashboard-project-card-header">
         <div className="dashboard-project-title-group">
-          <span className="dashboard-project-code"><Server size={18} /></span>
+          <span className="dashboard-project-code">
+            <Server size={18} />
+          </span>
           <div>
             <h2>{summary.project.name}</h2>
             <div className="dashboard-project-meta">
@@ -966,7 +975,9 @@ function ProjectStatusRow({
               <strong>{summary.project.id}</strong>
               <i />
               <span>Services</span>
-              <strong>{frontendEnabled ? "Frontend / WildFly" : "WildFly"}</strong>
+              <strong>
+                {frontendEnabled ? `Frontend / ${backendLabel}` : backendLabel}
+              </strong>
             </div>
           </div>
         </div>
@@ -1032,33 +1043,39 @@ function ProjectStatusRow({
         <section className="dashboard-project-detail">
           <header>
             <Layers3 size={18} />
-            <h3>WildFly</h3>
-            {statusPill(wildfly?.state)}
+            <h3>{backendLabel}</h3>
+            {statusPill(backend?.state)}
           </header>
-          <DashboardDetailRow label="Console">
-            {summary.serviceUrls.wildflyConsoleUrl ? (
+          {summary.project.backendType === "wildfly" ? (
+            <DashboardDetailRow label="Console">
+              {summary.serviceUrls.backendManagementUrl ? (
+                <a
+                  className="monitor-link"
+                  href={summary.serviceUrls.backendManagementUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <span>{summary.serviceUrls.backendManagementUrl}</span>
+                  <ExternalLink size={13} />
+                </a>
+              ) : (
+                <strong>Not set</strong>
+              )}
+            </DashboardDetailRow>
+          ) : null}
+          <DashboardDetailRow
+            label={
+              summary.project.backendType === "wildfly" ? "KMU" : "App URL"
+            }
+          >
+            {summary.serviceUrls.backendUrl ? (
               <a
                 className="monitor-link"
-                href={summary.serviceUrls.wildflyConsoleUrl}
+                href={summary.serviceUrls.backendUrl}
                 target="_blank"
                 rel="noreferrer"
               >
-                <span>{summary.serviceUrls.wildflyConsoleUrl}</span>
-                <ExternalLink size={13} />
-              </a>
-            ) : (
-              <strong>Not set</strong>
-            )}
-          </DashboardDetailRow>
-          <DashboardDetailRow label="KMU">
-            {summary.serviceUrls.wildflyKmuUrl ? (
-              <a
-                className="monitor-link"
-                href={summary.serviceUrls.wildflyKmuUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <span>{summary.serviceUrls.wildflyKmuUrl}</span>
+                <span>{summary.serviceUrls.backendUrl}</span>
                 <ExternalLink size={13} />
               </a>
             ) : (
@@ -1074,11 +1091,13 @@ function ProjectStatusRow({
           </header>
           <DashboardDetailRow label="Frontend">
             <strong>
-              {frontendEnabled ? formatServiceUptime(frontend, now) : "Not configured"}
+              {frontendEnabled
+                ? formatServiceUptime(frontend, now)
+                : "Not configured"}
             </strong>
           </DashboardDetailRow>
-          <DashboardDetailRow label="WildFly">
-            <strong>{formatServiceUptime(wildfly, now)}</strong>
+          <DashboardDetailRow label={backendLabel}>
+            <strong>{formatServiceUptime(backend, now)}</strong>
           </DashboardDetailRow>
         </section>
 
@@ -1167,11 +1186,15 @@ function formatDatabaseTarget(connection: DatabaseConnection): string {
 function getDatabaseServerDetails(
   connection: DatabaseConnection,
 ): Array<{ label: string; value: string }> {
-  if (connection.type === "Oracle" && connection.connectionMode === "tnsAlias") {
+  if (
+    connection.type === "Oracle" &&
+    connection.connectionMode === "tnsAlias"
+  ) {
     return [
       {
         label: "Network Alias",
-        value: connection.networkAlias?.trim() || connection.schema || "Not set",
+        value:
+          connection.networkAlias?.trim() || connection.schema || "Not set",
       },
     ];
   }
@@ -1201,10 +1224,10 @@ function projectOverallStatus(summary: ProjectDashboardSummary): {
   const frontend = summary.frontendEnabled
     ? serviceStatus(summary, "frontend")
     : undefined;
-  const wildfly = serviceStatus(summary, "wildfly");
+  const backend = serviceStatus(summary, summary.project.backendType);
   const states = summary.frontendEnabled
-    ? [frontend?.state, wildfly?.state]
-    : [wildfly?.state];
+    ? [frontend?.state, backend?.state]
+    : [backend?.state];
 
   if (states.every((state) => state === "running")) {
     return { label: "All Services Running", tone: "success" };
@@ -1264,10 +1287,13 @@ export function ProjectDashboardContent({
   projectState: ProjectRuntimeState;
 }): JSX.Element {
   const frontendEnabled = isProjectFrontendEnabled(projectState.settings);
+  const backendService = getProjectBackendServiceName(projectState.settings);
+  const backendLabel = getProjectBackendLabel(projectState.settings);
   const frontendStatus = serviceStatus(projectState, "frontend");
-  const wildflyStatus = serviceStatus(projectState, "wildfly");
-  const frontendRunning = frontendEnabled && frontendStatus?.state === "running";
-  const wildflyRunning = wildflyStatus?.state === "running";
+  const backendStatus = serviceStatus(projectState, backendService);
+  const frontendRunning =
+    frontendEnabled && frontendStatus?.state === "running";
+  const backendRunning = backendStatus?.state === "running";
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
@@ -1380,10 +1406,9 @@ export function ProjectDashboardContent({
         gridPaddingBottom -
         DASHBOARD_SPLITTER_SIZE
       : 0;
-    const topRowPanel =
-      gridRef.current?.querySelector<HTMLElement>(
-        frontendEnabled ? ".frontend-panel" : ".tail-log-panel",
-      );
+    const topRowPanel = gridRef.current?.querySelector<HTMLElement>(
+      frontendEnabled ? ".frontend-panel" : ".tail-log-panel",
+    );
     const columnPanels = [
       frontendEnabled
         ? gridRef.current?.querySelector<HTMLElement>(".frontend-panel")
@@ -1522,7 +1547,9 @@ export function ProjectDashboardContent({
             serviceState={frontendStatus?.state}
             openDisabled={!frontendRunning}
             suspendAutoFollow={isResizing}
-            onOpen={() => void window.ivsDashboard.openLog(projectId, "frontend")}
+            onOpen={() =>
+              void window.ivsDashboard.openLog(projectId, "frontend")
+            }
             onZoom={() =>
               setZoomLog({
                 title: "Frontend",
@@ -1550,25 +1577,27 @@ export function ProjectDashboardContent({
         />
         <BuildStatusPanel projectId={projectId} projectState={projectState} />
         <LogPanel
-          title="WildFly"
+          title={backendLabel}
           projectId={projectId}
-          channel="wildfly"
+          channel={backendService}
           footer="Open full log"
           className="wildfly-panel"
           dense
           colorize={false}
-          serviceState={wildflyStatus?.state}
-          openDisabled={!wildflyRunning}
+          serviceState={backendStatus?.state}
+          openDisabled={!backendRunning}
           suspendAutoFollow={isResizing}
-          onOpen={() => void window.ivsDashboard.openLog(projectId, "wildfly")}
+          onOpen={() =>
+            void window.ivsDashboard.openLog(projectId, backendService)
+          }
           onZoom={() =>
             setZoomLog({
-              title: "WildFly",
-              channel: "wildfly",
+              title: backendLabel,
+              channel: backendService,
               footer: "Open full log",
               className: "wildfly-panel log-zoom-panel",
-              serviceState: wildflyStatus?.state,
-              openDisabled: !wildflyRunning,
+              serviceState: backendStatus?.state,
+              openDisabled: !backendRunning,
               dense: true,
               colorize: false,
             })

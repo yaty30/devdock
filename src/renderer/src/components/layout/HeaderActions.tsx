@@ -27,7 +27,10 @@ import type {
   ServiceStatusRecord,
 } from "../../types";
 import { RUNNING_SERVER_LIMIT_MESSAGE } from "../../../../shared/appLimits";
-import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
+import {
+  getProjectBackendLabel,
+  getProjectServiceNames,
+} from "../../../../shared/projectFrontend";
 
 const BUILD_PROFILE_LABEL_MAX_LENGTH = 20;
 
@@ -216,7 +219,10 @@ export function FontSizeDropdown({
     event: ReactMouseEvent<HTMLElement>,
   ): void {
     const nextTarget = event.relatedTarget;
-    if (nextTarget instanceof Node && dropdownRef.current?.contains(nextTarget)) {
+    if (
+      nextTarget instanceof Node &&
+      dropdownRef.current?.contains(nextTarget)
+    ) {
       return;
     }
     scheduleHoverDropdownClose();
@@ -355,9 +361,14 @@ function BuildActionsDropdown({
   const latestBuildRunning = latestBuild?.status === "Running";
   const open = openMode !== null;
   const buildRunning = runningProfileId !== null || latestBuildRunning;
-  const wildflyStatus = statuses.find((status) => status.service === "wildfly");
-  const wildflyAvailable = wildflyStatus?.state === "running";
-  const buildDisabled = disabled || (!buildRunning && !wildflyAvailable);
+  const backendLabel = getProjectBackendLabel(settings);
+  const backendStatus = statuses.find(
+    (status) => status.service === settings.backendType,
+  );
+  const backendAvailable = backendStatus?.state === "running";
+  const buildSupported = settings.backendType === "wildfly";
+  const buildDisabled =
+    disabled || !buildSupported || (!buildRunning && !backendAvailable);
   const latestProfileUsedToday = findLatestBuildProfileUsedToday(
     recentBuilds,
     settings.buildProfiles,
@@ -534,7 +545,10 @@ function BuildActionsDropdown({
     event: ReactMouseEvent<HTMLElement>,
   ): void {
     const nextTarget = event.relatedTarget;
-    if (nextTarget instanceof Node && dropdownRef.current?.contains(nextTarget)) {
+    if (
+      nextTarget instanceof Node &&
+      dropdownRef.current?.contains(nextTarget)
+    ) {
       return;
     }
     scheduleHoverDropdownClose();
@@ -557,13 +571,18 @@ function BuildActionsDropdown({
           aria-expanded={open}
           title={
             buildDisabled && !buildRunning
-              ? "Start WildFly before running a build"
+              ? buildSupported
+                ? `Start ${backendLabel} before running a build`
+                : "Builds are available for WildFly projects"
               : latestProfileUsedToday
                 ? `Run ${latestProfileUsedToday.buttonName} Build`
                 : undefined
           }
           disabled={false}
           onClick={() => {
+            if (buildDisabled && !buildRunning) {
+              return;
+            }
             if (buildRunning) {
               stopBuild();
               return;
@@ -794,6 +813,13 @@ function ServiceControlGroup({
   const serviceStates = new Map(
     statuses.map((status) => [status.service, status.state]),
   );
+  const serviceOptions = getProjectServiceNames(settings).map(
+    (service) =>
+      [
+        service,
+        service === "frontend" ? "Frontend" : getProjectBackendLabel(settings),
+      ] as const,
+  );
 
   function runAction(
     service: ServiceName,
@@ -817,16 +843,7 @@ function ServiceControlGroup({
 
   return (
     <div className="service-controls" aria-label="Service controls">
-      {(
-        isProjectFrontendEnabled(settings)
-          ? ([
-              ["frontend", "Frontend"],
-              ["wildfly", "WildFly"],
-            ] as const)
-          : ([
-              ["wildfly", "WildFly"],
-            ] as const)
-      ).map(([service, label]) => {
+      {serviceOptions.map(([service, label]) => {
         const serviceName = service as ServiceName;
         const state = serviceStates.get(serviceName);
         const isRunning = state === "running";

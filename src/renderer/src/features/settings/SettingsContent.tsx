@@ -16,7 +16,11 @@ import type {
   ServiceName,
   SettingsTab,
 } from "../../types";
-import { isProjectFrontendEnabled } from "../../../../shared/projectFrontend";
+import {
+  getProjectBackendLabel,
+  getProjectBackendServiceName,
+  isProjectFrontendEnabled,
+} from "../../../../shared/projectFrontend";
 
 function FieldRow({
   label,
@@ -131,6 +135,9 @@ export function SettingsContent({
       ),
     [draft.maven.executable, draft.maven.pomXml, draft.maven.settingsXml],
   );
+  const backendService = getProjectBackendServiceName(draft);
+  const backendLabel = getProjectBackendLabel(draft);
+  const backendConfig = draft.services[backendService];
 
   useEffect(() => {
     onDirtyChangeRef.current(isDirty);
@@ -703,6 +710,8 @@ export function SettingsContent({
                 <strong>{selectedProject.code}</strong>
                 <span>Project ID</span>
                 <strong>{selectedProject.id}</strong>
+                <span>Backend type</span>
+                <strong>{backendLabel}</strong>
                 <span>Runtime</span>
                 <strong>Configured</strong>
                 <span>Log File</span>
@@ -712,12 +721,16 @@ export function SettingsContent({
                   <label>
                     <input
                       type="checkbox"
-                      checked={draft.services.wildfly.autoStart ?? false}
+                      checked={backendConfig.autoStart ?? false}
                       onChange={(e) =>
-                        updateService("wildfly", "autoStart", e.target.checked)
+                        updateService(
+                          backendService,
+                          "autoStart",
+                          e.target.checked,
+                        )
                       }
                     />
-                    WildFly
+                    {backendLabel}
                   </label>
                   {isProjectFrontendEnabled(draft) ? (
                     <label>
@@ -832,46 +845,54 @@ export function SettingsContent({
               )}
             </Panel>
 
-            <Panel title="WildFly" className="settings-form-panel">
+            <Panel title={backendLabel} className="settings-form-panel">
               <FieldRow
-                label="Bin Directory"
-                value={draft.services.wildfly.workingDirectory}
+                label={
+                  backendService === "wildfly" ? "Bin Directory" : "Directory"
+                }
+                value={backendConfig.workingDirectory}
                 browse
                 onChange={(value) =>
-                  updateService("wildfly", "workingDirectory", value)
+                  updateService(backendService, "workingDirectory", value)
                 }
                 onBrowse={() =>
                   browseDirectory(
-                    "Select WildFly directory",
-                    draft.services.wildfly.workingDirectory,
+                    `Select ${backendLabel} directory`,
+                    backendConfig.workingDirectory,
                     (value) =>
-                      updateService("wildfly", "workingDirectory", value),
+                      updateService(backendService, "workingDirectory", value),
                   )
                 }
               />
               <FieldRow
                 label="Start Command"
-                value={draft.services.wildfly.command}
-                onChange={(value) => updateService("wildfly", "command", value)}
+                value={backendConfig.command}
+                onChange={(value) =>
+                  updateService(backendService, "command", value)
+                }
               />
               <FieldRow
                 label="Health URL"
-                value={draft.services.wildfly.healthUrl}
+                value={backendConfig.healthUrl}
                 onChange={(value) =>
-                  updateService("wildfly", "healthUrl", value)
+                  updateService(backendService, "healthUrl", value)
                 }
               />
+              {backendService === "wildfly" ? (
+                <FieldRow
+                  label="Admin Console URL"
+                  value={backendConfig.managementUrl ?? ""}
+                  onChange={(value) =>
+                    updateService(backendService, "managementUrl", value)
+                  }
+                />
+              ) : null}
               <FieldRow
-                label="Admin Console URL"
-                value={draft.services.wildfly.managementUrl ?? ""}
+                label={backendService === "wildfly" ? "KMU URL" : "App URL"}
+                value={backendConfig.appUrl ?? ""}
                 onChange={(value) =>
-                  updateService("wildfly", "managementUrl", value)
+                  updateService(backendService, "appUrl", value)
                 }
-              />
-              <FieldRow
-                label="KMU URL"
-                value={draft.services.wildfly.appUrl ?? ""}
-                onChange={(value) => updateService("wildfly", "appUrl", value)}
               />
             </Panel>
           </div>
@@ -918,7 +939,7 @@ export function SettingsContent({
           </Panel>
         ) : null}
 
-        {activeSettingsTab === "builders" ? (
+        {activeSettingsTab === "builders" && backendService === "wildfly" ? (
           <div className="builders-layout">
             <Panel title="Maven Config" className="settings-form-panel">
               <FieldRow
@@ -1200,6 +1221,14 @@ export function SettingsContent({
               </div>
             </Panel>
           </div>
+        ) : null}
+
+        {activeSettingsTab === "builders" && backendService !== "wildfly" ? (
+          <Panel title="Builders" className="settings-form-panel full">
+            <div className="settings-note">
+              Build profiles are available for WildFly projects.
+            </div>
+          </Panel>
         ) : null}
       </div>
 

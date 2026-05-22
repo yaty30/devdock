@@ -33,6 +33,7 @@ import type {
   ActivityRecord,
   ActivityTone,
   ApiTesterSavedRequestRecord,
+  BackendType,
   BuildOutcomeType,
   BuildProfileRecord,
   BuildQueryOptions,
@@ -75,9 +76,14 @@ import {
   RUNNING_SERVER_LIMIT_MESSAGE,
 } from "../shared/appLimits";
 import {
+  getProjectBackendLabel,
+  getProjectBackendManagementUrl,
+  getProjectBackendServiceName,
+  getProjectBackendUrl,
   getProjectFrontendUrl,
   getProjectServiceNames,
   isProjectFrontendEnabled,
+  normalizeBackendType,
   normalizeProjectSettings,
 } from "../shared/projectFrontend";
 
@@ -94,7 +100,9 @@ type OracleDbModule = {
   initOracleClient?: (options?: { libDir?: string }) => void;
   oracleClientVersionString?: string;
   thin?: boolean;
-  getConnection: (options: OracleConnectionOptions) => Promise<OracleConnection>;
+  getConnection: (
+    options: OracleConnectionOptions,
+  ) => Promise<OracleConnection>;
 };
 
 type OracleConnectionOptions = {
@@ -302,6 +310,7 @@ const DATABASE_EXECUTION_HISTORY_LIMIT = 1000;
 const BACKEND_DASHBOARD_LOG_CHANNELS: readonly LogChannel[] = [
   "build",
   "wildfly",
+  "python",
 ];
 const DASHBOARD_CLEARED_META_PREFIX = "project-dashboard-cleared-at:";
 const EMPTY_SHEET_CONTENT: SheetContentJson = {
@@ -343,7 +352,9 @@ export class DashboardBackend {
 
   getSnapshot(): DashboardSnapshot {
     const projects = this.db
-      .prepare("SELECT id, name, code FROM projects ORDER BY created_at ASC")
+      .prepare(
+        "SELECT id, name, code, backend_type AS backendType FROM projects ORDER BY created_at ASC",
+      )
       .all() as ProjectRow[];
 
     return {
@@ -610,9 +621,13 @@ export class DashboardBackend {
       let oracleConnection: OracleConnection | null = null;
       try {
         oracleConnection = await createOracleConnection(connection);
-        await oracleConnection.execute("SELECT 1 AS HEALTH_CHECK FROM DUAL", [], {
-          outFormat: oracleDriver.OUT_FORMAT_OBJECT,
-        });
+        await oracleConnection.execute(
+          "SELECT 1 AS HEALTH_CHECK FROM DUAL",
+          [],
+          {
+            outFormat: oracleDriver.OUT_FORMAT_OBJECT,
+          },
+        );
         const latency = `${Math.max(1, performance.now() - startedAt).toFixed(1)} ms`;
         return {
           success: true,
@@ -1070,7 +1085,9 @@ export class DashboardBackend {
 
       for (const row of objectCountRows) {
         const key =
-          ORACLE_OBJECT_COUNT_KEY_BY_TYPE[String(row.OBJECT_TYPE).toUpperCase()];
+          ORACLE_OBJECT_COUNT_KEY_BY_TYPE[
+            String(row.OBJECT_TYPE).toUpperCase()
+          ];
         if (key) {
           objectCounts[key] = Number(row.OBJECT_COUNT ?? 0);
         }
@@ -1139,7 +1156,8 @@ export class DashboardBackend {
         partitions.push({
           name: String(row.PARTITION_NAME),
           description:
-            row.PARTITION_POSITION === null || row.PARTITION_POSITION === undefined
+            row.PARTITION_POSITION === null ||
+            row.PARTITION_POSITION === undefined
               ? undefined
               : `Position ${String(row.PARTITION_POSITION)}`,
         });
@@ -1164,7 +1182,8 @@ export class DashboardBackend {
           triggers:
             triggersByTable.get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`) ?? [],
           partitions:
-            partitionsByTable.get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`) ?? [],
+            partitionsByTable.get(`${row.TABLE_SCHEMA}.${row.TABLE_NAME}`) ??
+            [],
         })),
         views: [],
         procedures: [],
@@ -1482,7 +1501,9 @@ export class DashboardBackend {
   }
 
   deleteApiTesterSavedRequest(id: string): void {
-    this.db.prepare("DELETE FROM api_tester_saved_requests WHERE id = ?").run(id);
+    this.db
+      .prepare("DELETE FROM api_tester_saved_requests WHERE id = ?")
+      .run(id);
   }
 
   getDashboardOverview(): ProjectDashboardSummary[] {
@@ -1500,8 +1521,9 @@ export class DashboardBackend {
         ).builds[0],
         serviceUrls: {
           frontendUrl: getProjectFrontendUrl(settings),
-          wildflyConsoleUrl: settings.services.wildfly.managementUrl || "",
-          wildflyKmuUrl: settings.services.wildfly.appUrl || "",
+          backendUrl: getProjectBackendUrl(settings),
+          backendManagementUrl: getProjectBackendManagementUrl(settings),
+          backendLabel: getProjectBackendLabel(settings),
         },
       };
     });
@@ -1523,6 +1545,7 @@ export class DashboardBackend {
           ? this.getLog(projectId, "frontend")
           : [],
         wildfly: this.getLog(projectId, "wildfly"),
+        python: this.getLog(projectId, "python"),
         build: this.getLog(projectId, "build"),
         tail: [],
       },
@@ -1641,12 +1664,22 @@ export class DashboardBackend {
     this.db
       .prepare("UPDATE projects SET name = ?, code = ? WHERE id = ?")
       .run(trimmedName, trimmedCode, projectId);
-    return { id: projectId, name: trimmedName, code: trimmedCode };
+    return {
+      id: projectId,
+      name: trimmedName,
+      code: trimmedCode,
+      backendType: this.getProjectBackendType(projectId),
+    };
   }
 
-  createProject(name: string, code: string): ProjectRecord {
+  createProject(
+    name: string,
+    code: string,
+    backendType: BackendType,
+  ): ProjectRecord {
     const trimmedName = name.trim();
     const trimmedCode = code.trim().toUpperCase();
+    const normalizedBackendType = normalizeBackendType(backendType);
     const errors = validateProjectIdentity(trimmedName, trimmedCode);
     if (errors.length > 0) {
       throw new Error(errors.join("\n"));
@@ -1665,10 +1698,13 @@ export class DashboardBackend {
     const now = new Date().toISOString();
     this.db
       .prepare(
-        "INSERT INTO projects (id, name, code, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO projects (id, name, code, backend_type, created_at) VALUES (?, ?, ?, ?, ?)",
       )
-      .run(id, trimmedName, trimmedCode, now);
-    this.writeProjectConfig(id, this.defaultSettings(id));
+      .run(id, trimmedName, trimmedCode, normalizedBackendType, now);
+    this.writeProjectConfig(
+      id,
+      this.defaultSettings(id, normalizedBackendType),
+    );
     this.insertActivity(
       id,
       "Project created",
@@ -1676,7 +1712,12 @@ export class DashboardBackend {
       "success",
       "system",
     );
-    return { id, name: trimmedName, code: trimmedCode };
+    return {
+      id,
+      name: trimmedName,
+      code: trimmedCode,
+      backendType: normalizedBackendType,
+    };
   }
 
   getSheets(projectId: string): Sheet[] {
@@ -1825,16 +1866,21 @@ export class DashboardBackend {
     code: string,
     settings: ProjectSettingsRecord,
   ): string[] {
+    const persistedBackendType = this.getProjectBackendType(projectId);
     const normalizedSettings = normalizeProjectSettings(
       settings,
-      this.defaultSettings(projectId),
+      this.defaultSettings(projectId, persistedBackendType),
     );
     const errors = validateProjectIdentity(name.trim(), code.trim());
+    if (normalizeBackendType(settings.backendType) !== persistedBackendType) {
+      errors.push("Backend type cannot be changed after project creation.");
+    }
     const appLogFile = normalizedSettings.appLogFile.trim();
     const frontend = normalizedSettings.services.frontend;
-    const wildfly = normalizedSettings.services.wildfly;
+    const backendService = getProjectBackendServiceName(normalizedSettings);
+    const backend = normalizedSettings.services[backendService];
     const frontendDirectory = frontend.workingDirectory.trim();
-    const wildflyDirectory = wildfly.workingDirectory.trim();
+    const backendDirectory = backend.workingDirectory.trim();
     const gitProjectDirectory = normalizedSettings.gitProjectDirectory.trim();
 
     if (!appLogFile) {
@@ -1858,19 +1904,25 @@ export class DashboardBackend {
       }
     }
 
-    if (wildflyDirectory) {
-      if (!isExistingDirectory(wildflyDirectory)) {
+    if (backendDirectory) {
+      if (!isExistingDirectory(backendDirectory)) {
         errors.push(
-          `WildFly bin directory does not exist: ${wildflyDirectory}`,
+          `${getProjectBackendLabel(normalizedSettings)} directory does not exist: ${backendDirectory}`,
         );
       }
-      if (!wildfly.command.trim()) {
-        errors.push("WildFly start command is required");
+      if (!backend.command.trim()) {
+        errors.push(
+          `${getProjectBackendLabel(normalizedSettings)} start command is required`,
+        );
       }
-      if (!wildfly.healthUrl.trim()) {
-        errors.push("WildFly health URL is required");
+      if (!backend.healthUrl.trim()) {
+        errors.push(
+          `${getProjectBackendLabel(normalizedSettings)} health URL is required`,
+        );
       }
-      errors.push(...validateMavenConfig(normalizedSettings.maven));
+      if (backendService === "wildfly") {
+        errors.push(...validateMavenConfig(normalizedSettings.maven));
+      }
     }
 
     if (!gitProjectDirectory) {
@@ -1885,8 +1937,9 @@ export class DashboardBackend {
   }
 
   async deleteProject(projectId: string): Promise<void> {
+    const settings = this.getSettings(projectId);
     // stop any running services
-    for (const service of ["frontend", "wildfly"] as ServiceName[]) {
+    for (const service of getProjectServiceNames(settings)) {
       const key = `${projectId}:${service}`;
       const proc = this.serviceProcesses.get(key);
       if (proc) {
@@ -1931,7 +1984,12 @@ export class DashboardBackend {
       rmSync(configDir, { recursive: true, force: true });
     }
     // clear in-memory logs
-    for (const channel of ["frontend", "wildfly", "build"] as LogChannel[]) {
+    for (const channel of [
+      "frontend",
+      "wildfly",
+      "python",
+      "build",
+    ] as LogChannel[]) {
       const key = `${projectId}:${channel}`;
       this.logs.delete(key);
       this.logSeqMap.delete(key);
@@ -1943,9 +2001,15 @@ export class DashboardBackend {
     settings: ProjectSettingsRecord,
   ): ProjectSettingsRecord {
     const previousSettings = this.getSettings(projectId);
+    if (
+      normalizeBackendType(settings.backendType) !==
+      previousSettings.backendType
+    ) {
+      throw new Error("Backend type cannot be changed after project creation.");
+    }
     const normalizedSettings = normalizeProjectSettings(
       settings,
-      this.defaultSettings(projectId),
+      this.defaultSettings(projectId, previousSettings.backendType),
     );
     const activityEntries = settingsActivityEntries(
       previousSettings,
@@ -2120,9 +2184,7 @@ export class DashboardBackend {
     this.flushLogBuffer();
     terminateProcessTree(activeBuild.child);
     this.sendBuilds(projectId);
-    return (
-      this.getBuildByRowId(projectId, activeBuild.rowId) ?? null
-    );
+    return this.getBuildByRowId(projectId, activeBuild.rowId) ?? null;
   }
 
   getBuilds(
@@ -2314,6 +2376,7 @@ export class DashboardBackend {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         code TEXT NOT NULL,
+        backend_type TEXT NOT NULL DEFAULT 'wildfly',
         created_at TEXT NOT NULL
       );
 
@@ -2444,11 +2507,25 @@ export class DashboardBackend {
     `);
 
     this.patchExistingActivityDatesToYesterday();
+    this.ensureProjectBackendTypeColumn();
     this.ensureBuildRunCleanlinessColumn();
     this.ensureDatabaseExecutionMessageColumn();
     this.pruneDatabaseExecutionHistory();
     this.ensureSheetPinColumns();
     this.ensureDatabaseWorksheetSortOrderColumn();
+  }
+
+  private ensureProjectBackendTypeColumn(): void {
+    const columns = this.db
+      .prepare("PRAGMA table_info(projects)")
+      .all() as Array<{
+      name: string;
+    }>;
+    if (!columns.some((column) => column.name === "backend_type")) {
+      this.db.exec(
+        "ALTER TABLE projects ADD COLUMN backend_type TEXT NOT NULL DEFAULT 'wildfly'",
+      );
+    }
   }
 
   private ensureDatabaseWorksheetSortOrderColumn(): void {
@@ -2530,7 +2607,9 @@ export class DashboardBackend {
 
   private getProjects(): ProjectRecord[] {
     return this.db
-      .prepare("SELECT id, name, code FROM projects ORDER BY created_at ASC")
+      .prepare(
+        "SELECT id, name, code, backend_type AS backendType FROM projects ORDER BY created_at ASC",
+      )
       .all() as ProjectRecord[];
   }
 
@@ -2541,6 +2620,13 @@ export class DashboardBackend {
     if (!exists) {
       throw new Error(`Unknown project: ${projectId}`);
     }
+  }
+
+  private getProjectBackendType(projectId: string): BackendType {
+    const row = this.db
+      .prepare("SELECT backend_type AS backendType FROM projects WHERE id = ?")
+      .get(projectId) as { backendType: unknown } | undefined;
+    return normalizeBackendType(row?.backendType);
   }
 
   private validateSheetTitle(projectId: string, title: string): void {
@@ -2716,8 +2802,13 @@ export class DashboardBackend {
     return id;
   }
 
-  private defaultSettings(_projectId: string): ProjectSettingsRecord {
+  private defaultSettings(
+    projectId: string,
+    backendType = this.getProjectBackendType(projectId),
+  ): ProjectSettingsRecord {
+    const normalizedBackendType = normalizeBackendType(backendType);
     return {
+      backendType: normalizedBackendType,
       appLogFile: "",
       gitProjectDirectory: "",
       defaultBranch: "",
@@ -2745,6 +2836,13 @@ export class DashboardBackend {
           appUrl: "",
           managementUrl: "",
         },
+        python: {
+          enabled: true,
+          workingDirectory: "",
+          command: "",
+          healthUrl: "",
+          appUrl: "",
+        },
       },
       maven: {
         executable: "",
@@ -2757,12 +2855,13 @@ export class DashboardBackend {
   }
 
   private getSettings(projectId: string): ProjectSettingsRecord {
+    const defaults = this.defaultSettings(projectId);
     const configPath = this.projectConfigPath(projectId);
     if (existsSync(configPath)) {
       try {
         return normalizeProjectSettings(
           JSON.parse(readFileSync(configPath, "utf8")),
-          this.defaultSettings(projectId),
+          defaults,
         );
       } catch (error) {
         console.error(
@@ -2772,7 +2871,6 @@ export class DashboardBackend {
       }
     }
 
-    const defaults = this.defaultSettings(projectId);
     this.writeProjectConfig(projectId, defaults);
     return defaults;
   }
@@ -2783,10 +2881,8 @@ export class DashboardBackend {
   ): void {
     const configPath = this.projectConfigPath(projectId);
     mkdirSync(dirname(configPath), { recursive: true });
-    const normalizedSettings = normalizeProjectSettings(
-      settings,
-      this.defaultSettings(projectId),
-    );
+    const defaults = this.defaultSettings(projectId);
+    const normalizedSettings = normalizeProjectSettings(settings, defaults);
     writeFileSync(
       configPath,
       `${JSON.stringify(normalizedSettings, null, 2)}\n`,
@@ -3549,7 +3645,11 @@ export class DashboardBackend {
     channel: LogChannel,
     line: string,
   ): void {
-    if (channel !== "frontend" && channel !== "wildfly") {
+    if (
+      channel !== "frontend" &&
+      channel !== "wildfly" &&
+      channel !== "python"
+    ) {
       return;
     }
 
@@ -4346,7 +4446,9 @@ async function createOracleConnection(
 ): Promise<OracleConnection> {
   ensureOracleClientMode();
   try {
-    return await oracleDriver.getConnection(toOracleConnectionOptions(connection));
+    return await oracleDriver.getConnection(
+      toOracleConnectionOptions(connection),
+    );
   } catch (error) {
     throw withOracleConnectionHint(error);
   }
@@ -4400,7 +4502,9 @@ function createOracleConnectString(connection: DatabaseConnection): string {
 
 function formatOracleConnectionTarget(connection: DatabaseConnection): string {
   if (connection.connectionMode === "tnsAlias") {
-    return connection.networkAlias?.trim() || connection.schema.trim() || "Oracle";
+    return (
+      connection.networkAlias?.trim() || connection.schema.trim() || "Oracle"
+    );
   }
 
   return connection.connectionMode === "connectString"
@@ -4447,7 +4551,10 @@ function mapApiTesterSavedRequestRow(
 }
 
 function ensureOracleClientMode(): void {
-  if (oracleClientInitAttempted || typeof oracleDriver.initOracleClient !== "function") {
+  if (
+    oracleClientInitAttempted ||
+    typeof oracleDriver.initOracleClient !== "function"
+  ) {
     return;
   }
 
@@ -5082,7 +5189,10 @@ function settingsActivityEntries(
     );
   }
 
-  for (const service of ["frontend", "wildfly"] as ServiceName[]) {
+  for (const service of [
+    "frontend",
+    getProjectBackendServiceName(next),
+  ] as ServiceName[]) {
     const before = previous.services[service];
     const after = next.services[service];
     const label = serviceLabel(service);
@@ -5114,7 +5224,7 @@ function settingsActivityEntries(
         title,
         "Frontend app URL updated",
       );
-    } else {
+    } else if (service === "wildfly") {
       addIfChanged(
         before.appUrl,
         after.appUrl,
@@ -5126,6 +5236,13 @@ function settingsActivityEntries(
         after.managementUrl,
         title,
         "WildFly admin console URL updated",
+      );
+    } else {
+      addIfChanged(
+        before.appUrl,
+        after.appUrl,
+        title,
+        "Python app URL updated",
       );
     }
 
@@ -5231,7 +5348,13 @@ function stamp(message: string): string {
 }
 
 function serviceLabel(service: ServiceName): string {
-  return service === "wildfly" ? "WildFly" : "Frontend";
+  if (service === "wildfly") {
+    return "WildFly";
+  }
+  if (service === "python") {
+    return "Python";
+  }
+  return "Frontend";
 }
 
 function formatDuration(totalSeconds: number): string {

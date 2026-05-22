@@ -1,14 +1,26 @@
 import { useEffect, useRef, useState } from "react";
+import { AppSelect, type AppSelectOption } from "../common/AppSelect";
+import type { BackendType } from "../../types";
+
+const BACKEND_TYPE_OPTIONS: Array<AppSelectOption<BackendType>> = [
+  { value: "wildfly", label: "WildFly", dotColor: "#8b5cf6" },
+  { value: "python", label: "Python", dotColor: "#10b981" },
+];
 
 export function AddProjectDialog({
   onCreate,
   onClose,
 }: {
-  onCreate: (name: string, code: string) => Promise<boolean>;
+  onCreate: (
+    name: string,
+    code: string,
+    backendType: BackendType,
+  ) => Promise<boolean>;
   onClose: () => void;
 }): JSX.Element {
   const [projectName, setProjectName] = useState("");
   const [projectCode, setProjectCode] = useState("");
+  const [backendType, setBackendType] = useState<BackendType>("wildfly");
   const [isClosing, setIsClosing] = useState(false);
   const [saving, setSaving] = useState(false);
   const closeTimerRef = useRef<number | null>(null);
@@ -36,7 +48,7 @@ export function AddProjectDialog({
     }
 
     setSaving(true);
-    const created = await onCreate(projectName, projectCode);
+    const created = await onCreate(projectName, projectCode, backendType);
     setSaving(false);
     if (created) {
       closeDialog();
@@ -85,6 +97,16 @@ export function AddProjectDialog({
               onChange={(event) =>
                 setProjectCode(event.target.value.toUpperCase())
               }
+            />
+          </label>
+          <label>
+            <span>Backend type</span>
+            <AppSelect
+              value={backendType}
+              options={BACKEND_TYPE_OPTIONS}
+              onChange={setBackendType}
+              ariaLabel="Backend type"
+              minDropdownWidth={160}
             />
           </label>
         </div>

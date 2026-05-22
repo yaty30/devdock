@@ -55,6 +55,7 @@ import { MAX_PROJECTS } from "../../shared/appLimits";
 import { isProjectFrontendEnabled } from "../../shared/projectFrontend";
 import type {
   AppSection,
+  BackendType,
   DashboardTab,
   DashboardEvent,
   DatabaseConnection,
@@ -84,6 +85,7 @@ const PROJECT_DASHBOARD_EXIT_LOG_CHANNELS: LogChannel[] = [
   "frontend",
   "build",
   "wildfly",
+  "python",
 ];
 
 type SplashPhase = "visible" | "exiting" | "hidden";
@@ -759,6 +761,7 @@ function App(): JSX.Element {
       id: project.id,
       name: project.name,
       code: project.code,
+      backendType: project.backendType,
     };
 
     const doOpen = (): void => {
@@ -1174,6 +1177,7 @@ function App(): JSX.Element {
   async function handleCreateProject(
     name: string,
     code: string,
+    backendType: BackendType,
   ): Promise<boolean> {
     const trimmedName = name.trim();
     const trimmedCode = code.trim().toUpperCase();
@@ -1208,6 +1212,7 @@ function App(): JSX.Element {
       const created = await window.ivsDashboard.createProject(
         trimmedName,
         trimmedCode,
+        backendType,
       );
       if (projectLoadingTimerRef.current !== null) {
         window.clearTimeout(projectLoadingTimerRef.current);
@@ -1419,7 +1424,8 @@ function App(): JSX.Element {
                     value={fontSizeMode}
                     onChange={setFontSizeMode}
                   />
-                ) : activeSection === "database" && selectedDatabaseConnection ? (
+                ) : activeSection === "database" &&
+                  selectedDatabaseConnection ? (
                   <DatabaseHeaderActions
                     connection={selectedDatabaseConnection}
                     databaseStatus={databaseRuntimeStatus}
@@ -1611,9 +1617,7 @@ function App(): JSX.Element {
                               : "Switch to grid view"
                           }
                           title={
-                            notesView === "grid"
-                              ? "List view"
-                              : "Grid view"
+                            notesView === "grid" ? "List view" : "Grid view"
                           }
                           disabled={projectLoading}
                           onClick={() =>
@@ -1719,7 +1723,9 @@ function App(): JSX.Element {
               storageScopeId={selectedProject.id}
               onViewChange={setApiTesterView}
               onFeedback={showSnackbar}
-              initialState={apiTesterDraftStateByScope[selectedProject.id] ?? null}
+              initialState={
+                apiTesterDraftStateByScope[selectedProject.id] ?? null
+              }
               onStateChange={(next) =>
                 setApiTesterDraftStateByScope((current) => ({
                   ...current,
@@ -1878,7 +1884,11 @@ function App(): JSX.Element {
                   >
                     <div className="shutdown-service-label">
                       <strong>
-                        {entry.service === "wildfly" ? "WildFly" : "Frontend"}
+                        {entry.service === "wildfly"
+                          ? "WildFly"
+                          : entry.service === "python"
+                            ? "Python"
+                            : "Frontend"}
                       </strong>
                       <span>{entry.projectName}</span>
                     </div>
@@ -2440,6 +2450,7 @@ function applyDashboardOverviewStatusEvent(
 function createLoadingProjectState(): ProjectRuntimeState {
   return {
     settings: {
+      backendType: "wildfly",
       appLogFile: "",
       gitProjectDirectory: "",
       defaultBranch: "",
@@ -2469,6 +2480,14 @@ function createLoadingProjectState(): ProjectRuntimeState {
           managementUrl: "",
           autoStart: false,
         },
+        python: {
+          enabled: true,
+          workingDirectory: "",
+          command: "",
+          healthUrl: "",
+          appUrl: "",
+          autoStart: false,
+        },
       },
       maven: {
         executable: "",
@@ -2491,6 +2510,7 @@ function createLoadingProjectState(): ProjectRuntimeState {
     logs: {
       frontend: [],
       wildfly: [],
+      python: [],
       build: [],
       tail: [],
     },

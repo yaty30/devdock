@@ -4,7 +4,9 @@ import type {
   ChatUserProfile,
 } from "./chatTypes";
 
-export type ServiceName = "frontend" | "wildfly";
+export type BackendType = "wildfly" | "python";
+export type BackendServiceName = BackendType;
+export type ServiceName = "frontend" | BackendServiceName;
 export type ServiceAction = "start" | "stop" | "restart";
 export type ServiceState =
   | "running"
@@ -17,7 +19,7 @@ export type BuildOutcomeType = "build-only" | "build-and-deploy";
 export type BuildStatus = "running" | "success" | "failed" | "stopped";
 export type ActivityTone = "success" | "accent" | "info" | "neutral" | "failed";
 export type ActivityKind = "service" | "build" | "git" | "system";
-export type LogChannel = "frontend" | "wildfly" | "build" | "tail";
+export type LogChannel = "frontend" | BackendServiceName | "build" | "tail";
 
 export type LogLine = {
   seq: number;
@@ -58,6 +60,7 @@ export type ProjectRecord = {
   id: string;
   name: string;
   code: string;
+  backendType: BackendType;
 };
 
 export type ServiceConfig = {
@@ -95,6 +98,7 @@ export type BuildProfileRecord = {
 };
 
 export type ProjectSettingsRecord = {
+  backendType: BackendType;
   appLogFile: string;
   gitProjectDirectory: string;
   defaultBranch: string;
@@ -186,8 +190,9 @@ export type ProjectDashboardSummary = {
   lastBuild?: RecentBuildRecord;
   serviceUrls: {
     frontendUrl: string;
-    wildflyConsoleUrl: string;
-    wildflyKmuUrl: string;
+    backendUrl: string;
+    backendManagementUrl: string;
+    backendLabel: string;
   };
 };
 
@@ -487,7 +492,10 @@ export type DashboardEvent =
     };
 
 export type DashboardApi = {
-  getFeatureFlags: () => Promise<{ chatEnabled: boolean; debugEnabled: boolean }>;
+  getFeatureFlags: () => Promise<{
+    chatEnabled: boolean;
+    debugEnabled: boolean;
+  }>;
   showDebugBuildNotification: () => Promise<void>;
   isWindowMaximized: () => Promise<boolean>;
   minimizeWindow: () => Promise<void>;
@@ -593,7 +601,11 @@ export type DashboardApi = {
   notifyChatMessage: (notification: ChatNativeNotification) => Promise<void>;
   openLog: (projectId: string, channel: LogChannel) => Promise<string>;
   deleteProject: (projectId: string) => Promise<void>;
-  createProject: (name: string, code: string) => Promise<ProjectRecord>;
+  createProject: (
+    name: string,
+    code: string,
+    backendType: BackendType,
+  ) => Promise<ProjectRecord>;
   updateProject: (
     projectId: string,
     name: string,
@@ -636,5 +648,7 @@ export type DashboardApi = {
   ) => () => void;
   onAppExit: (listener: () => void) => () => void;
   onChatOpenRequest: (listener: (conversationId: string) => void) => () => void;
-  onWindowMaximizedChange: (listener: (maximized: boolean) => void) => () => void;
+  onWindowMaximizedChange: (
+    listener: (maximized: boolean) => void,
+  ) => () => void;
 };

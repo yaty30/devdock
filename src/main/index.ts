@@ -12,12 +12,7 @@ import type {
   OpenDialogOptions,
   SaveDialogOptions,
 } from "electron";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -39,6 +34,7 @@ import type {
   ApiTesterFormDataPart,
   ApiTesterResponse,
   ApiTesterResponseHeader,
+  BackendType,
   RecentBuildRecord,
 } from "../shared/dashboardTypes";
 import type {
@@ -127,8 +123,9 @@ function registerIpc(): void {
     }),
   );
   ipcMain.handle("window:isMaximized", (event) =>
-    withLoggedErrors("window:isMaximized", () =>
-      BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false,
+    withLoggedErrors(
+      "window:isMaximized",
+      () => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false,
     ),
   );
   ipcMain.handle("window:minimize", (event) =>
@@ -489,9 +486,9 @@ function registerIpc(): void {
   );
   ipcMain.handle(
     "dashboard:createProject",
-    (_event, name: string, code: string) =>
+    (_event, name: string, code: string, backendType: BackendType) =>
       withLoggedErrors("dashboard:createProject", () =>
-        getBackend().createProject(name, code),
+        getBackend().createProject(name, code, backendType),
       ),
   );
   ipcMain.handle(
@@ -694,7 +691,9 @@ function createApiTesterFormData(parts: ApiTesterFormDataPart[]): FormData {
   return formData;
 }
 
-function isBinaryApiTesterResponse(headers: ApiTesterResponseHeader[]): boolean {
+function isBinaryApiTesterResponse(
+  headers: ApiTesterResponseHeader[],
+): boolean {
   const contentType = headers
     .find((header) => header.name.toLowerCase() === "content-type")
     ?.value.toLowerCase();
@@ -997,7 +996,8 @@ function showBuildNotification(
 ): boolean {
   const window = mainWindow;
   if (!window || window.isDestroyed()) {
-    const message = "Build toast skipped because the main window is unavailable.";
+    const message =
+      "Build toast skipped because the main window is unavailable.";
     if (options.throwOnSkip) {
       throw new Error(message);
     }
@@ -1187,8 +1187,7 @@ function createBuildNotificationToastXml(
     // `🔖 Commit: @${build.commit}/${build.commitCleanliness}`,
     `🤝🏻 Profile:  ${build.profile}`,
     `🕑 Duration: ${build.duration}`,
-    `🔖 Commit: @${build.commit}/${build.commitCleanliness}`
-
+    `🔖 Commit: @${build.commit}/${build.commitCleanliness}`,
   ];
   const launchArgument = createBuildNotificationArgument(
     notificationToken,
@@ -1276,9 +1275,7 @@ function parseBuildNotificationActivation(
     return {
       token,
       action: parameters.get("action"),
-      warDirectory: encodedDirectory
-        ? decodeBase64Url(encodedDirectory)
-        : null,
+      warDirectory: encodedDirectory ? decodeBase64Url(encodedDirectory) : null,
     };
   }
 
@@ -1350,8 +1347,9 @@ function registerNotificationActivationHandler(): void {
   }
 
   const notificationApi = Notification as typeof Notification & {
-    handleActivation?: (callback: (details: { arguments?: string }) => void) =>
-      void;
+    handleActivation?: (
+      callback: (details: { arguments?: string }) => void,
+    ) => void;
   };
   notificationApi.handleActivation?.((details) => {
     const argumentsText = details.arguments;
@@ -1406,14 +1404,7 @@ function resolveAppIconPath(): string | undefined {
 function resolveNotificationIconPath(): string | null {
   const candidates = [
     join(process.resourcesPath, "icon.ico"),
-    join(
-      app.getAppPath(),
-      "src",
-      "renderer",
-      "src",
-      "assets",
-      "icon.ico",
-    ),
+    join(app.getAppPath(), "src", "renderer", "src", "assets", "icon.ico"),
   ];
 
   for (const candidate of candidates) {
