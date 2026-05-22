@@ -299,6 +299,11 @@ const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
 const WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
 const RETENTION_DAYS = 3;
 const DATABASE_EXECUTION_HISTORY_LIMIT = 1000;
+const BACKEND_DASHBOARD_LOG_CHANNELS: readonly LogChannel[] = [
+  "build",
+  "wildfly",
+];
+const DASHBOARD_CLEARED_META_PREFIX = "project-dashboard-cleared-at:";
 const EMPTY_SHEET_CONTENT: SheetContentJson = {
   type: "doc",
   content: [{ type: "paragraph" }],
@@ -1488,7 +1493,11 @@ export class DashboardBackend {
         project,
         frontendEnabled: isProjectFrontendEnabled(settings),
         statuses: this.getStatuses(project.id, settings),
-        lastBuild: this.queryBuilds(project.id, { limit: 1 }).builds[0],
+        lastBuild: this.queryBuilds(
+          project.id,
+          { limit: 1 },
+          this.getDashboardClearedAt(project.id),
+        ).builds[0],
         serviceUrls: {
           frontendUrl: getProjectFrontendUrl(settings),
           wildflyConsoleUrl: settings.services.wildfly.managementUrl || "",
@@ -1577,6 +1586,8 @@ export class DashboardBackend {
       clearInterval(timer);
     }
     this.statusTimers.clear();
+
+    this.clearAllDashboardHistory();
   }
 
   getShutdownEntries(): ShutdownEntry[] {
@@ -1615,6 +1626,8 @@ export class DashboardBackend {
         onServiceStopped(projectId, service);
       }),
     );
+
+    this.clearAllDashboardHistory();
   }
 
   updateProject(projectId: string, name: string, code: string): ProjectRecord {
@@ -1907,6 +1920,9 @@ export class DashboardBackend {
     this.db
       .prepare("DELETE FROM service_status WHERE project_id = ?")
       .run(projectId);
+    this.db
+      .prepare("DELETE FROM app_meta WHERE key = ?")
+      .run(this.dashboardClearedMetaKey(projectId));
     this.db.prepare("DELETE FROM sheets WHERE project_id = ?").run(projectId);
     this.db.prepare("DELETE FROM projects WHERE id = ?").run(projectId);
     // remove config file
@@ -1984,9 +2000,7 @@ export class DashboardBackend {
   ): Promise<RecentBuildRecord> {
     const activeBuild = this.buildProcesses.get(projectId);
     if (activeBuild && activeBuild.child.exitCode === null) {
-      const existingBuild = this.getRecentBuilds(projectId).find(
-        (item) => item.id === `#${activeBuild.rowId}`,
-      );
+      const existingBuild = this.getBuildByRowId(projectId, activeBuild.rowId);
       if (existingBuild) {
         return existingBuild;
       }
@@ -2086,9 +2100,7 @@ export class DashboardBackend {
     this.sendBuilds(projectId);
     void this.refreshStatus(projectId);
 
-    const build = this.getRecentBuilds(projectId).find(
-      (item) => item.id === `#${rowId}`,
-    );
+    const build = this.getBuildByRowId(projectId, rowId);
     if (!build) {
       throw new Error(
         "Build completed but could not be read from the database.",
@@ -2109,9 +2121,7 @@ export class DashboardBackend {
     terminateProcessTree(activeBuild.child);
     this.sendBuilds(projectId);
     return (
-      this.getRecentBuilds(projectId).find(
-        (item) => item.id === `#${activeBuild.rowId}`,
-      ) ?? null
+      this.getBuildByRowId(projectId, activeBuild.rowId) ?? null
     );
   }
 
@@ -3002,6 +3012,7 @@ export class DashboardBackend {
       config.healthUrl,
     );
     this.upsertStatus(projectId, status);
+    this.clearStoppedServiceDashboardHistory(projectId, service);
     void this.refreshStatus(projectId);
     return status;
   }
@@ -3230,12 +3241,27 @@ export class DashboardBackend {
 
   private getRecentBuilds(projectId: string): RecentBuildRecord[] {
     this.pruneBuilds(projectId);
-    return this.queryBuilds(projectId, { limit: 50 }).builds;
+    return this.queryBuilds(
+      projectId,
+      { limit: 50 },
+      this.getDashboardClearedAt(projectId),
+    ).builds;
+  }
+
+  private getBuildByRowId(
+    projectId: string,
+    rowId: number,
+  ): RecentBuildRecord | undefined {
+    const row = this.db
+      .prepare("SELECT * FROM build_runs WHERE project_id = ? AND id = ?")
+      .get(projectId, rowId) as BuildRow | undefined;
+    return row ? formatBuildRow(row) : undefined;
   }
 
   private queryBuilds(
     projectId: string,
     options: BuildQueryOptions = {},
+    clearedAt: string | null = null,
   ): BuildQueryResult {
     const limit = clampInteger(options.limit, 1, 100, 30);
     const offset = clampInteger(options.offset, 0, 100_000, 0);
@@ -3246,6 +3272,10 @@ export class DashboardBackend {
       `(status = 'running' OR datetime(COALESCE(completed_at, started_at)) >= datetime('now', '-${RETENTION_DAYS} days'))`,
     ];
     const params: unknown[] = [projectId];
+    if (clearedAt) {
+      whereParts.push("started_at > ?");
+      params.push(clearedAt);
+    }
     const search = options.search?.trim().toLowerCase() ?? "";
     const status = normalizeBuildStatus(options.status);
 
@@ -3383,6 +3413,7 @@ export class DashboardBackend {
   }
 
   private clearLog(projectId: string, channel: LogChannel): void {
+    this.logBuffer.delete(logKey(projectId, channel));
     if (channel === "tail") {
       this.send({ type: "log-clear", projectId, channel });
       return;
@@ -3394,6 +3425,55 @@ export class DashboardBackend {
     mkdirSync(dirname(filePath), { recursive: true });
     writeFileSync(filePath, "", "utf8");
     this.send({ type: "log-clear", projectId, channel });
+  }
+
+  private clearStoppedServiceDashboardHistory(
+    projectId: string,
+    service: ServiceName,
+  ): void {
+    if (service === "frontend") {
+      this.clearLog(projectId, "frontend");
+      return;
+    }
+
+    this.clearBackendDashboardHistory(projectId);
+  }
+
+  private clearBackendDashboardHistory(projectId: string): void {
+    for (const channel of BACKEND_DASHBOARD_LOG_CHANNELS) {
+      this.clearLog(projectId, channel);
+    }
+    this.markDashboardCleared(projectId);
+    this.sendBuilds(projectId);
+  }
+
+  private clearAllDashboardHistory(): void {
+    for (const project of this.getProjects()) {
+      this.clearLog(project.id, "frontend");
+      this.clearBackendDashboardHistory(project.id);
+    }
+  }
+
+  private getDashboardClearedAt(projectId: string): string | null {
+    const row = this.db
+      .prepare("SELECT value FROM app_meta WHERE key = ?")
+      .get(this.dashboardClearedMetaKey(projectId)) as
+      | { value: string }
+      | undefined;
+    return row?.value || null;
+  }
+
+  private markDashboardCleared(projectId: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO app_meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(this.dashboardClearedMetaKey(projectId), new Date().toISOString());
+  }
+
+  private dashboardClearedMetaKey(projectId: string): string {
+    return `${DASHBOARD_CLEARED_META_PREFIX}${projectId}`;
   }
 
   private appendChunk(
