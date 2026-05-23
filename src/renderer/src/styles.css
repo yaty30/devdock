@@ -3533,9 +3533,43 @@ body {
   min-height: 0;
 }
 
+.python-side-column {
+  display: grid;
+  grid-column: 5;
+  grid-row: 1 / 4;
+  grid-template-rows:
+    minmax(0, 0.95fr) minmax(0, 0.92fr)
+    minmax(0, 1.13fr);
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.python-side-column > .python-errors-panel,
+.python-side-column > .python-runtime-panel,
+.python-side-column > .python-dependencies-panel {
+  grid-column: auto;
+  grid-row: auto;
+}
+
+.python-dependencies-panel {
+  padding: 13px;
+  min-height: 0;
+}
+
 .dashboard-grid.frontend-disabled .python-errors-panel,
 .dashboard-grid.frontend-disabled .python-runtime-panel {
   grid-column: 3;
+}
+
+.dashboard-grid.frontend-disabled .python-side-column {
+  grid-column: 3;
+}
+
+.dashboard-grid.frontend-disabled .python-side-column > .python-errors-panel,
+.dashboard-grid.frontend-disabled .python-side-column > .python-runtime-panel,
+.dashboard-grid.frontend-disabled .python-side-column > .python-dependencies-panel {
+  grid-column: auto;
 }
 
 .wildfly-panel {
@@ -3549,13 +3583,15 @@ body {
 }
 
 .python-runtime-list,
-.python-error-list {
+.python-error-list,
+.python-dependency-list {
   display: grid;
   min-height: 0;
   gap: 10px;
 }
 
-.python-error-list {
+.python-error-list,
+.python-dependency-list {
   overflow: auto;
   scrollbar-color: var(--accent-soft) transparent;
   scrollbar-width: thin;
@@ -3574,6 +3610,38 @@ body {
   word-break: break-word;
 }
 
+.python-dependency-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 9px;
+  background: color-mix(in srgb, var(--accent-soft) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
+  border-radius: 7px;
+}
+
+.python-dependency-row strong,
+.python-dependency-row span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-sm);
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.python-dependency-row strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.python-dependency-row span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
 .dashboard-grid.frontend-disabled .tail-log-panel {
   grid-column: 1;
   grid-row: 1;
@@ -3582,6 +3650,19 @@ body {
 .dashboard-grid.frontend-disabled .wildfly-panel {
   grid-column: 1;
   grid-row: 3;
+}
+
+.dashboard-grid.tail-disabled .frontend-panel {
+  grid-row: 1 / 4;
+}
+
+.dashboard-grid.tail-disabled .wildfly-panel {
+  grid-column: 3;
+  grid-row: 1 / 4;
+}
+
+.dashboard-grid.frontend-disabled.tail-disabled .wildfly-panel {
+  grid-column: 1;
 }
 
 .dashboard-grid.frontend-disabled .build-log-panel,
@@ -3595,6 +3676,14 @@ body {
 
 .dashboard-grid.frontend-disabled .row-splitter {
   grid-column: 1 / 4;
+}
+
+.dashboard-grid.python-layout .row-splitter {
+  grid-column: 1 / 4;
+}
+
+.dashboard-grid.tail-disabled .column-splitter-one {
+  grid-row: 1 / 4;
 }
 
 .grid-splitter {

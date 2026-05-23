@@ -342,16 +342,30 @@ export function SettingsContent({
     field: keyof ProjectSettingsRecord["services"][ServiceName],
     value: string | boolean,
   ): void {
-    setDraft((current) => ({
-      ...current,
-      services: {
-        ...current.services,
-        [service]: {
-          ...current.services[service],
-          [field]: value,
+    setDraft((current) => {
+      const next = {
+        ...current,
+        services: {
+          ...current.services,
+          [service]: {
+            ...current.services[service],
+            [field]: value,
+          },
         },
-      },
-    }));
+      };
+
+      if (service === "python" && field === "autoStart") {
+        return {
+          ...next,
+          python: {
+            ...next.python,
+            autoStart: value === true,
+          },
+        };
+      }
+
+      return next;
+    });
   }
 
   function updatePythonConfig(
@@ -666,10 +680,15 @@ export function SettingsContent({
   }
 
   function normalizeDraft(): ProjectSettingsRecord {
+    const pythonAutoStart = draft.services.python.autoStart ?? false;
     return {
       ...draft,
       defaultBranch: draft.defaultBranch.trim() || "main",
       remote: draft.remote.trim() || "origin",
+      python: {
+        ...draft.python,
+        autoStart: pythonAutoStart,
+      },
       frontend: {
         ...draft.frontend,
         enabled: draft.frontend.enabled,
@@ -684,6 +703,10 @@ export function SettingsContent({
           autoStart: draft.frontend.enabled
             ? (draft.services.frontend.autoStart ?? false)
             : false,
+        },
+        python: {
+          ...draft.services.python,
+          autoStart: pythonAutoStart,
         },
       },
       maven: {

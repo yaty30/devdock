@@ -2515,6 +2515,7 @@ function createLoadingProjectState(): ProjectRuntimeState {
     statuses: [],
     recentBuilds: [],
     activityFeed: [],
+    pythonDependencies: [],
     gitStatus: {
       repository: "",
       branch: "",

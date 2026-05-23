@@ -13,6 +13,7 @@ import {
   openSync,
   readFileSync,
   readSync,
+  readdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -61,6 +62,7 @@ import type {
   LogQueryResult,
   ProjectRecord,
   ProjectDashboardSummary,
+  PythonDependencyRecord,
   ProjectRuntimeState,
   ProjectSettingsRecord,
   PythonServerType,
@@ -1595,6 +1597,10 @@ export class DashboardBackend {
       recentBuilds: this.getRecentBuilds(projectId),
       activityFeed: this.getActivity(projectId),
       gitStatus: this.getGitStatus(projectId),
+      pythonDependencies:
+        settings.backendType === "python"
+          ? this.getPythonDependencies(settings)
+          : [],
       logs: {
         frontend: isProjectFrontendEnabled(settings)
           ? this.getLog(projectId, "frontend")
@@ -3047,6 +3053,12 @@ export class DashboardBackend {
 
     this.writeProjectConfig(projectId, defaults);
     return defaults;
+  }
+
+  private getPythonDependencies(
+    settings: ProjectSettingsRecord,
+  ): PythonDependencyRecord[] {
+    return readPythonDependencies(settings.python.directory.trim());
   }
 
   private writeProjectConfig(
@@ -5624,6 +5636,302 @@ function profileChangeCount(
     Number(previous.confirm !== next.confirm) +
     Number(previous.outcomeType !== next.outcomeType)
   );
+}
+
+function readPythonDependencies(projectDirectory: string): PythonDependencyRecord[] {
+  if (!projectDirectory || !existsSync(projectDirectory)) {
+    return [];
+  }
+
+  try {
+    if (!statSync(projectDirectory).isDirectory()) {
+      return [];
+    }
+  } catch {
+    return [];
+  }
+
+  const dependencies = new Map<string, PythonDependencyRecord>();
+  for (const file of pythonDependencyFiles(projectDirectory)) {
+    let content = "";
+    try {
+      content = readFileSync(file.path, "utf8");
+    } catch {
+      continue;
+    }
+
+    for (const dependency of parsePythonDependencyFile(
+      content,
+      file.source,
+      file.kind,
+    )) {
+      addPythonDependency(dependencies, dependency);
+    }
+  }
+
+  return [...dependencies.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, 200);
+}
+
+type PythonDependencyFile = {
+  path: string;
+  source: string;
+  kind: "requirements" | "pyproject" | "poetry-lock" | "pipfile" | "pipfile-lock";
+};
+
+function pythonDependencyFiles(
+  projectDirectory: string,
+): PythonDependencyFile[] {
+  const files: PythonDependencyFile[] = [];
+
+  try {
+    for (const entry of readdirSync(projectDirectory, { withFileTypes: true })) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      const name = entry.name;
+      const lowerName = name.toLowerCase();
+      const path = join(projectDirectory, name);
+
+      if (/^requirements.*\.txt$/i.test(name)) {
+        files.push({ path, source: name, kind: "requirements" });
+      } else if (lowerName === "pyproject.toml") {
+        files.push({ path, source: name, kind: "pyproject" });
+      } else if (lowerName === "poetry.lock") {
+        files.push({ path, source: name, kind: "poetry-lock" });
+      } else if (lowerName === "pipfile") {
+        files.push({ path, source: name, kind: "pipfile" });
+      } else if (lowerName === "pipfile.lock") {
+        files.push({ path, source: name, kind: "pipfile-lock" });
+      }
+    }
+  } catch {
+    return [];
+  }
+
+  return files;
+}
+
+function parsePythonDependencyFile(
+  content: string,
+  source: string,
+  kind: "requirements" | "pyproject" | "poetry-lock" | "pipfile" | "pipfile-lock",
+): PythonDependencyRecord[] {
+  switch (kind) {
+    case "requirements":
+      return parseRequirementsDependencies(content, source);
+    case "pyproject":
+      return parsePyprojectDependencies(content, source);
+    case "poetry-lock":
+      return parsePoetryLockDependencies(content, source);
+    case "pipfile":
+      return parsePipfileDependencies(content, source);
+    case "pipfile-lock":
+      return parsePipfileLockDependencies(content, source);
+  }
+}
+
+function addPythonDependency(
+  dependencies: Map<string, PythonDependencyRecord>,
+  dependency: PythonDependencyRecord,
+): void {
+  const key = dependency.name.toLowerCase();
+  const existing = dependencies.get(key);
+  if (!existing || existing.version === "Unpinned") {
+    dependencies.set(key, dependency);
+  }
+}
+
+function parseRequirementsDependencies(
+  content: string,
+  source: string,
+): PythonDependencyRecord[] {
+  return content
+    .split(/\r?\n/)
+    .map((line) => parseRequirementSpec(line, source))
+    .filter((dependency): dependency is PythonDependencyRecord =>
+      Boolean(dependency),
+    );
+}
+
+function parseRequirementSpec(
+  value: string,
+  source: string,
+): PythonDependencyRecord | null {
+  const cleaned = value
+    .replace(/\s+#.*$/, "")
+    .split(";")[0]
+    .trim();
+  if (
+    !cleaned ||
+    cleaned.startsWith("#") ||
+    cleaned.startsWith("-") ||
+    /^https?:\/\//i.test(cleaned) ||
+    /^git\+/i.test(cleaned)
+  ) {
+    return null;
+  }
+
+  const directReference = cleaned.match(
+    /^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*@\s*(.+)$/u,
+  );
+  if (directReference) {
+    return {
+      name: normalizePythonDependencyName(directReference[1]),
+      version: "Direct reference",
+      source,
+    };
+  }
+
+  const versioned = cleaned.match(
+    /^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*((?:===|==|~=|!=|<=|>=|<|>).+)$/u,
+  );
+  if (versioned) {
+    return {
+      name: normalizePythonDependencyName(versioned[1]),
+      version: versioned[2].trim(),
+      source,
+    };
+  }
+
+  const nameOnly = cleaned.match(/^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?$/u);
+  if (!nameOnly) {
+    return null;
+  }
+
+  return {
+    name: normalizePythonDependencyName(nameOnly[1]),
+    version: "Unpinned",
+    source,
+  };
+}
+
+function parsePyprojectDependencies(
+  content: string,
+  source: string,
+): PythonDependencyRecord[] {
+  const dependencies: PythonDependencyRecord[] = [];
+  for (const arrayMatch of content.matchAll(
+    /(?:^|\n)\s*dependencies\s*=\s*\[([\s\S]*?)\]/gu,
+  )) {
+    for (const itemMatch of arrayMatch[1].matchAll(/["']([^"']+)["']/gu)) {
+      const dependency = parseRequirementSpec(itemMatch[1], source);
+      if (dependency) {
+        dependencies.push(dependency);
+      }
+    }
+  }
+
+  const poetrySection = content.match(
+    /(?:^|\n)\[tool\.poetry\.dependencies\]([\s\S]*?)(?=\n\[|$)/u,
+  );
+  if (poetrySection) {
+    dependencies.push(...parseTomlDependencySection(poetrySection[1], source));
+  }
+
+  return dependencies;
+}
+
+function parsePipfileDependencies(
+  content: string,
+  source: string,
+): PythonDependencyRecord[] {
+  const packagesSection = content.match(
+    /(?:^|\n)\[packages\]([\s\S]*?)(?=\n\[|$)/u,
+  );
+  return packagesSection
+    ? parseTomlDependencySection(packagesSection[1], source)
+    : [];
+}
+
+function parseTomlDependencySection(
+  content: string,
+  source: string,
+): PythonDependencyRecord[] {
+  const dependencies: PythonDependencyRecord[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    const cleaned = line.replace(/\s+#.*$/, "").trim();
+    if (!cleaned) {
+      continue;
+    }
+
+    const match = cleaned.match(/^["']?([^"'=]+?)["']?\s*=\s*(.+)$/u);
+    if (!match) {
+      continue;
+    }
+
+    const name = normalizePythonDependencyName(match[1].trim());
+    if (name.toLowerCase() === "python") {
+      continue;
+    }
+
+    const value = match[2].trim();
+    const inlineVersion = value.match(/version\s*=\s*["']([^"']+)["']/u);
+    const stringVersion = value.match(/^["']([^"']+)["']/u);
+    const version = inlineVersion?.[1] ?? stringVersion?.[1] ?? "Unpinned";
+    dependencies.push({
+      name,
+      version: version === "*" ? "Unpinned" : version,
+      source,
+    });
+  }
+
+  return dependencies;
+}
+
+function parsePoetryLockDependencies(
+  content: string,
+  source: string,
+): PythonDependencyRecord[] {
+  return content
+    .split(/\n(?=\[\[package\]\])/u)
+    .map((block) => {
+      const name = block.match(/(?:^|\n)name\s*=\s*["']([^"']+)["']/u)?.[1];
+      const version = block.match(
+        /(?:^|\n)version\s*=\s*["']([^"']+)["']/u,
+      )?.[1];
+      return name && version
+        ? {
+            name: normalizePythonDependencyName(name),
+            version,
+            source,
+          }
+        : null;
+    })
+    .filter((dependency): dependency is PythonDependencyRecord =>
+      Boolean(dependency),
+    );
+}
+
+function parsePipfileLockDependencies(
+  content: string,
+  source: string,
+): PythonDependencyRecord[] {
+  try {
+    const parsed = JSON.parse(content) as {
+      default?: Record<string, { version?: unknown }>;
+      develop?: Record<string, { version?: unknown }>;
+    };
+    return Object.entries({
+      ...(parsed.default ?? {}),
+      ...(parsed.develop ?? {}),
+    }).map(([name, metadata]) => ({
+      name: normalizePythonDependencyName(name),
+      version:
+        typeof metadata.version === "string" && metadata.version.trim()
+          ? metadata.version
+          : "Unpinned",
+      source,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function normalizePythonDependencyName(name: string): string {
+  return name.trim().replace(/[-_.]+/g, "-");
 }
 
 function serviceProcessKey(projectId: string, service: ServiceName): string {

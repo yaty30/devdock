@@ -232,7 +232,14 @@ export type ProjectRuntimeState = {
   recentBuilds: RecentBuildRecord[];
   activityFeed: ActivityRecord[];
   gitStatus: GitStatusRecord;
+  pythonDependencies: PythonDependencyRecord[];
   logs: Record<LogChannel, string[]>;
+};
+
+export type PythonDependencyRecord = {
+  name: string;
+  version: string;
+  source: string;
 };
 
 export type ProjectDashboardSummary = {

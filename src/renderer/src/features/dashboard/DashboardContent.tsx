@@ -1024,7 +1024,9 @@ function ProjectStatusRow({
               {lastBuild ? (
                 buildStatusPill(lastBuild.status)
               ) : (
-                <strong className="dashboard-status-value idle">No builds</strong>
+                <strong className="dashboard-status-value idle">
+                  No builds
+                </strong>
               )}
             </div>
           ) : (
@@ -1033,7 +1035,9 @@ function ProjectStatusRow({
               {healthConfigured ? (
                 statusPill(healthState)
               ) : (
-                <strong className="dashboard-status-value idle">Not configured</strong>
+                <strong className="dashboard-status-value idle">
+                  Not configured
+                </strong>
               )}
             </div>
           )}
@@ -1121,7 +1125,9 @@ function ProjectStatusRow({
           </DashboardDetailRow>
           {isPython ? (
             <DashboardDetailRow label="Server type">
-              <strong>{summary.serviceUrls.backendServerType || "Custom"}</strong>
+              <strong>
+                {summary.serviceUrls.backendServerType || "Custom"}
+              </strong>
             </DashboardDetailRow>
           ) : null}
         </section>
@@ -1151,7 +1157,9 @@ function ProjectStatusRow({
               {lastBuild ? (
                 buildStatusPill(lastBuild.status)
               ) : (
-                <strong className="dashboard-status-value idle">No builds</strong>
+                <strong className="dashboard-status-value idle">
+                  No builds
+                </strong>
               )}
             </header>
             <DashboardDetailRow label="Duration">
@@ -1169,13 +1177,25 @@ function ProjectStatusRow({
               {healthConfigured ? statusPill(healthState) : null}
             </header>
             <DashboardDetailRow label="Status">
-              <strong>{healthConfigured ? (backend?.state === "running" ? "Healthy" : "Unknown") : "Not configured"}</strong>
+              <strong>
+                {healthConfigured
+                  ? backend?.state === "running"
+                    ? "Healthy"
+                    : "Unknown"
+                  : "Not configured"}
+              </strong>
             </DashboardDetailRow>
             <DashboardDetailRow label="Response">
-              <strong>{healthConfigured && backend?.state === "running" ? "200 OK" : "--"}</strong>
+              <strong>
+                {healthConfigured && backend?.state === "running"
+                  ? "200 OK"
+                  : "--"}
+              </strong>
             </DashboardDetailRow>
             <DashboardDetailRow label="Last Check">
-              <strong>{backend?.checkedAt ? formatDate(backend.checkedAt) : "--"}</strong>
+              <strong>
+                {backend?.checkedAt ? formatDate(backend.checkedAt) : "--"}
+              </strong>
             </DashboardDetailRow>
             <DashboardDetailRow label="Health URL">
               <strong>{summary.serviceUrls.backendHealthUrl || "--"}</strong>
@@ -1353,7 +1373,9 @@ function PythonRuntimePanel({
     <Panel title="Runtime Status" className="python-runtime-panel">
       <div className="python-runtime-list">
         <DashboardDetailRow label="Server type">
-          <strong>{getPythonServerTypeLabel(settings.python.serverType)}</strong>
+          <strong>
+            {getPythonServerTypeLabel(settings.python.serverType)}
+          </strong>
         </DashboardDetailRow>
         <DashboardDetailRow label="Process">
           {statusPill(status?.state)}
@@ -1365,20 +1387,48 @@ function PythonRuntimePanel({
           <strong>{settings.python.appUrl || "--"}</strong>
         </DashboardDetailRow>
         <DashboardDetailRow label="Health Check">
-          <strong>{hasHealthUrl ? settings.python.healthCheckUrl : "Not configured"}</strong>
+          <strong>
+            {hasHealthUrl ? settings.python.healthCheckUrl : "Not configured"}
+          </strong>
         </DashboardDetailRow>
       </div>
     </Panel>
   );
 }
 
-function PythonErrorsPanel({
-  lines,
+function PythonDependenciesPanel({
+  dependencies,
 }: {
-  lines: string[];
+  dependencies: ProjectRuntimeState["pythonDependencies"];
 }): JSX.Element {
+  return (
+    <Panel title="Dependencies" className="python-dependencies-panel">
+      {dependencies.length > 0 ? (
+        <div className="python-dependency-list">
+          {dependencies.map((dependency) => (
+            <div
+              className="python-dependency-row"
+              key={`${dependency.source}:${dependency.name}`}
+            >
+              <strong>{dependency.name}</strong>
+              <span title={dependency.source}>
+                {dependency.version.replace("==", "v")}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-panel-state">No dependencies detected.</div>
+      )}
+    </Panel>
+  );
+}
+
+function PythonErrorsPanel({ lines }: { lines: string[] }): JSX.Element {
   const errorLines = lines
-    .filter((line) => /\b(error|exception|traceback|failed|failure)\b/i.test(line))
+    .filter((line) =>
+      /\b(error|exception|traceback|failed|failure)\b/i.test(line),
+    )
     .slice(-8)
     .reverse();
 
@@ -1421,6 +1471,8 @@ export function ProjectDashboardContent({
     projectState.settings.backendType !== "python" ||
     Boolean(projectState.settings.python.buildCommand?.trim());
   const tailLogConfigured = Boolean(projectState.settings.appLogFile.trim());
+  const showTailLogPanel =
+    projectState.settings.backendType !== "python" || tailLogConfigured;
   const gridRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
@@ -1476,7 +1528,7 @@ export function ProjectDashboardContent({
 
     observer.observe(grid);
     return () => observer.disconnect();
-  }, [frontendEnabled]);
+  }, [frontendEnabled, showBuildPanels, showTailLogPanel]);
 
   function applyGridLayout(nextLayout: DashboardLayout): void {
     const grid = gridRef.current;
@@ -1534,15 +1586,21 @@ export function ProjectDashboardContent({
         DASHBOARD_SPLITTER_SIZE
       : 0;
     const topRowPanel = gridRef.current?.querySelector<HTMLElement>(
-      frontendEnabled ? ".frontend-panel" : ".tail-log-panel",
+      frontendEnabled
+        ? ".frontend-panel"
+        : showTailLogPanel
+          ? ".tail-log-panel"
+          : ".wildfly-panel",
     );
     const columnPanels = [
       frontendEnabled
         ? gridRef.current?.querySelector<HTMLElement>(".frontend-panel")
         : null,
-      gridRef.current?.querySelector<HTMLElement>(".tail-log-panel"),
       gridRef.current?.querySelector<HTMLElement>(
-        showBuildPanels ? ".build-status-panel" : ".python-runtime-panel",
+        showTailLogPanel ? ".tail-log-panel" : ".wildfly-panel",
+      ),
+      gridRef.current?.querySelector<HTMLElement>(
+        showBuildPanels ? ".build-status-panel" : ".python-side-column",
       ),
     ];
     const startColumnWidths = columnPanels.map(
@@ -1662,7 +1720,7 @@ export function ProjectDashboardContent({
   return (
     <section className="resizable-panel-screen">
       <div
-        className={`dashboard-grid${frontendEnabled ? "" : " frontend-disabled"}`}
+        className={`dashboard-grid${frontendEnabled ? "" : " frontend-disabled"}${showTailLogPanel ? "" : " tail-disabled"}${showBuildPanels ? "" : " python-layout"}`}
         ref={gridRef}
         style={gridStyle}
       >
@@ -1709,13 +1767,16 @@ export function ProjectDashboardContent({
         {showBuildPanels ? (
           <BuildStatusPanel projectId={projectId} projectState={projectState} />
         ) : (
-          <>
+          <div className="python-side-column">
             <PythonErrorsPanel lines={projectState.logs.python} />
             <PythonRuntimePanel
               status={backendStatus}
               settings={projectState.settings}
             />
-          </>
+            <PythonDependenciesPanel
+              dependencies={projectState.pythonDependencies}
+            />
+          </div>
         )}
         <LogPanel
           title={backendService === "python" ? "Server Log" : backendLabel}
@@ -1744,23 +1805,25 @@ export function ProjectDashboardContent({
             })
           }
         />
-        <TailLogPanel
-          projectId={projectId}
-          configured={tailLogConfigured}
-          suspendAutoFollow={isResizing}
-          onZoom={
-            tailLogConfigured
-              ? () =>
-                  setZoomLog({
-                    title: "Tail Log",
-                    channel: "tail",
-                    footer: "Open full log",
-                    className: "tail-log-panel log-zoom-panel",
-                    dense: true,
-                  })
-              : undefined
-          }
-        />
+        {showTailLogPanel ? (
+          <TailLogPanel
+            projectId={projectId}
+            configured={tailLogConfigured}
+            suspendAutoFollow={isResizing}
+            onZoom={
+              tailLogConfigured
+                ? () =>
+                    setZoomLog({
+                      title: "Tail Log",
+                      channel: "tail",
+                      footer: "Open full log",
+                      className: "tail-log-panel log-zoom-panel",
+                      dense: true,
+                    })
+                : undefined
+            }
+          />
+        ) : null}
         {frontendEnabled ? (
           <div
             className="grid-splitter column-splitter column-splitter-one"
@@ -1783,16 +1846,18 @@ export function ProjectDashboardContent({
           onPointerUp={stopResize}
           onPointerCancel={stopResize}
         />
-        <div
-          className="grid-splitter row-splitter"
-          role="separator"
-          aria-orientation="horizontal"
-          aria-label="Resize top and bottom dashboard rows"
-          onPointerDown={(event) => startResize("row", event)}
-          onPointerMove={resizeLayout}
-          onPointerUp={stopResize}
-          onPointerCancel={stopResize}
-        />
+        {showTailLogPanel ? (
+          <div
+            className="grid-splitter row-splitter"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize top and bottom dashboard rows"
+            onPointerDown={(event) => startResize("row", event)}
+            onPointerMove={resizeLayout}
+            onPointerUp={stopResize}
+            onPointerCancel={stopResize}
+          />
+        ) : null}
       </div>
 
       <Modal
@@ -1814,6 +1879,7 @@ export function ProjectDashboardContent({
           <TailLogPanel
             projectId={projectId}
             className="tail-log-panel log-zoom-panel"
+            configured={tailLogConfigured}
           />
         ) : zoomLog ? (
           <LogPanel

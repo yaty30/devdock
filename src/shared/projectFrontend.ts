@@ -246,8 +246,8 @@ function normalizePythonWebServerConfig(
       stringValue(rawPythonService.healthUrl, defaults.healthCheckUrl),
     ),
     autoStart: booleanValue(
-      rawPythonConfig.autoStart,
-      booleanValue(rawPythonService.autoStart, defaults.autoStart ?? false),
+      rawPythonService.autoStart,
+      booleanValue(rawPythonConfig.autoStart, defaults.autoStart ?? false),
     ),
     buildCommand: stringValue(
       rawPythonConfig.buildCommand,
