@@ -257,6 +257,31 @@ export type ProjectDashboardSummary = {
   };
 };
 
+export type ProjectEnvScope = "frontend" | "backend";
+
+export type ProjectEnvVariable = {
+  lineIndex: number;
+  name: string;
+  value: string;
+};
+
+export type ProjectEnvFileRecord = {
+  path: string;
+  name: string;
+  variables: ProjectEnvVariable[];
+};
+
+export type ProjectEnvFileGroup = {
+  scope: ProjectEnvScope;
+  label: string;
+  rootPath: string;
+  files: ProjectEnvFileRecord[];
+};
+
+export type ProjectEnvFilesResult = {
+  groups: ProjectEnvFileGroup[];
+};
+
 export type DashboardSnapshot = {
   projects: ProjectRecord[];
   activeProjectId: string;
@@ -630,6 +655,13 @@ export type DashboardApi = {
   ) => Promise<DatabaseExportResult>;
   getDashboardOverview: () => Promise<ProjectDashboardSummary[]>;
   getProjectState: (projectId: string) => Promise<ProjectRuntimeState>;
+  getProjectEnvFiles: (projectId: string) => Promise<ProjectEnvFilesResult>;
+  saveProjectEnvFile: (
+    projectId: string,
+    scope: ProjectEnvScope,
+    filePath: string,
+    variables: ProjectEnvVariable[],
+  ) => Promise<ProjectEnvFileRecord>;
   saveProjectSettings: (
     projectId: string,
     settings: ProjectSettingsRecord,

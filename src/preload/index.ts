@@ -5,6 +5,8 @@ import type {
   BuildQueryOptions,
   ApiFetchQueryOptions,
   LogChannel,
+  ProjectEnvScope,
+  ProjectEnvVariable,
   ProjectSettingsRecord,
   ServiceAction,
   ServiceName,
@@ -63,6 +65,21 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:getDashboardOverview"),
   getProjectState: (projectId) =>
     ipcRenderer.invoke("dashboard:getProjectState", projectId),
+  getProjectEnvFiles: (projectId) =>
+    ipcRenderer.invoke("dashboard:getProjectEnvFiles", projectId),
+  saveProjectEnvFile: (
+    projectId: string,
+    scope: ProjectEnvScope,
+    filePath: string,
+    variables: ProjectEnvVariable[],
+  ) =>
+    ipcRenderer.invoke(
+      "dashboard:saveProjectEnvFile",
+      projectId,
+      scope,
+      filePath,
+      variables,
+    ),
   saveProjectSettings: (projectId, settings: ProjectSettingsRecord) =>
     ipcRenderer.invoke("dashboard:saveProjectSettings", projectId, settings),
   serviceAction: (

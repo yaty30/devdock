@@ -25,6 +25,8 @@ import type {
   DatabaseConnection,
   DatabaseObjectCollectionName,
   ProjectSettingsRecord,
+  ProjectEnvScope,
+  ProjectEnvVariable,
   ServiceAction,
   ServiceName,
   BrowsePathOptions,
@@ -325,6 +327,24 @@ function registerIpc(): void {
     withLoggedErrors("dashboard:getProjectState", () =>
       getBackend().getProjectState(projectId),
     ),
+  );
+  ipcMain.handle("dashboard:getProjectEnvFiles", (_event, projectId: string) =>
+    withLoggedErrors("dashboard:getProjectEnvFiles", () =>
+      getBackend().getProjectEnvFiles(projectId),
+    ),
+  );
+  ipcMain.handle(
+    "dashboard:saveProjectEnvFile",
+    (
+      _event,
+      projectId: string,
+      scope: ProjectEnvScope,
+      filePath: string,
+      variables: ProjectEnvVariable[],
+    ) =>
+      withLoggedErrors("dashboard:saveProjectEnvFile", () =>
+        getBackend().saveProjectEnvFile(projectId, scope, filePath, variables),
+      ),
   );
   ipcMain.handle(
     "dashboard:saveProjectSettings",

@@ -8,6 +8,7 @@ import {
 import {
   CaseSensitive,
   ChevronDown,
+  TentTree,
   Cog,
   LoaderCircle,
   Play,
@@ -43,6 +44,7 @@ export function HeaderActions({
   fontSizeMode,
   onFontSizeChange,
   onSettingsClick,
+  onEnvFilesClick,
   onServiceWarning,
   utilityActions,
   showSettingsButton = true,
@@ -56,13 +58,15 @@ export function HeaderActions({
   fontSizeMode: FontSizeMode;
   onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
+  onEnvFilesClick?: () => void;
   onServiceWarning: (message: string) => void;
   utilityActions?: ReactNode;
   showSettingsButton?: boolean;
   disabled?: boolean;
 }): JSX.Element {
   const showBuildActions =
-    settings.backendType !== "python" || Boolean(settings.python.buildCommand?.trim());
+    settings.backendType !== "python" ||
+    Boolean(settings.python.buildCommand?.trim());
   return (
     <div className="header-actions">
       <ServiceControlGroup
@@ -86,6 +90,7 @@ export function HeaderActions({
         fontSizeMode={fontSizeMode}
         onFontSizeChange={onFontSizeChange}
         onSettingsClick={onSettingsClick}
+        onEnvFilesClick={onEnvFilesClick}
         utilityActions={utilityActions}
         showSettingsButton={showSettingsButton}
         disabled={disabled}
@@ -98,6 +103,7 @@ export function HeaderUtilityActions({
   fontSizeMode,
   onFontSizeChange,
   onSettingsClick,
+  onEnvFilesClick,
   utilityActions,
   showSettingsButton = true,
   disabled = false,
@@ -106,6 +112,7 @@ export function HeaderUtilityActions({
   fontSizeMode: FontSizeMode;
   onFontSizeChange: (mode: FontSizeMode) => void;
   onSettingsClick: () => void;
+  onEnvFilesClick?: () => void;
   utilityActions?: ReactNode;
   showSettingsButton?: boolean;
   disabled?: boolean;
@@ -116,6 +123,18 @@ export function HeaderUtilityActions({
   return (
     <>
       {utilityActions}
+      {showSettingsButton && onEnvFilesClick ? (
+        <button
+          className="icon-button secondary header-settings-button"
+          type="button"
+          aria-label="Environment files"
+          title="Environment files"
+          disabled={disabled}
+          onClick={onEnvFilesClick}
+        >
+          <TentTree size={18} />
+        </button>
+      ) : null}
       {showSettingsButton ? (
         <button
           className="icon-button secondary header-settings-button"

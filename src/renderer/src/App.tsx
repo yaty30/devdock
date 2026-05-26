@@ -29,6 +29,7 @@ import {
   DatabaseWorkspace,
   DatabaseWorkspaceTabs,
 } from "./features/databases";
+import { ProjectEnvFilesModal } from "./features/env/ProjectEnvFilesModal";
 import {
   DashboardContent,
   ProjectDashboardContent,
@@ -188,6 +189,7 @@ function App(): JSX.Element {
   const [interfaceSettingsOpen, setInterfaceSettingsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [envFilesOpen, setEnvFilesOpen] = useState(false);
   const [panelResetVersion, setPanelResetVersion] = useState(0);
   const [projectLoading, setProjectLoading] = useState(true);
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -1595,6 +1597,7 @@ function App(): JSX.Element {
                   fontSizeMode={fontSizeMode}
                   onFontSizeChange={setFontSizeMode}
                   onSettingsClick={() => setSettingsOpen(true)}
+                  onEnvFilesClick={() => setEnvFilesOpen(true)}
                   showSettingsButton={activeTab !== "notes"}
                   utilityActions={
                     activeTab === "notes" ? (
@@ -1835,6 +1838,13 @@ function App(): JSX.Element {
           />
         ) : null}
       </Modal>
+
+      <ProjectEnvFilesModal
+        open={envFilesOpen && activeProjectState !== null}
+        project={selectedProject}
+        onClose={() => setEnvFilesOpen(false)}
+        onFeedback={showSnackbar}
+      />
 
       {addProjectOpen ? (
         <AddProjectDialog

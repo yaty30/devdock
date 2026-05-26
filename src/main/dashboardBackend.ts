@@ -18,7 +18,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -62,6 +62,11 @@ import type {
   LogQueryResult,
   ProjectRecord,
   ProjectDashboardSummary,
+  ProjectEnvFileGroup,
+  ProjectEnvFileRecord,
+  ProjectEnvFilesResult,
+  ProjectEnvScope,
+  ProjectEnvVariable,
   PythonDependencyRecord,
   ProjectRuntimeState,
   ProjectSettingsRecord,
@@ -1611,6 +1616,52 @@ export class DashboardBackend {
         tail: [],
       },
     };
+  }
+
+  getProjectEnvFiles(projectId: string): ProjectEnvFilesResult {
+    this.ensureProjectExists(projectId);
+    const settings = this.getSettings(projectId);
+    return {
+      groups: getProjectEnvRootDescriptors(settings).map((descriptor) => ({
+        ...descriptor,
+        files: readProjectEnvFiles(descriptor.rootPath),
+      })),
+    };
+  }
+
+  saveProjectEnvFile(
+    projectId: string,
+    scope: ProjectEnvScope,
+    filePath: string,
+    variables: ProjectEnvVariable[],
+  ): ProjectEnvFileRecord {
+    const group = this.getProjectEnvFiles(projectId).groups.find(
+      (item) => item.scope === scope,
+    );
+    if (!group) {
+      throw new Error("Environment scope is not configured.");
+    }
+
+    const discoveredFile = group.files.find((file) => file.path === filePath);
+    if (!discoveredFile) {
+      throw new Error("Environment file is not available for this project.");
+    }
+
+    const content = readFileSync(discoveredFile.path, "utf8");
+    writeFileSync(
+      discoveredFile.path,
+      updateEnvContent(content, variables),
+      "utf8",
+    );
+    this.insertActivity(
+      projectId,
+      "Environment file updated",
+      `${group.label}: ${discoveredFile.name}`,
+      "info",
+      "system",
+    );
+
+    return readProjectEnvFile(discoveredFile.path);
   }
 
   getWarDirectory(projectId: string): string | null {
@@ -5392,6 +5443,197 @@ function validateMavenConfig(
   }
 
   return errors;
+}
+
+type ProjectEnvRootDescriptor = Omit<ProjectEnvFileGroup, "files">;
+
+function getProjectEnvRootDescriptors(
+  settings: ProjectSettingsRecord,
+): ProjectEnvRootDescriptor[] {
+  const descriptors: ProjectEnvRootDescriptor[] = [];
+  const seenRoots = new Set<string>();
+
+  function add(scope: ProjectEnvScope, label: string, rootPath: string): void {
+    const trimmedRoot = rootPath.trim();
+    if (!trimmedRoot || seenRoots.has(`${scope}:${trimmedRoot}`)) {
+      return;
+    }
+    seenRoots.add(`${scope}:${trimmedRoot}`);
+    descriptors.push({ scope, label, rootPath: trimmedRoot });
+  }
+
+  if (isProjectFrontendEnabled(settings)) {
+    add(
+      "frontend",
+      "Frontend",
+      settings.services.frontend.workingDirectory || settings.frontend.path || "",
+    );
+  }
+
+  if (settings.backendType === "python") {
+    add(
+      "backend",
+      "Backend",
+      settings.python.directory || settings.services.python.workingDirectory || "",
+    );
+    return descriptors;
+  }
+
+  const pomXml = settings.maven.pomXml.trim();
+  add(
+    "backend",
+    "Backend",
+    settings.gitProjectDirectory ||
+      (pomXml ? dirname(pomXml) : "") ||
+      settings.services.wildfly.workingDirectory ||
+      "",
+  );
+  return descriptors;
+}
+
+function readProjectEnvFiles(rootPath: string): ProjectEnvFileRecord[] {
+  if (!isExistingDirectory(rootPath)) {
+    return [];
+  }
+
+  return readdirSync(rootPath, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && isEnvFileName(entry.name))
+    .map((entry) => readProjectEnvFile(join(rootPath, entry.name)))
+    .sort((a, b) => envFileSortKey(a.name).localeCompare(envFileSortKey(b.name)));
+}
+
+function readProjectEnvFile(filePath: string): ProjectEnvFileRecord {
+  return {
+    path: filePath,
+    name: basename(filePath),
+    variables: parseEnvVariables(readFileSync(filePath, "utf8")),
+  };
+}
+
+function isEnvFileName(name: string): boolean {
+  return /^\.env(?:$|[._-].+)/.test(name);
+}
+
+function envFileSortKey(name: string): string {
+  return name === ".env" ? "" : name;
+}
+
+function parseEnvVariables(content: string): ProjectEnvVariable[] {
+  return splitEnvLines(content).lines.flatMap((line, lineIndex) => {
+    const parsed = parseEnvLine(line);
+    return parsed
+      ? [{ lineIndex, name: parsed.name, value: readEnvValue(parsed.rawValue) }]
+      : [];
+  });
+}
+
+function updateEnvContent(
+  content: string,
+  variables: ProjectEnvVariable[],
+): string {
+  const { lines, lineBreak, trailingLineBreak } = splitEnvLines(content);
+  const updates = new Map(
+    variables.map((variable) => [variable.lineIndex, variable]),
+  );
+  const nextLines = lines.map((line, lineIndex) => {
+    const update = updates.get(lineIndex);
+    const parsed = parseEnvLine(line);
+    if (!update || !parsed || parsed.name !== update.name) {
+      return line;
+    }
+
+    return replaceEnvLineValue(line, update.value);
+  });
+
+  return nextLines.join(lineBreak) + (trailingLineBreak ? lineBreak : "");
+}
+
+function splitEnvLines(content: string): {
+  lines: string[];
+  lineBreak: string;
+  trailingLineBreak: boolean;
+} {
+  const lineBreak = content.includes("\r\n") ? "\r\n" : "\n";
+  const trailingLineBreak = /\r?\n$/.test(content);
+  const lines = content.split(/\r?\n/);
+  if (trailingLineBreak) {
+    lines.pop();
+  }
+  return { lines, lineBreak, trailingLineBreak };
+}
+
+function parseEnvLine(line: string): {
+  name: string;
+  rawValue: string;
+} | null {
+  const match = line.match(
+    /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/,
+  );
+  if (!match) {
+    return null;
+  }
+
+  return { name: match[1], rawValue: match[2] };
+}
+
+function readEnvValue(rawValue: string): string {
+  const { valuePart } = splitEnvValueAndComment(rawValue);
+  const trimmed = valuePart.trim();
+  const quote = trimmed[0];
+  if (
+    (quote === `"` || quote === `'`) &&
+    trimmed.length >= 2 &&
+    trimmed[trimmed.length - 1] === quote
+  ) {
+    const inner = trimmed.slice(1, -1);
+    return quote === `"` ? inner.replace(/\\"/g, `"`) : inner;
+  }
+
+  return trimmed;
+}
+
+function replaceEnvLineValue(line: string, nextValue: string): string {
+  const match = line.match(
+    /^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=)(.*)$/,
+  );
+  if (!match) {
+    return line;
+  }
+
+  const rawValue = match[2];
+  const leadingWhitespace = rawValue.match(/^\s*/)?.[0] ?? "";
+  const { valuePart, commentPart } = splitEnvValueAndComment(rawValue);
+  const trimmedValue = valuePart.trim();
+  const quote = trimmedValue[0];
+  const formattedValue =
+    (quote === `"` || quote === `'`) &&
+    trimmedValue.length >= 2 &&
+    trimmedValue[trimmedValue.length - 1] === quote
+      ? `${quote}${formatQuotedEnvValue(nextValue, quote)}${quote}`
+      : nextValue;
+
+  return `${match[1]}${leadingWhitespace}${formattedValue}${commentPart}`;
+}
+
+function splitEnvValueAndComment(rawValue: string): {
+  valuePart: string;
+  commentPart: string;
+} {
+  const commentMatch = rawValue.match(/(\s+#.*)$/);
+  if (!commentMatch || commentMatch.index === undefined) {
+    return { valuePart: rawValue, commentPart: "" };
+  }
+
+  return {
+    valuePart: rawValue.slice(0, commentMatch.index),
+    commentPart: commentMatch[1],
+  };
+}
+
+function formatQuotedEnvValue(value: string, quote: string): string {
+  return quote === `"`
+    ? value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+    : value;
 }
 
 function isExistingFile(path: string): boolean {
