@@ -13,6 +13,8 @@ import {
   EyeOff,
   FileText,
   Folder,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plug,
   PlugZap,
   Plus,
@@ -203,7 +205,7 @@ export function SshHeaderActions({
   disabled = false,
   connectionStatus = "idle",
   onServerChange,
-  onDisconnect,
+  onConnectionToggle,
   onSettingsClick,
   onFontSizeChange,
 }: {
@@ -213,7 +215,7 @@ export function SshHeaderActions({
   disabled?: boolean;
   connectionStatus?: SshConnectionStatus;
   onServerChange: (serverId: string) => void;
-  onDisconnect?: () => void;
+  onConnectionToggle?: (server: SshServerConfig) => void;
   onSettingsClick: () => void;
   onFontSizeChange: (mode: FontSizeMode) => void;
 }): JSX.Element {
@@ -228,6 +230,17 @@ export function SshHeaderActions({
   const safeValue = servers.some((server) => server.id === selectedServerId)
     ? selectedServerId
     : (servers[0]?.id ?? DEFAULT_SSH_SERVER_ID);
+  const selectedServer =
+    servers.find((server) => server.id === safeValue) ?? servers[0] ?? null;
+  const connectInProgress =
+    connectionStatus === "connecting" || connectionStatus === "reconnecting";
+  const connected = connectionStatus === "connected";
+  const toggleDisabled =
+    disabled ||
+    !selectedServer ||
+    !isValidSshServerCredential(selectedServer) ||
+    connectInProgress;
+  const toggleLabel = connected ? "Disconnect SSH" : "Connect SSH";
 
   return (
     <>
@@ -244,12 +257,16 @@ export function SshHeaderActions({
       <button
         className="icon-button primary header-settings-button ssh-header-disconnect-button"
         type="button"
-        aria-label="Disconnect SSH"
-        title="Disconnect SSH"
-        disabled={connectionStatus === "idle" || connectionStatus === "disconnected"}
-        onClick={onDisconnect}
+        aria-label={toggleLabel}
+        title={toggleLabel}
+        disabled={toggleDisabled}
+        onClick={() => {
+          if (selectedServer) {
+            onConnectionToggle?.(selectedServer);
+          }
+        }}
       >
-        <Plug size={18} />
+        {connected ? <Plug size={18} /> : <PlugZap size={18} />}
       </button>
       <button
         className="icon-button secondary header-settings-button"
@@ -292,15 +309,12 @@ export function SshSettingsModal({
     () => new Set(servers.map((server) => server.id)),
     [servers],
   );
-  const savedHasValidCredential = useMemo(
-    () => hasValidSshCredential(servers),
-    [servers],
-  );
   const draftHasValidCredential = useMemo(
     () => hasValidSshCredential(draftServers),
     [draftServers],
   );
-  const closeBlocked = credentialRequired && !savedHasValidCredential;
+  const shouldShowCredentialWarning =
+    credentialRequired && !draftHasValidCredential;
 
   useEffect(() => {
     if (open) {
@@ -311,10 +325,6 @@ export function SshSettingsModal({
   }, [open, servers]);
 
   function requestClose(): void {
-    if (closeBlocked) {
-      return;
-    }
-
     if (dirty) {
       setDiscardConfirmOpen(true);
       return;
@@ -573,10 +583,7 @@ export function SshSettingsModal({
                       disabled={!server.autoReconnect}
                       value={server.maxReconnectAttempts}
                       onChange={(event) => {
-                        const parsed = Number.parseInt(
-                          event.target.value,
-                          10,
-                        );
+                        const parsed = Number.parseInt(event.target.value, 10);
                         updateServer(server.id, {
                           maxReconnectAttempts: Number.isFinite(parsed)
                             ? parsed
@@ -584,10 +591,7 @@ export function SshSettingsModal({
                         });
                       }}
                       onBlur={(event) => {
-                        const parsed = Number.parseInt(
-                          event.target.value,
-                          10,
-                        );
+                        const parsed = Number.parseInt(event.target.value, 10);
                         updateServer(server.id, {
                           maxReconnectAttempts: clampInteger(
                             parsed,
@@ -610,10 +614,7 @@ export function SshSettingsModal({
                       disabled={!server.autoReconnect}
                       value={server.reconnectDelayMs}
                       onChange={(event) => {
-                        const parsed = Number.parseInt(
-                          event.target.value,
-                          10,
-                        );
+                        const parsed = Number.parseInt(event.target.value, 10);
                         updateServer(server.id, {
                           reconnectDelayMs: Number.isFinite(parsed)
                             ? parsed
@@ -621,10 +622,7 @@ export function SshSettingsModal({
                         });
                       }}
                       onBlur={(event) => {
-                        const parsed = Number.parseInt(
-                          event.target.value,
-                          10,
-                        );
+                        const parsed = Number.parseInt(event.target.value, 10);
                         updateServer(server.id, {
                           reconnectDelayMs: clampInteger(
                             parsed,
@@ -654,7 +652,7 @@ export function SshSettingsModal({
           </tbody>
         </table>
       </div>
-      {credentialRequired && !draftHasValidCredential ? (
+      {shouldShowCredentialWarning ? (
         <div className="ssh-settings-warning" role="status">
           Add at least one server address, username, and password to enable SSH.
         </div>
@@ -667,7 +665,6 @@ export function SshSettingsModal({
         <button
           className="button secondary compact"
           type="button"
-          disabled={closeBlocked}
           onClick={requestClose}
         >
           Cancel
@@ -706,8 +703,7 @@ export function SshTool({
   reconnectAttempt = 0,
   reconnectMaxAttempts = 0,
   remoteCwd = null,
-  onConnect,
-  onDisconnect,
+  onConfigure,
   onCommandSubmit,
 }: {
   selectedServer: SshServerConfig | null;
@@ -716,8 +712,7 @@ export function SshTool({
   reconnectAttempt?: number;
   reconnectMaxAttempts?: number;
   remoteCwd?: string | null;
-  onConnect?: (server: SshServerConfig) => void;
-  onDisconnect?: () => void;
+  onConfigure?: () => void;
   onCommandSubmit?: (command: string) => Promise<SshExecResult>;
 }): JSX.Element {
   const [command, setCommand] = useState("");
@@ -727,6 +722,7 @@ export function SshTool({
   const [localItems, setLocalItems] = useState<SftpItem[]>(INITIAL_LOCAL_ITEMS);
   const [remoteItems, setRemoteItems] =
     useState<SftpItem[]>(INITIAL_REMOTE_ITEMS);
+  const [commandPanelCollapsed, setCommandPanelCollapsed] = useState(false);
   const [dragOverPanel, setDragOverPanel] = useState<"local" | "remote" | null>(
     null,
   );
@@ -738,15 +734,8 @@ export function SshTool({
   const previousServerIdRef = useRef<string | null>(selectedServer?.id ?? null);
 
   const connected = connectionStatus === "connected";
-  const connectInProgress =
-    connectionStatus === "connecting" || connectionStatus === "reconnecting";
-  const credentialValid = selectedServer
-    ? isValidSshServerCredential(selectedServer)
-    : false;
   const commandInputDisabled = disabled;
   const commandSubmitDisabled = disabled || commandRunning;
-  const connectDisabled =
-    disabled || !selectedServer || !credentialValid || connectInProgress;
 
   useEffect(() => {
     const serverId = selectedServer?.id ?? null;
@@ -782,7 +771,9 @@ export function SshTool({
       ]);
     } else if (connectionStatus === "connected") {
       appendLines([
-        previous === "reconnecting" ? "Reconnected." : `Connected to ${target}.`,
+        previous === "reconnecting"
+          ? "Reconnected."
+          : `Connected to ${target}.`,
       ]);
     } else if (connectionStatus === "disconnected") {
       appendLines(["Disconnected."]);
@@ -806,14 +797,9 @@ export function SshTool({
     }
     setTerminalLines((current) => [...current, ...lines]);
   }
-
-  function handleConnectClick(): void {
-    if (selectedServer && credentialValid) {
-      onConnect?.(selectedServer);
-    }
-  }
-
-  async function submitCommand(event: FormEvent<HTMLFormElement>): Promise<void> {
+  async function submitCommand(
+    event: FormEvent<HTMLFormElement>,
+  ): Promise<void> {
     event.preventDefault();
     if (commandSubmitDisabled) {
       return;
@@ -825,12 +811,12 @@ export function SshTool({
     setCommand("");
 
     if (trimmed === "clear") {
-      setTerminalLines([]);
+      setTerminalLines([formatSshPrompt(selectedServer, remoteCwd)]);
       return;
     }
 
     const prompt = formatSshPrompt(selectedServer, remoteCwd);
-    appendLines([`${prompt}$ ${trimmed}`]);
+    appendLines([`${prompt} ${trimmed}`]);
 
     if (!connected) {
       appendLines(["Not connected. Please connect to the SSH server first."]);
@@ -849,7 +835,9 @@ export function SshTool({
     } catch (error) {
       appendLines([
         `Command error: ${
-          error instanceof Error ? error.message : "SSH backend is not available."
+          error instanceof Error
+            ? error.message
+            : "SSH backend is not available."
         }`,
       ]);
     } finally {
@@ -957,26 +945,65 @@ export function SshTool({
 
   return (
     <section
-      className={`tools-screen ssh-tool-screen${disabled ? " ssh-tool-screen-disabled" : ""}`}
+      className={`tools-screen ssh-tool-screen${
+        disabled ? " ssh-tool-screen-disabled" : ""
+      }${commandPanelCollapsed ? " ssh-command-panel-collapsed" : ""}`}
+      data-testid="ssh-tool-screen"
       aria-disabled={disabled}
     >
+      {disabled ? (
+        <div className="ssh-setup-required" role="status">
+          <TerminalSquare size={22} />
+          <div>
+            <h2>SSH server info required</h2>
+            <p>
+              Add at least one server address, username, and password to use
+              SSH.
+            </p>
+          </div>
+          <button
+            className="button primary compact"
+            type="button"
+            onClick={onConfigure}
+          >
+            <Settings size={15} />
+            Add server
+          </button>
+        </div>
+      ) : null}
       <Panel
         title="CLI"
         className="ssh-cli-panel"
         action={
-          <span
-            className={`ssh-status ssh-status-${connectionStatus}`}
-            data-status={connectionStatus}
-          >
+          <span className="ssh-panel-actions">
             <span
-              className="ssh-status-dot"
-              aria-hidden="true"
-            />
-            {formatConnectionStatusLabel(
-              connectionStatus,
-              reconnectAttempt,
-              reconnectMaxAttempts,
-            )}
+              className={`ssh-status ssh-status-${connectionStatus}`}
+              data-status={connectionStatus}
+            >
+              <span className="ssh-status-dot" aria-hidden="true" />
+              {formatConnectionStatusLabel(
+                connectionStatus,
+                reconnectAttempt,
+                reconnectMaxAttempts,
+              )}
+            </span>
+            <button
+              className="icon-button secondary ssh-panel-collapse-button"
+              type="button"
+              aria-label={
+                commandPanelCollapsed ? "Expand command panel" : "Collapse command panel"
+              }
+              title={
+                commandPanelCollapsed ? "Expand command panel" : "Collapse command panel"
+              }
+              onClick={() => setCommandPanelCollapsed((current) => !current)}
+            >
+              {commandPanelCollapsed ? (
+                <PanelLeftOpen size={16} />
+              ) : (
+                <PanelLeftClose size={16} />
+              )}
+            </button>
           </span>
         }
       >
@@ -1001,18 +1028,6 @@ export function SshTool({
           >
             {commandRunning ? "Running" : "Run"}
           </button>
-          {!connected ? (
-            <button
-              className="button compact secondary"
-              type="button"
-              disabled={connectDisabled}
-              onClick={handleConnectClick}
-              title="Connect"
-            >
-              <PlugZap size={15} />
-              Connect
-            </button>
-          ) : null}
         </form>
       </Panel>
 
@@ -1150,8 +1165,7 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
     id,
     name: typeof record.name === "string" ? record.name : "Remote",
     address: typeof record.address === "string" ? record.address.trim() : "",
-    username:
-      typeof record.username === "string" ? record.username.trim() : "",
+    username: typeof record.username === "string" ? record.username.trim() : "",
     password: typeof record.password === "string" ? record.password : "",
     autoLogin: Boolean(record.autoLogin),
     autoReconnect: Boolean(record.autoReconnect),
@@ -1288,9 +1302,13 @@ function splitCommandOutput(output: string): string[] {
     return [];
   }
 
-  return output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n").filter(
-    (line, index, lines) => line.length > 0 || index < lines.length - 1,
-  );
+  return output
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .filter(
+      (line, index, lines) => line.length > 0 || index < lines.length - 1,
+    );
 }
 
 function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
@@ -1310,7 +1328,12 @@ function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
   }, [lines.length, virtualizer]);
 
   return (
-    <div className="ssh-terminal" ref={containerRef} aria-live="polite">
+    <div
+      className="ssh-terminal"
+      data-testid="ssh-terminal"
+      ref={containerRef}
+      aria-live="polite"
+    >
       <div
         className="ssh-terminal-virtual-spacer"
         style={{ height: virtualizer.getTotalSize() }}
@@ -1342,32 +1365,26 @@ function formatSshPrompt(
   remoteCwd: string | null,
 ): string {
   const address = server?.address.trim() || "ssh";
-  const host = address.includes(":") ? address.slice(0, address.lastIndexOf(":")) : address;
+  const host = address.includes(":")
+    ? address.slice(0, address.lastIndexOf(":"))
+    : address;
   const userHost = server?.username.trim()
     ? `${server.username.trim()}@${host}`
     : host;
-  const cwd = remoteCwd ? compactSshCwd(remoteCwd, server?.username) : "";
-  return cwd ? `${userHost}:${cwd}` : userHost;
-}
-
-function compactSshCwd(cwd: string, username?: string): string {
-  const trimmed = cwd.trim();
-  const user = username?.trim();
-  if (user && trimmed === `/home/${user}`) {
-    return "~";
-  }
-  if (user && trimmed.startsWith(`/home/${user}/`)) {
-    return `~/${trimmed.slice(`/home/${user}/`.length)}`;
-  }
-  return trimmed;
+  const cwd = remoteCwd?.trim() || "";
+  return cwd ? `${userHost} ${cwd} >` : `${userHost} >`;
 }
 
 function getTerminalLineClass(line: string): string {
   const lower = stripAnsi(line).toLowerCase();
-  if (/^[^\s@$]+@[^\s$]+.*\$\s/.test(lower)) {
+  if (/^[^\s@]+@[^\s]+(?:\s+\S.*)?\s[>$]\s?/.test(lower)) {
     return "ssh-terminal-line-prompt";
   }
-  if (lower.includes("error") || lower.includes("failed") || lower.includes("denied")) {
+  if (
+    lower.includes("error") ||
+    lower.includes("failed") ||
+    lower.includes("denied")
+  ) {
     return "ssh-terminal-line-error";
   }
   if (lower.includes("warn") || lower.includes("reconnecting")) {
@@ -1427,13 +1444,17 @@ function ansiToHtml(value: string): string {
 
   while ((match = pattern.exec(value)) !== null) {
     if (match.index > cursor) {
-      segments.push(wrapAnsiSegment(value.slice(cursor, match.index), activeClass));
+      segments.push(
+        wrapAnsiSegment(value.slice(cursor, match.index), activeClass),
+      );
     }
     const codes = match[1].split(";").filter(Boolean);
     if (codes.length === 0 || codes.includes("0")) {
       activeClass = "";
     } else {
-      const colorCode = [...codes].reverse().find((code) => colorClassByCode[code]);
+      const colorCode = [...codes]
+        .reverse()
+        .find((code) => colorClassByCode[code]);
       if (colorCode) {
         activeClass = colorClassByCode[colorCode];
       }

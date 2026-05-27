@@ -14,22 +14,16 @@ type SshSession = {
   client: Client;
   shell?: ClientChannel;
   shellReady?: Promise<string>;
-  setup?: ShellSetup;
-  pending?: PendingShellCommand;
+  pending?: boolean;
+  shellPending?: PendingShellCommand;
   cwd?: string;
 };
 
-type ShellSetup = {
-  readyMarker: string;
-  buffer: string;
-  resolve: (cwd: string) => void;
-  reject: (error: Error) => void;
-};
-
 type PendingShellCommand = {
-  startMarker: string;
-  endMarker: string;
+  command: string;
   output: string;
+  timer: NodeJS.Timeout;
+  idleTimer?: NodeJS.Timeout;
   resolve: (result: SshExecResult) => void;
 };
 
@@ -78,17 +72,7 @@ export class SshService {
         client.once("close", () => {
           this.sessions.delete(sessionId);
         });
-        void this.ensureShell(session)
-          .then((cwd) => finish({ ok: true, sessionId, cwd }))
-          .catch((error) => {
-            this.sessions.delete(sessionId);
-            client.end();
-            finish({
-              ok: false,
-              sessionId: null,
-              error: formatError(error),
-            });
-          });
+        finish({ ok: true, sessionId });
       });
 
       client.on("error", (error) => {
@@ -155,21 +139,51 @@ export class SshService {
       });
     }
 
+    return this.execInShell(session, trimmed);
+  }
+
+  disconnectAll(): void {
+    for (const session of this.sessions.values()) {
+      session.shell?.end();
+      session.client.end();
+    }
+    this.sessions.clear();
+  }
+
+  private execInShell(
+    session: SshSession,
+    command: string,
+  ): Promise<SshExecResult> {
     return this.ensureShell(session)
       .then(
         () =>
           new Promise<SshExecResult>((resolve) => {
-            const id = randomUUID().replace(/-/g, "");
             const pending: PendingShellCommand = {
-              startMarker: `__IVS_START_${id}__`,
-              endMarker: `__IVS_END_${id}__`,
+              command,
               output: "",
+              timer: setTimeout(() => {
+                if (session.shellPending !== pending) {
+                  return;
+                }
+                if (pending.idleTimer) {
+                  clearTimeout(pending.idleTimer);
+                }
+                session.pending = false;
+                session.shellPending = undefined;
+                resolve({
+                  stdout: cleanShellOutput(pending.output),
+                  stderr: "",
+                  exitCode: null,
+                  cwd: session.cwd,
+                  error: "SSH command timed out.",
+                });
+              }, 60000),
               resolve,
             };
-            session.pending = pending;
-            session.shell?.write(
-              `printf '\n${pending.startMarker}\n'\n${trimmed}\n__ivs_status=$?\nprintf '\n${pending.endMarker}:%s:%s\n' "$__ivs_status" "$PWD"\n`,
-            );
+
+            session.pending = true;
+            session.shellPending = pending;
+            session.shell?.write(`${command}\n`);
           }),
       )
       .catch((error) => ({
@@ -181,14 +195,6 @@ export class SshService {
       }));
   }
 
-  disconnectAll(): void {
-    for (const session of this.sessions.values()) {
-      session.shell?.end();
-      session.client.end();
-    }
-    this.sessions.clear();
-  }
-
   private ensureShell(session: SshSession): Promise<string> {
     if (session.shell) {
       return Promise.resolve(session.cwd ?? "");
@@ -197,8 +203,7 @@ export class SshService {
       return session.shellReady;
     }
 
-    const readyMarker = `__IVS_READY_${randomUUID().replace(/-/g, "")}__`;
-    const readyPromise = new Promise<string>((resolve, reject) => {
+    session.shellReady = new Promise<string>((resolve, reject) => {
       session.client.shell(
         { term: "xterm-256color", rows: 30, cols: 120 },
         (error, stream) => {
@@ -208,16 +213,6 @@ export class SshService {
           }
 
           session.shell = stream;
-          session.setup = {
-            readyMarker,
-            buffer: "",
-            resolve: (cwd) => {
-              session.cwd = cwd;
-              resolve(cwd);
-            },
-            reject,
-          };
-
           stream.on("data", (chunk: Buffer | string) => {
             this.handleShellData(session, toText(chunk));
           });
@@ -228,124 +223,90 @@ export class SshService {
             this.failShell(session, streamError);
           });
           stream.once("close", () => {
-            this.failShell(
-              session,
-              new Error("SSH shell channel closed."),
-              false,
-            );
+            this.failShell(session, new Error("SSH shell channel closed."));
           });
 
-          stream.write(
-            `export PS1=''\nexport PROMPT_COMMAND=''\nstty -echo 2>/dev/null\nprintf '${readyMarker}:%s\n' "$PWD"\n`,
-          );
+          setTimeout(() => resolve(session.cwd ?? ""), 250);
         },
       );
-    });
-
-    session.shellReady = readyPromise.catch((error) => {
+    }).catch((error) => {
       session.shellReady = undefined;
       throw error;
     });
+
     return session.shellReady;
   }
 
   private handleShellData(session: SshSession, text: string): void {
-    if (session.setup) {
-      this.handleSetupData(session, text);
-      return;
-    }
-
-    if (session.pending) {
+    if (session.shellPending) {
       this.handleCommandData(session, text);
     }
   }
 
-  private handleSetupData(session: SshSession, text: string): void {
-    const setup = session.setup;
-    if (!setup) {
-      return;
-    }
-
-    setup.buffer += normalizeLineEndings(text);
-    const markerIndex = setup.buffer.indexOf(`${setup.readyMarker}:`);
-    if (markerIndex === -1) {
-      return;
-    }
-
-    const lineEndIndex = setup.buffer.indexOf("\n", markerIndex);
-    if (lineEndIndex === -1) {
-      return;
-    }
-
-    const readyLine = setup.buffer.slice(markerIndex, lineEndIndex).trim();
-    const cwd = readyLine.slice(setup.readyMarker.length + 1);
-    session.setup = undefined;
-    setup.resolve(cwd);
-  }
-
   private handleCommandData(session: SshSession, text: string): void {
-    const pending = session.pending;
+    const pending = session.shellPending;
     if (!pending) {
       return;
     }
 
     pending.output += normalizeLineEndings(text);
-    const endIndex = pending.output.indexOf(`${pending.endMarker}:`);
-    if (endIndex === -1) {
+    if (looksLikePrompt(pending.output)) {
+      this.finishShellCommand(session);
       return;
     }
 
-    const lineEndIndex = pending.output.indexOf("\n", endIndex);
-    if (lineEndIndex === -1) {
-      return;
+    if (pending.idleTimer) {
+      clearTimeout(pending.idleTimer);
     }
-
-    const endLine = pending.output.slice(endIndex, lineEndIndex).trim();
-    const statusMatch = new RegExp(
-      `^${escapeRegExp(pending.endMarker)}:(-?\\d+):(.*)$`,
-    ).exec(endLine);
-    const parsedExitCode = statusMatch
-      ? Number.parseInt(statusMatch[1], 10)
-      : Number.NaN;
-    const cwd = statusMatch?.[2] ?? session.cwd;
-    const rawOutput = pending.output.slice(0, endIndex);
-    const startIndex = rawOutput.indexOf(pending.startMarker);
-    const stdout = cleanShellOutput(
-      startIndex === -1
-        ? rawOutput
-        : rawOutput.slice(startIndex + pending.startMarker.length),
-    );
-
-    session.pending = undefined;
-    session.cwd = cwd;
-    pending.resolve({
-      stdout,
-      stderr: "",
-      exitCode: Number.isFinite(parsedExitCode) ? parsedExitCode : null,
-      cwd,
-    });
+    pending.idleTimer = setTimeout(() => {
+      if (session.shellPending === pending) {
+        this.finishShellCommand(session);
+      }
+    }, 800);
   }
 
-  private failShell(
-    session: SshSession,
-    error: Error,
-    clearSession = true,
-  ): void {
-    session.setup?.reject(error);
-    session.setup = undefined;
-    session.pending?.resolve({
-      stdout: "",
+  private finishShellCommand(session: SshSession): void {
+    const pending = session.shellPending;
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timer);
+    if (pending.idleTimer) {
+      clearTimeout(pending.idleTimer);
+    }
+    session.pending = false;
+    session.shellPending = undefined;
+    pending.resolve({
+      stdout: cleanInteractiveShellOutput(pending.output, pending.command),
       stderr: "",
       exitCode: null,
       cwd: session.cwd,
-      error: formatError(error),
     });
-    session.pending = undefined;
+  }
+
+  private failShell(session: SshSession, error: Error): void {
+    if (session.shellPending) {
+      clearTimeout(session.shellPending.timer);
+      if (session.shellPending.idleTimer) {
+        clearTimeout(session.shellPending.idleTimer);
+      }
+      session.shellPending.resolve({
+        stdout: cleanInteractiveShellOutput(
+          session.shellPending.output,
+          session.shellPending.command,
+        ),
+        stderr: "",
+        exitCode: null,
+        cwd: session.cwd,
+        error: formatError(error),
+      });
+      session.shellPending = undefined;
+    }
+    session.pending = false;
     session.shell = undefined;
     session.shellReady = undefined;
-    if (clearSession) {
-      this.sessions.delete(session.id);
-    }
+    this.sessions.delete(session.id);
   }
 }
 
@@ -372,6 +333,32 @@ function parseSshAddress(address: string): { host: string; port: number } | null
 
 function cleanShellOutput(output: string): string {
   return output.replace(/^\n+/, "").replace(/\n+$/, "");
+}
+
+function cleanInteractiveShellOutput(output: string, command: string): string {
+  const commandPattern = escapeRegExp(command.trim());
+  const lines = normalizeLineEndings(output)
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        return false;
+      }
+      if (trimmed === command.trim()) {
+        return false;
+      }
+      if (new RegExp(`[#$%>]\\s*${commandPattern}$`).test(trimmed)) {
+        return false;
+      }
+      return !/[#$%>]\s*$/.test(trimmed);
+    });
+
+  return cleanShellOutput(lines.join("\n"));
+}
+
+function looksLikePrompt(output: string): boolean {
+  return /(?:^|\n)[^\n]{1,160}[#$%>]\s*$/.test(output);
 }
 
 function normalizeLineEndings(value: string): string {

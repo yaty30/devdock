@@ -261,6 +261,7 @@ function App(): JSX.Element {
   const sshActiveServerIdRef = useRef<string | null>(null);
   const sshActiveSessionIdRef = useRef<string | null>(null);
   const sshAutoLoginAttemptedRef = useRef<string | null>(null);
+  const sshCredentialPromptedRef = useRef(false);
 
   useEffect(() => {
     selectedDatabaseConnectionIdRef.current = selectedDatabaseConnectionId;
@@ -701,6 +702,20 @@ function App(): JSX.Element {
   const sshSettingsRequired =
     activeSection === "tools" && activeTool === "ssh" && !sshHasValidCredential;
 
+  useEffect(() => {
+    if (!sshSettingsRequired) {
+      sshCredentialPromptedRef.current = false;
+      return;
+    }
+
+    if (sshCredentialPromptedRef.current) {
+      return;
+    }
+
+    sshCredentialPromptedRef.current = true;
+    setSshSettingsOpen(true);
+  }, [sshSettingsRequired]);
+
   function saveSshServers(nextServers: SshServerConfig[]): void {
     setSshServers(nextServers);
     const selectedStillExists = nextServers.some(
@@ -719,9 +734,6 @@ function App(): JSX.Element {
   }
 
   function closeSshSettings(): void {
-    if (sshSettingsRequired) {
-      return;
-    }
     setSshSettingsOpen(false);
   }
 
@@ -849,6 +861,19 @@ function App(): JSX.Element {
     setSshReconnectAttempt(0);
     setSshRemoteCwd(null);
     setSshConnectionStatus("disconnected");
+  }
+
+  function handleSshConnectionToggle(server: SshServerConfig): void {
+    if (
+      sshConnectionStatus === "connected" ||
+      sshConnectionStatus === "connecting" ||
+      sshConnectionStatus === "reconnecting"
+    ) {
+      handleSshDisconnect();
+      return;
+    }
+
+    handleSshConnect(server);
   }
 
   async function handleSshCommandSubmit(command: string) {
@@ -1773,7 +1798,7 @@ function App(): JSX.Element {
                     disabled={!sshHasValidCredential}
                     connectionStatus={sshConnectionStatus}
                     onServerChange={setSelectedSshServerId}
-                    onDisconnect={handleSshDisconnect}
+                    onConnectionToggle={handleSshConnectionToggle}
                     onSettingsClick={() => setSshSettingsOpen(true)}
                     onFontSizeChange={setFontSizeMode}
                   />
@@ -1858,8 +1883,7 @@ function App(): JSX.Element {
                   selectedSshServer?.maxReconnectAttempts ?? 0
                 }
                 remoteCwd={sshRemoteCwd}
-                onConnect={handleSshConnect}
-                onDisconnect={handleSshDisconnect}
+                onConfigure={() => setSshSettingsOpen(true)}
                 onCommandSubmit={handleSshCommandSubmit}
               />
             ) : (
@@ -2089,7 +2113,7 @@ function App(): JSX.Element {
                   disabled={!sshHasValidCredential}
                   connectionStatus={sshConnectionStatus}
                   onServerChange={setSelectedSshServerId}
-                  onDisconnect={handleSshDisconnect}
+                  onConnectionToggle={handleSshConnectionToggle}
                   onSettingsClick={() => setSshSettingsOpen(true)}
                   onFontSizeChange={setFontSizeMode}
                 />
@@ -2191,8 +2215,7 @@ function App(): JSX.Element {
                 selectedSshServer?.maxReconnectAttempts ?? 0
               }
               remoteCwd={sshRemoteCwd}
-              onConnect={handleSshConnect}
-              onDisconnect={handleSshDisconnect}
+              onConfigure={() => setSshSettingsOpen(true)}
               onCommandSubmit={handleSshCommandSubmit}
             />
           ) : (
@@ -2245,7 +2268,7 @@ function App(): JSX.Element {
       </main>
 
       <SshSettingsModal
-        open={sshSettingsOpen || sshSettingsRequired}
+        open={sshSettingsOpen}
         servers={sshServers}
         credentialRequired={sshSettingsRequired}
         onSave={saveSshServers}
