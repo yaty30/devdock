@@ -582,6 +582,34 @@ export type DashboardEvent =
       fetches: ApiFetchRecord[];
     };
 
+export type SshConnectRequest = {
+  serverId: string;
+  name: string;
+  address: string;
+  username: string;
+  password: string;
+};
+
+export type SshConnectResult = {
+  ok: boolean;
+  sessionId: string | null;
+  cwd?: string;
+  error?: string;
+};
+
+export type SshDisconnectResult = {
+  ok: boolean;
+  error?: string;
+};
+
+export type SshExecResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  cwd?: string;
+  error?: string;
+};
+
 export type DashboardApi = {
   getFeatureFlags: () => Promise<{
     chatEnabled: boolean;
@@ -592,6 +620,9 @@ export type DashboardApi = {
   minimizeWindow: () => Promise<void>;
   toggleMaximizeWindow: () => Promise<void>;
   closeWindow: () => Promise<void>;
+  sshConnect: (request: SshConnectRequest) => Promise<SshConnectResult>;
+  sshDisconnect: (sessionId: string) => Promise<SshDisconnectResult>;
+  sshExec: (sessionId: string, command: string) => Promise<SshExecResult>;
   sendApiTesterRequest: (
     request: ApiTesterRequest,
   ) => Promise<ApiTesterResponse>;

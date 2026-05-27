@@ -81,7 +81,12 @@ export type {
 } from "../../shared/chatTypes";
 
 export type AppSection = "dashboard" | "project" | "database" | "tools";
-export type ToolId = "comparing" | "api-tester" | "cryptographic";
+export type ToolId =
+  | "comparing"
+  | "api-tester"
+  | "cryptographic"
+  | "notebook"
+  | "ssh";
 export type DashboardTab = "dashboard" | "monitor" | "git-terminal" | "notes";
 export type DatabaseWorkspaceTab = "connection" | "monitor";
 export type FontSizeMode = "50" | "70" | "90" | "100" | "120" | "140" | "160";

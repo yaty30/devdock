@@ -23,6 +23,11 @@ const api: DashboardApi = {
   minimizeWindow: () => ipcRenderer.invoke("window:minimize"),
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggleMaximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
+  sshConnect: (request) => ipcRenderer.invoke("ssh:connect", request),
+  sshDisconnect: (sessionId) =>
+    ipcRenderer.invoke("ssh:disconnect", sessionId),
+  sshExec: (sessionId, command) =>
+    ipcRenderer.invoke("ssh:exec", sessionId, command),
   sendApiTesterRequest: (request) =>
     ipcRenderer.invoke("apiTester:sendRequest", request),
   getApiTesterSavedRequests: (scopeId) =>

@@ -9,6 +9,7 @@ import {
   FlaskConical,
   FolderKanban,
   GitCompare,
+  NotebookText,
   PanelLeftClose,
   PanelLeftOpen,
   PlugZap,
@@ -19,6 +20,7 @@ import {
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
 import { getProjectBackendLabel } from "../../../../shared/projectFrontend";
+import { MonitorCloud } from "../common/MonitorCloud";
 import { Tooltip } from "../common/Tooltip";
 import type {
   AppSection,
@@ -547,13 +549,13 @@ export function Sidebar({
                 }
               }}
               aria-expanded={collapsed ? false : toolsOpen}
-              aria-label="Tools (3)"
-              title="Tools (3)"
+              aria-label="Tools (5)"
+              title="Tools (5)"
             >
               <Wrench size={18} />
               <span className="nav-label project-nav-label">
                 <span>Tools</span>
-                <span className="project-count-badge">3</span>
+                <span className="project-count-badge">5</span>
               </span>
               {!collapsed ? (
                 <ChevronDown className="chevron" size={16} />
@@ -608,6 +610,34 @@ export function Sidebar({
                 <Binary size={16} />
                 <span>Cryptographic</span>
               </button>
+              <button
+                className={`project-item tool-item${
+                  activeSection === "tools" && activeTool === "notebook"
+                    ? " active"
+                    : ""
+                }`}
+                type="button"
+                tabIndex={toolsOpen || collapsed ? 0 : -1}
+                onClick={() => onToolChange("notebook")}
+                title="Notebook"
+              >
+                <NotebookText size={16} />
+                <span>Notebook</span>
+              </button>
+              <button
+                className={`project-item tool-item${
+                  activeSection === "tools" && activeTool === "ssh"
+                    ? " active"
+                    : ""
+                }`}
+                type="button"
+                tabIndex={toolsOpen || collapsed ? 0 : -1}
+                onClick={() => onToolChange("ssh")}
+                title="SSH"
+              >
+                <MonitorCloud size={16} />
+                <span>SSH</span>
+              </button>
 
               {collapsed ? (
                 <>
@@ -651,6 +681,32 @@ export function Sidebar({
                   >
                     <Binary size={18} />
                   </button>
+                  <button
+                    className={`nav-item add-project-collapsed-btn${
+                      activeSection === "tools" && activeTool === "notebook"
+                        ? " active"
+                        : ""
+                    }`}
+                    type="button"
+                    onClick={() => onToolChange("notebook")}
+                    aria-label="Notebook"
+                    title="Notebook"
+                  >
+                    <NotebookText size={18} />
+                  </button>
+                  <button
+                    className={`nav-item add-project-collapsed-btn${
+                      activeSection === "tools" && activeTool === "ssh"
+                        ? " active"
+                        : ""
+                    }`}
+                    type="button"
+                    onClick={() => onToolChange("ssh")}
+                    aria-label="SSH"
+                    title="SSH"
+                  >
+                    <MonitorCloud size={18} />
+                  </button>
                 </>
               ) : null}
             </div>
@@ -676,6 +732,7 @@ export function Sidebar({
         <SidebarFlyout
           title="Projects"
           top={activeFlyoutTop}
+          className="sidebar-projects-flyout"
           footerAction={
             <button
               className="sidebar-flyout-footer-action"
@@ -744,6 +801,7 @@ export function Sidebar({
         <SidebarFlyout
           title="Databases"
           top={activeFlyoutTop}
+          className="sidebar-databases-flyout"
           footerAction={
             <button
               className="sidebar-flyout-footer-action"
@@ -836,6 +894,24 @@ export function Sidebar({
               }
               onClick={() => {
                 onToolChange("cryptographic");
+                setActiveFlyout(null);
+              }}
+            />
+            <SidebarFlyoutTool
+              icon={<NotebookText size={16} />}
+              label="Notebook"
+              isActive={activeSection === "tools" && activeTool === "notebook"}
+              onClick={() => {
+                onToolChange("notebook");
+                setActiveFlyout(null);
+              }}
+            />
+            <SidebarFlyoutTool
+              icon={<MonitorCloud size={16} />}
+              label="SSH"
+              isActive={activeSection === "tools" && activeTool === "ssh"}
+              onClick={() => {
+                onToolChange("ssh");
                 setActiveFlyout(null);
               }}
             />

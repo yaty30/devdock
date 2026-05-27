@@ -18,6 +18,7 @@ import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DashboardBackend } from "./dashboardBackend";
 import { ChatService } from "./chatService";
+import { SshService } from "./sshService";
 import os from "os";
 import type {
   BuildQueryOptions,
@@ -40,6 +41,7 @@ import type {
   BackendType,
   PythonServerType,
   RecentBuildRecord,
+  SshConnectRequest,
 } from "../shared/dashboardTypes";
 import type {
   ChatNativeNotification,
@@ -64,6 +66,7 @@ let chatService: ChatService | null = null;
 let chatConfig: ChatServiceConfig | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
+const sshService = new SshService();
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
 const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
 const API_TESTER_REQUEST_CHANNEL = "apiTester:sendRequest";
@@ -155,6 +158,15 @@ function registerIpc(): void {
     withLoggedErrors("window:close", () => {
       BrowserWindow.fromWebContents(event.sender)?.close();
     }),
+  );
+  ipcMain.handle("ssh:connect", (_event, request: SshConnectRequest) =>
+    withLoggedErrors("ssh:connect", () => sshService.connect(request)),
+  );
+  ipcMain.handle("ssh:disconnect", (_event, sessionId: string) =>
+    withLoggedErrors("ssh:disconnect", () => sshService.disconnect(sessionId)),
+  );
+  ipcMain.handle("ssh:exec", (_event, sessionId: string, command: string) =>
+    withLoggedErrors("ssh:exec", () => sshService.exec(sessionId, command)),
   );
   ipcMain.handle(
     API_TESTER_REQUEST_CHANNEL,
@@ -1648,6 +1660,7 @@ app.on("before-quit", (event) => {
 
   backend?.shutdown();
   chatService?.stop();
+  sshService.disconnectAll();
 });
 
 app.on("window-all-closed", () => {

@@ -49,6 +49,20 @@ import {
   CryptographicTool,
   CryptographicToolTab,
 } from "./features/tools/ConversionTools";
+import {
+  readStoredSelectedSshServerId,
+  readStoredSshServers,
+  hasValidSshCredential,
+  isValidSshServerCredential,
+  SshHeaderActions,
+  SshHeaderTabs,
+  SshSettingsModal,
+  SshTool,
+  storeSelectedSshServerId,
+  storeSshServers,
+  type SshConnectionStatus,
+  type SshServerConfig,
+} from "./features/tools/SshTool";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
 import splashIcon from "./assets/icon.png";
@@ -89,6 +103,7 @@ const PROJECT_DASHBOARD_EXIT_LOG_CHANNELS: LogChannel[] = [
   "wildfly",
   "python",
 ];
+const STANDALONE_NOTEBOOK_PROJECT_ID = "__ivs_standalone_notebook__";
 
 type SplashPhase = "visible" | "exiting" | "hidden";
 type SnackbarState = {
@@ -133,6 +148,8 @@ function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const [notesView, setNotesView] = useState<NotesView>("grid");
   const [notesAddRequestId, setNotesAddRequestId] = useState(0);
+  const [notebookView, setNotebookView] = useState<NotesView>("grid");
+  const [notebookAddRequestId, setNotebookAddRequestId] = useState(0);
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [activeTool, setActiveTool] = useState<ToolId>("comparing");
   const [apiTesterView, setApiTesterView] = useState<ApiTesterView>("test");
@@ -142,6 +159,20 @@ function App(): JSX.Element {
   const [comparingView, setComparingView] = useState<CompareView>("compare");
   const [cryptoActiveTab, setCryptoActiveTab] =
     useState<CryptographicToolTab>("base64");
+  const [sshServers, setSshServers] = useState<SshServerConfig[]>(() =>
+    readStoredSshServers(),
+  );
+  const [selectedSshServerId, setSelectedSshServerId] = useState(() =>
+    readStoredSelectedSshServerId(sshServers),
+  );
+  const [sshSettingsOpen, setSshSettingsOpen] = useState(false);
+  const [sshConnectionStatus, setSshConnectionStatus] =
+    useState<SshConnectionStatus>("idle");
+  const [sshReconnectAttempt, setSshReconnectAttempt] = useState(0);
+  const [sshActiveSessionId, setSshActiveSessionId] = useState<string | null>(
+    null,
+  );
+  const [sshRemoteCwd, setSshRemoteCwd] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [databaseConnections, setDatabaseConnections] = useState<
     DatabaseConnection[]
@@ -225,10 +256,34 @@ function App(): JSX.Element {
   const hadDatabaseConnectionRef = useRef(false);
   const selectedDatabaseConnectionIdRef = useRef<string | null>(null);
   const verifyingDatabaseConnectionIdRef = useRef<string | null>(null);
+  const sshReconnectTimerRef = useRef<number | null>(null);
+  const sshManualDisconnectRef = useRef(false);
+  const sshActiveServerIdRef = useRef<string | null>(null);
+  const sshActiveSessionIdRef = useRef<string | null>(null);
+  const sshAutoLoginAttemptedRef = useRef<string | null>(null);
 
   useEffect(() => {
     selectedDatabaseConnectionIdRef.current = selectedDatabaseConnectionId;
   }, [selectedDatabaseConnectionId]);
+
+  useEffect(() => {
+    storeSshServers(sshServers);
+    setSelectedSshServerId((current) =>
+      sshServers.some((server) => server.id === current)
+        ? current
+        : (sshServers[0]?.id ?? ""),
+    );
+  }, [sshServers]);
+
+  useEffect(() => {
+    if (selectedSshServerId) {
+      storeSelectedSshServerId(selectedSshServerId);
+    }
+  }, [selectedSshServerId]);
+
+  useEffect(() => {
+    sshActiveSessionIdRef.current = sshActiveSessionId;
+  }, [sshActiveSessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -635,6 +690,251 @@ function App(): JSX.Element {
         (entry) => entry.connectionId === selectedDatabaseConnection.id,
       )
     : [];
+  const selectedSshServer =
+    sshServers.find((server) => server.id === selectedSshServerId) ??
+    sshServers[0] ??
+    null;
+  const sshHasValidCredential = useMemo(
+    () => hasValidSshCredential(sshServers),
+    [sshServers],
+  );
+  const sshSettingsRequired =
+    activeSection === "tools" && activeTool === "ssh" && !sshHasValidCredential;
+
+  function saveSshServers(nextServers: SshServerConfig[]): void {
+    setSshServers(nextServers);
+    const selectedStillExists = nextServers.some(
+      (server) => server.id === selectedSshServerId,
+    );
+    if (!selectedStillExists) {
+      clearSshReconnectTimer();
+      void disconnectActiveSshSession();
+      sshManualDisconnectRef.current = false;
+      setSshConnectionStatus("idle");
+      setSshReconnectAttempt(0);
+      setSshRemoteCwd(null);
+      setSelectedSshServerId(nextServers[0]?.id ?? "");
+    }
+    setSshSettingsOpen(false);
+  }
+
+  function closeSshSettings(): void {
+    if (sshSettingsRequired) {
+      return;
+    }
+    setSshSettingsOpen(false);
+  }
+
+  function clearSshReconnectTimer(): void {
+    if (sshReconnectTimerRef.current !== null) {
+      window.clearTimeout(sshReconnectTimerRef.current);
+      sshReconnectTimerRef.current = null;
+    }
+  }
+
+  async function disconnectActiveSshSession(): Promise<void> {
+    const sessionId = sshActiveSessionIdRef.current;
+    sshActiveSessionIdRef.current = null;
+    setSshActiveSessionId(null);
+    if (!sessionId) {
+      return;
+    }
+
+    await window.ivsDashboard.sshDisconnect(sessionId).catch((error) => {
+      console.error("[ssh:disconnect]", error);
+    });
+  }
+
+  async function connectSshServer(
+    server: SshServerConfig,
+    status: SshConnectionStatus,
+    currentAttempt: number,
+  ): Promise<void> {
+    if (!isValidSshServerCredential(server)) {
+      return;
+    }
+
+    sshActiveServerIdRef.current = server.id;
+    clearSshReconnectTimer();
+    await disconnectActiveSshSession();
+    setSshConnectionStatus(status);
+
+    const result = await window.ivsDashboard
+      .sshConnect({
+        serverId: server.id,
+        name: server.name,
+        address: server.address,
+        username: server.username,
+        password: server.password,
+      })
+      .catch((error) => ({
+        ok: false,
+        sessionId: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : "SSH backend is not available.",
+      }));
+
+    if (sshActiveServerIdRef.current !== server.id) {
+      if (result.sessionId) {
+        await window.ivsDashboard.sshDisconnect(result.sessionId).catch(
+          (error) => {
+            console.error("[ssh:disconnect-stale]", error);
+          },
+        );
+      }
+      return;
+    }
+
+    if (result.ok && result.sessionId) {
+      sshActiveSessionIdRef.current = result.sessionId;
+      setSshActiveSessionId(result.sessionId);
+      setSshRemoteCwd(result.cwd ?? null);
+      setSshConnectionStatus("connected");
+      setSshReconnectAttempt(0);
+      return;
+    }
+
+    setSshActiveSessionId(null);
+    if (shouldRetrySshConnection(server, currentAttempt)) {
+      scheduleSshReconnect(server, currentAttempt + 1);
+      return;
+    }
+
+    setSshConnectionStatus("failed");
+  }
+
+  function shouldRetrySshConnection(
+    server: SshServerConfig,
+    currentAttempt: number,
+  ): boolean {
+    return (
+      server.autoReconnect &&
+      !sshManualDisconnectRef.current &&
+      currentAttempt < server.maxReconnectAttempts &&
+      isValidSshServerCredential(server) &&
+      sshActiveServerIdRef.current === server.id
+    );
+  }
+
+  function scheduleSshReconnect(
+    server: SshServerConfig,
+    nextAttempt: number,
+  ): void {
+    setSshReconnectAttempt(nextAttempt);
+    setSshConnectionStatus("reconnecting");
+    sshReconnectTimerRef.current = window.setTimeout(() => {
+      sshReconnectTimerRef.current = null;
+      if (
+        sshManualDisconnectRef.current ||
+        sshActiveServerIdRef.current !== server.id
+      ) {
+        return;
+      }
+      void connectSshServer(server, "reconnecting", nextAttempt);
+    }, server.reconnectDelayMs);
+  }
+
+  function handleSshConnect(server: SshServerConfig): void {
+    sshManualDisconnectRef.current = false;
+    setSshReconnectAttempt(0);
+    void connectSshServer(server, "connecting", 0);
+  }
+
+  function handleSshDisconnect(): void {
+    sshManualDisconnectRef.current = true;
+    clearSshReconnectTimer();
+    void disconnectActiveSshSession();
+    setSshReconnectAttempt(0);
+    setSshRemoteCwd(null);
+    setSshConnectionStatus("disconnected");
+  }
+
+  async function handleSshCommandSubmit(command: string) {
+    const sessionId = sshActiveSessionIdRef.current;
+    if (sshConnectionStatus !== "connected" || !sessionId) {
+      return {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        error: "Not connected. Please connect to the SSH server first.",
+      };
+    }
+
+    try {
+      const result = await window.ivsDashboard.sshExec(sessionId, command);
+      if (result.cwd) {
+        setSshRemoteCwd(result.cwd);
+      }
+      return result;
+    } catch (error) {
+      return {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : "SSH backend is not available.",
+      };
+    }
+  }
+
+  // Auto-login when SSH tool becomes active or selected server changes.
+  useEffect(() => {
+    const onSshTool = activeSection === "tools" && activeTool === "ssh";
+    if (!onSshTool) {
+      sshAutoLoginAttemptedRef.current = null;
+      return;
+    }
+    if (!selectedSshServer || !selectedSshServer.autoLogin) {
+      return;
+    }
+    if (!isValidSshServerCredential(selectedSshServer)) {
+      return;
+    }
+    if (
+      !["idle", "disconnected", "failed"].includes(sshConnectionStatus)
+    ) {
+      return;
+    }
+    if (sshAutoLoginAttemptedRef.current === selectedSshServer.id) {
+      return;
+    }
+    sshAutoLoginAttemptedRef.current = selectedSshServer.id;
+    handleSshConnect(selectedSshServer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeSection,
+    activeTool,
+    selectedSshServer,
+    sshConnectionStatus,
+  ]);
+
+  // Cancel pending SSH activity when selected server changes.
+  useEffect(() => {
+    if (
+      sshActiveServerIdRef.current !== null &&
+      sshActiveServerIdRef.current !== selectedSshServerId
+    ) {
+      clearSshReconnectTimer();
+      void disconnectActiveSshSession();
+      sshManualDisconnectRef.current = false;
+      setSshConnectionStatus("idle");
+      setSshReconnectAttempt(0);
+      setSshRemoteCwd(null);
+    }
+    sshActiveServerIdRef.current = selectedSshServerId || null;
+  }, [selectedSshServerId]);
+
+  // Cleanup SSH timers on unmount.
+  useEffect(() => {
+    return () => {
+      clearSshReconnectTimer();
+      void disconnectActiveSshSession();
+    };
+  }, []);
   const runningBuildItems = useMemo(
     () =>
       getBuildMiniPanelItems(
@@ -1424,6 +1724,59 @@ function App(): JSX.Element {
                       onChange={setFontSizeMode}
                     />
                   </>
+                ) : activeSection === "tools" && activeTool === "notebook" ? (
+                  <>
+                    <button
+                      className="icon-button secondary header-settings-button"
+                      type="button"
+                      aria-label="Add note"
+                      title="Add note"
+                      onClick={() =>
+                        setNotebookAddRequestId((current) => current + 1)
+                      }
+                    >
+                      <Plus size={18} />
+                    </button>
+                    <button
+                      className="icon-button secondary header-settings-button"
+                      type="button"
+                      aria-label={
+                        notebookView === "grid"
+                          ? "Switch to list view"
+                          : "Switch to grid view"
+                      }
+                      title={
+                        notebookView === "grid" ? "List view" : "Grid view"
+                      }
+                      onClick={() =>
+                        setNotebookView((current) =>
+                          current === "grid" ? "list" : "grid",
+                        )
+                      }
+                    >
+                      {notebookView === "grid" ? (
+                        <List size={18} />
+                      ) : (
+                        <Grid3X3 size={18} />
+                      )}
+                    </button>
+                    <FontSizeDropdown
+                      value={fontSizeMode}
+                      onChange={setFontSizeMode}
+                    />
+                  </>
+                ) : activeSection === "tools" && activeTool === "ssh" ? (
+                  <SshHeaderActions
+                    servers={sshServers}
+                    selectedServerId={selectedSshServerId}
+                    fontSizeMode={fontSizeMode}
+                    disabled={!sshHasValidCredential}
+                    connectionStatus={sshConnectionStatus}
+                    onServerChange={setSelectedSshServerId}
+                    onDisconnect={handleSshDisconnect}
+                    onSettingsClick={() => setSshSettingsOpen(true)}
+                    onFontSizeChange={setFontSizeMode}
+                  />
                 ) : activeSection === "tools" ? (
                   <FontSizeDropdown
                     value={fontSizeMode}
@@ -1464,6 +1817,10 @@ function App(): JSX.Element {
                 activeView={cryptoActiveTab}
                 onViewChange={setCryptoActiveTab}
               />
+            ) : activeSection === "tools" && activeTool === "notebook" ? (
+              <SingleToolHeaderTabs label="Notes" />
+            ) : activeSection === "tools" && activeTool === "ssh" ? (
+              <SshHeaderTabs />
             ) : null}
           </AppHeader>
 
@@ -1484,6 +1841,27 @@ function App(): JSX.Element {
               />
             ) : activeTool === "comparing" ? (
               <CompareTool />
+            ) : activeTool === "notebook" ? (
+              <NotesTab
+                projectId={STANDALONE_NOTEBOOK_PROJECT_ID}
+                view={notebookView}
+                addNoteRequestId={notebookAddRequestId}
+                onFeedback={(message) => showSnackbar(message, "invalid")}
+              />
+            ) : activeTool === "ssh" ? (
+              <SshTool
+                selectedServer={selectedSshServer}
+                disabled={!sshHasValidCredential}
+                connectionStatus={sshConnectionStatus}
+                reconnectAttempt={sshReconnectAttempt}
+                reconnectMaxAttempts={
+                  selectedSshServer?.maxReconnectAttempts ?? 0
+                }
+                remoteCwd={sshRemoteCwd}
+                onConnect={handleSshConnect}
+                onDisconnect={handleSshDisconnect}
+                onCommandSubmit={handleSshCommandSubmit}
+              />
             ) : (
               <CryptographicTool
                 activeTab={cryptoActiveTab}
@@ -1664,6 +2042,57 @@ function App(): JSX.Element {
                     onChange={setFontSizeMode}
                   />
                 </>
+              ) : activeSection === "tools" && activeTool === "notebook" ? (
+                <>
+                  <button
+                    className="icon-button secondary header-settings-button"
+                    type="button"
+                    aria-label="Add note"
+                    title="Add note"
+                    onClick={() =>
+                      setNotebookAddRequestId((current) => current + 1)
+                    }
+                  >
+                    <Plus size={18} />
+                  </button>
+                  <button
+                    className="icon-button secondary header-settings-button"
+                    type="button"
+                    aria-label={
+                      notebookView === "grid"
+                        ? "Switch to list view"
+                        : "Switch to grid view"
+                    }
+                    title={notebookView === "grid" ? "List view" : "Grid view"}
+                    onClick={() =>
+                      setNotebookView((current) =>
+                        current === "grid" ? "list" : "grid",
+                      )
+                    }
+                  >
+                    {notebookView === "grid" ? (
+                      <List size={18} />
+                    ) : (
+                      <Grid3X3 size={18} />
+                    )}
+                  </button>
+                  <FontSizeDropdown
+                    value={fontSizeMode}
+                    onChange={setFontSizeMode}
+                  />
+                </>
+              ) : activeSection === "tools" && activeTool === "ssh" ? (
+                <SshHeaderActions
+                  servers={sshServers}
+                  selectedServerId={selectedSshServerId}
+                  fontSizeMode={fontSizeMode}
+                  disabled={!sshHasValidCredential}
+                  connectionStatus={sshConnectionStatus}
+                  onServerChange={setSelectedSshServerId}
+                  onDisconnect={handleSshDisconnect}
+                  onSettingsClick={() => setSshSettingsOpen(true)}
+                  onFontSizeChange={setFontSizeMode}
+                />
               ) : activeSection === "tools" || activeSection === "dashboard" ? (
                 <FontSizeDropdown
                   value={fontSizeMode}
@@ -1695,6 +2124,10 @@ function App(): JSX.Element {
               activeView={cryptoActiveTab}
               onViewChange={setCryptoActiveTab}
             />
+          ) : activeSection === "tools" && activeTool === "notebook" ? (
+            <SingleToolHeaderTabs label="Notes" />
+          ) : activeSection === "tools" && activeTool === "ssh" ? (
+            <SshHeaderTabs />
           ) : null}
         </AppHeader>
 
@@ -1741,6 +2174,27 @@ function App(): JSX.Element {
             />
           ) : activeTool === "comparing" ? (
             <CompareTool />
+          ) : activeTool === "notebook" ? (
+            <NotesTab
+              projectId={STANDALONE_NOTEBOOK_PROJECT_ID}
+              view={notebookView}
+              addNoteRequestId={notebookAddRequestId}
+              onFeedback={(message) => showSnackbar(message, "invalid")}
+            />
+          ) : activeTool === "ssh" ? (
+            <SshTool
+              selectedServer={selectedSshServer}
+              disabled={!sshHasValidCredential}
+              connectionStatus={sshConnectionStatus}
+              reconnectAttempt={sshReconnectAttempt}
+              reconnectMaxAttempts={
+                selectedSshServer?.maxReconnectAttempts ?? 0
+              }
+              remoteCwd={sshRemoteCwd}
+              onConnect={handleSshConnect}
+              onDisconnect={handleSshDisconnect}
+              onCommandSubmit={handleSshCommandSubmit}
+            />
           ) : (
             <CryptographicTool
               activeTab={cryptoActiveTab}
@@ -1789,6 +2243,14 @@ function App(): JSX.Element {
           </>
         ) : null}
       </main>
+
+      <SshSettingsModal
+        open={sshSettingsOpen || sshSettingsRequired}
+        servers={sshServers}
+        credentialRequired={sshSettingsRequired}
+        onSave={saveSshServers}
+        onClose={closeSshSettings}
+      />
 
       <Modal
         open={settingsOpen && activeProjectState !== null}
@@ -2654,6 +3116,20 @@ function CryptographicHeaderTabs({
         onClick={() => onViewChange("unicode")}
       >
         Unicode
+      </button>
+    </div>
+  );
+}
+
+function SingleToolHeaderTabs({ label }: { label: string }): JSX.Element {
+  return (
+    <div
+      className="tabs single-tool-header-tabs"
+      role="tablist"
+      aria-label={label}
+    >
+      <button className="tab active" type="button" role="tab" aria-selected>
+        {label}
       </button>
     </div>
   );

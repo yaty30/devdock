@@ -329,6 +329,7 @@ const BACKEND_DASHBOARD_LOG_CHANNELS: readonly LogChannel[] = [
   "python",
 ];
 const DASHBOARD_CLEARED_META_PREFIX = "project-dashboard-cleared-at:";
+const STANDALONE_NOTEBOOK_PROJECT_ID = "__ivs_standalone_notebook__";
 const EMPTY_SHEET_CONTENT: SheetContentJson = {
   type: "doc",
   content: [{ type: "paragraph" }],
@@ -402,15 +403,19 @@ export class DashboardBackend {
     this.db = new DatabaseConstructor(join(dbDir, "ivs-dashboard.sqlite"));
     this.db.pragma("journal_mode = WAL");
     this.initializeSchema();
+    this.ensureStandaloneNotebookProject();
     this.markInterruptedBuilds();
   }
 
   getSnapshot(): DashboardSnapshot {
     const projects = this.db
       .prepare(
-        "SELECT id, name, code, backend_type AS backendType FROM projects ORDER BY created_at ASC",
+        `SELECT id, name, code, backend_type AS backendType
+         FROM projects
+         WHERE id <> ?
+         ORDER BY created_at ASC`,
       )
-      .all() as ProjectRow[];
+      .all(STANDALONE_NOTEBOOK_PROJECT_ID) as ProjectRow[];
 
     return {
       projects,
@@ -1800,8 +1805,8 @@ export class DashboardBackend {
     }
 
     const projectCount = this.db
-      .prepare("SELECT COUNT(*) AS count FROM projects")
-      .get() as { count: number };
+      .prepare("SELECT COUNT(*) AS count FROM projects WHERE id <> ?")
+      .get(STANDALONE_NOTEBOOK_PROJECT_ID) as { count: number };
     if (projectCount.count >= MAX_PROJECTS) {
       throw new Error(
         `Project limit reached. You can create up to ${MAX_PROJECTS} projects.`,
@@ -1835,7 +1840,7 @@ export class DashboardBackend {
   }
 
   getSheets(projectId: string): Sheet[] {
-    this.ensureProjectExists(projectId);
+    this.ensureSheetScopeExists(projectId);
     const rows = this.db
       .prepare(
         `SELECT id, project_id, title, content_json, created_at, updated_at,
@@ -1853,7 +1858,7 @@ export class DashboardBackend {
   }
 
   createSheet(projectId: string, title: string): Sheet {
-    this.ensureProjectExists(projectId);
+    this.ensureSheetScopeExists(projectId);
     const trimmedTitle = title.trim();
     this.validateSheetTitle(projectId, trimmedTitle);
 
@@ -1893,7 +1898,7 @@ export class DashboardBackend {
   }
 
   updateSheet(projectId: string, sheetId: string, updates: SheetUpdate): Sheet {
-    this.ensureProjectExists(projectId);
+    this.ensureSheetScopeExists(projectId);
     const existing = this.getSheetRow(projectId, sheetId);
     if (!existing) {
       throw new Error("Sheet not found.");
@@ -1964,7 +1969,7 @@ export class DashboardBackend {
   }
 
   deleteSheet(projectId: string, sheetId: string): void {
-    this.ensureProjectExists(projectId);
+    this.ensureSheetScopeExists(projectId);
     const result = this.db
       .prepare("DELETE FROM sheets WHERE project_id = ? AND id = ?")
       .run(projectId, sheetId);
@@ -2873,9 +2878,34 @@ export class DashboardBackend {
   private getProjects(): ProjectRecord[] {
     return this.db
       .prepare(
-        "SELECT id, name, code, backend_type AS backendType FROM projects ORDER BY created_at ASC",
+        `SELECT id, name, code, backend_type AS backendType
+         FROM projects
+         WHERE id <> ?
+         ORDER BY created_at ASC`,
       )
-      .all() as ProjectRecord[];
+      .all(STANDALONE_NOTEBOOK_PROJECT_ID) as ProjectRecord[];
+  }
+
+  private ensureStandaloneNotebookProject(): void {
+    const exists =
+      this.db
+        .prepare("SELECT 1 FROM projects WHERE id = ?")
+        .get(STANDALONE_NOTEBOOK_PROJECT_ID) !== undefined;
+    if (exists) {
+      return;
+    }
+
+    this.db
+      .prepare(
+        "INSERT INTO projects (id, name, code, backend_type, created_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        STANDALONE_NOTEBOOK_PROJECT_ID,
+        "Standalone Notebook",
+        "NOTEBOOK",
+        "wildfly",
+        new Date().toISOString(),
+      );
   }
 
   private ensureProjectExists(projectId: string): void {
@@ -2885,6 +2915,14 @@ export class DashboardBackend {
     if (!exists) {
       throw new Error(`Unknown project: ${projectId}`);
     }
+  }
+
+  private ensureSheetScopeExists(projectId: string): void {
+    if (projectId === STANDALONE_NOTEBOOK_PROJECT_ID) {
+      return;
+    }
+
+    this.ensureProjectExists(projectId);
   }
 
   private getProjectBackendType(projectId: string): BackendType {

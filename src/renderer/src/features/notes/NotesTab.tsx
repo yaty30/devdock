@@ -130,6 +130,7 @@ export function NotesTab({
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [addDialogKey, setAddDialogKey] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<Sheet | null>(null);
   const [expandedSheetId, setExpandedSheetId] = useState<string | null>(null);
   const [expandedEditEnabled, setExpandedEditEnabled] = useState(false);
@@ -192,6 +193,7 @@ export function NotesTab({
 
   useEffect(() => {
     if (addNoteRequestId > 0) {
+      setAddDialogKey((k) => k + 1);
       setAddOpen(true);
     }
   }, [addNoteRequestId]);
@@ -437,7 +439,7 @@ export function NotesTab({
           <button
             className="button primary compact"
             type="button"
-            onClick={() => setAddOpen(true)}
+            onClick={() => { setAddDialogKey((k) => k + 1); setAddOpen(true); }}
           >
             <Plus size={14} />
             Add Note
@@ -471,6 +473,7 @@ export function NotesTab({
       )}
 
       <AddNoteModal
+        key={addDialogKey}
         open={addOpen}
         existingTitles={sheets.map((sheet) => sheet.title)}
         onCreate={handleCreateNote}
