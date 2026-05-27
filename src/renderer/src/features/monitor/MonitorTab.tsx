@@ -42,6 +42,7 @@ import {
   getProjectBackendServiceName,
   getPythonServerTypeLabel,
   isProjectFrontendEnabled,
+  extractPortFromUrl,
 } from "../../../../shared/projectFrontend";
 
 type MonitorLayout = {
@@ -784,9 +785,7 @@ function ApiFetchPanel({ projectId }: { projectId: string }): JSX.Element {
                     ? "recent-build-row-active"
                     : undefined
                 }
-                ref={
-                  entry.id === activeFetchId ? activeRowRef : undefined
-                }
+                ref={entry.id === activeFetchId ? activeRowRef : undefined}
               >
                 <td>{formatApiFetchTime(entry.capturedAt)}</td>
                 <td>{entry.method}</td>
@@ -810,9 +809,7 @@ function ApiFetchPanel({ projectId }: { projectId: string }): JSX.Element {
           aria-hidden="true"
         />
         {fetches.length === 0 && !loading ? (
-          <p className="recent-builds-empty">
-            No API requests captured yet.
-          </p>
+          <p className="recent-builds-empty">No API requests captured yet.</p>
         ) : null}
       </div>
       <div className="table-footer">
@@ -1194,7 +1191,10 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
     (status) => status.service === backendService,
   );
   const lastBuild = projectState.recentBuilds[0];
-  const healthConfigured = Boolean(projectState.settings.python.healthCheckUrl?.trim());
+  const healthCheckPort = extractPortFromUrl(
+    projectState.settings.python.appUrl,
+  );
+  const healthConfigured = healthCheckPort !== null;
   const healthState = !healthConfigured
     ? undefined
     : backendStatus?.state === "running"
@@ -1277,20 +1277,27 @@ function createMonitorCards(projectState: ProjectRuntimeState): MonitorCard[] {
     },
     isPython
       ? {
-          title: "Health Check",
+          title: "Health Check Port",
           icon: <Server size={26} />,
           rows: [
             {
               label: "Status",
-              value: healthConfigured ? statusPill(healthState) : "Not configured",
+              value: healthConfigured
+                ? statusPill(healthState)
+                : "Not configured",
             },
             {
-              label: "URL",
-              value: projectState.settings.python.healthCheckUrl || "Not configured",
+              label: "Port",
+              value:
+                healthCheckPort === null
+                  ? "Not detected"
+                  : String(healthCheckPort),
             },
             {
               label: "Last Check",
-              value: backendStatus ? formatDate(backendStatus.checkedAt) : "Not checked",
+              value: backendStatus
+                ? formatDate(backendStatus.checkedAt)
+                : "Not checked",
             },
           ],
         }

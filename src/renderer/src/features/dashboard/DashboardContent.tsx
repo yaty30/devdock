@@ -44,6 +44,7 @@ import {
   getProjectBackendServiceName,
   getPythonServerTypeLabel,
   isProjectFrontendEnabled,
+  extractPortFromUrl,
 } from "../../../../shared/projectFrontend";
 import type {
   BuildStage,
@@ -58,16 +59,18 @@ import { clamp } from "../../utils/math";
 type DashboardLayout = {
   columnWidths: [number, number, number] | null;
   topRowHeight: number | null;
+  pythonPanelRatios: [number, number, number] | null;
 };
 
 type DragState = {
-  type: "column-1" | "column-2" | "row";
+  type: "column-1" | "column-2" | "row" | "python-panel-1" | "python-panel-2";
   startX: number;
   startY: number;
   startColumnWidths: [number, number, number];
   startTopRowHeight: number;
   availableWidth: number;
   maxTopRowHeight: number;
+  startPythonPanelHeights: [number, number, number];
 };
 
 type ZoomLogConfig = {
@@ -85,6 +88,9 @@ const DASHBOARD_MIN_COLUMN_WIDTH = 230;
 const DASHBOARD_MIN_TOP_ROW = 320;
 const DASHBOARD_MIN_BOTTOM_ROW = 220;
 const DASHBOARD_SPLITTER_SIZE = 16;
+const PYTHON_PANEL_MIN_HEIGHT = 118;
+const PYTHON_PANEL_SPLITTER_SIZE = 12;
+const DEFAULT_PYTHON_PANEL_RATIOS: [number, number, number] = [0.95, 0.92, 1.13];
 
 function dashboardColumnTemplate(
   columnWidths: DashboardLayout["columnWidths"],
@@ -110,6 +116,15 @@ function dashboardRowTemplate(
   return topRowHeight === null
     ? `minmax(${DASHBOARD_MIN_TOP_ROW}px, 1fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_BOTTOM_ROW}px, 1fr)`
     : `minmax(${DASHBOARD_MIN_TOP_ROW}px, ${topRowHeight}px) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_BOTTOM_ROW}px, 1fr)`;
+}
+
+function pythonSideRowTemplate(
+  ratios: DashboardLayout["pythonPanelRatios"],
+): string {
+  const [errorsRatio, runtimeRatio, dependenciesRatio] =
+    ratios ?? DEFAULT_PYTHON_PANEL_RATIOS;
+
+  return `minmax(${PYTHON_PANEL_MIN_HEIGHT}px, ${errorsRatio}fr) ${PYTHON_PANEL_SPLITTER_SIZE}px minmax(${PYTHON_PANEL_MIN_HEIGHT}px, ${runtimeRatio}fr) ${PYTHON_PANEL_SPLITTER_SIZE}px minmax(${PYTHON_PANEL_MIN_HEIGHT}px, ${dependenciesRatio}fr)`;
 }
 
 type LogFindState = {
@@ -978,7 +993,7 @@ function ProjectStatusRow({
   const showBuildSummary = !isPython;
   const overallStatus = projectOverallStatus(summary);
   const lastBuild = summary.lastBuild;
-  const healthConfigured = Boolean(summary.serviceUrls.backendHealthUrl);
+  const healthConfigured = Boolean(summary.serviceUrls.backendHealthPort);
   const healthState = !healthConfigured
     ? "unknown"
     : backend?.state === "running"
@@ -1031,7 +1046,7 @@ function ProjectStatusRow({
             </div>
           ) : (
             <div className="dashboard-status-group">
-              <span>Health Check</span>
+              <span>Health Check Port</span>
               {healthConfigured ? (
                 statusPill(healthState)
               ) : (
@@ -1173,7 +1188,7 @@ function ProjectStatusRow({
           <section className="dashboard-project-detail">
             <header>
               <Activity size={18} />
-              <h3>Health Check</h3>
+              <h3>Health Check Port</h3>
               {healthConfigured ? statusPill(healthState) : null}
             </header>
             <DashboardDetailRow label="Status">
@@ -1185,20 +1200,13 @@ function ProjectStatusRow({
                   : "Not configured"}
               </strong>
             </DashboardDetailRow>
-            <DashboardDetailRow label="Response">
-              <strong>
-                {healthConfigured && backend?.state === "running"
-                  ? "200 OK"
-                  : "--"}
-              </strong>
+            <DashboardDetailRow label="Port">
+              <strong>{summary.serviceUrls.backendHealthPort || "--"}</strong>
             </DashboardDetailRow>
             <DashboardDetailRow label="Last Check">
               <strong>
                 {backend?.checkedAt ? formatDate(backend.checkedAt) : "--"}
               </strong>
-            </DashboardDetailRow>
-            <DashboardDetailRow label="Health URL">
-              <strong>{summary.serviceUrls.backendHealthUrl || "--"}</strong>
             </DashboardDetailRow>
           </section>
         )}
@@ -1368,7 +1376,7 @@ function PythonRuntimePanel({
   status: ProjectRuntimeState["statuses"][number] | undefined;
   settings: ProjectRuntimeState["settings"];
 }): JSX.Element {
-  const hasHealthUrl = Boolean(settings.python.healthCheckUrl?.trim());
+  const healthCheckPort = extractPortFromUrl(settings.python.appUrl);
   return (
     <Panel title="Runtime Status" className="python-runtime-panel">
       <div className="python-runtime-list">
@@ -1386,9 +1394,9 @@ function PythonRuntimePanel({
         <DashboardDetailRow label="App URL">
           <strong>{settings.python.appUrl || "--"}</strong>
         </DashboardDetailRow>
-        <DashboardDetailRow label="Health Check">
+        <DashboardDetailRow label="Health Check Port">
           <strong>
-            {hasHealthUrl ? settings.python.healthCheckUrl : "Not configured"}
+            {healthCheckPort === null ? "Not detected" : healthCheckPort}
           </strong>
         </DashboardDetailRow>
       </div>
@@ -1474,6 +1482,7 @@ export function ProjectDashboardContent({
   const showTailLogPanel =
     projectState.settings.backendType !== "python" || tailLogConfigured;
   const gridRef = useRef<HTMLDivElement>(null);
+  const pythonSideColumnRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const pendingLayoutRef = useRef<DashboardLayout | null>(null);
   const resizingRef = useRef(false);
@@ -1544,6 +1553,10 @@ export function ProjectDashboardContent({
       "--dashboard-row-template",
       dashboardRowTemplate(nextLayout.topRowHeight),
     );
+    grid.style.setProperty(
+      "--python-side-row-template",
+      pythonSideRowTemplate(nextLayout.pythonPanelRatios),
+    );
   }
 
   function scheduleGridLayout(nextLayout: DashboardLayout): void {
@@ -1558,6 +1571,32 @@ export function ProjectDashboardContent({
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     resizingRef.current = false;
+
+    if (type === "python-panel-1" || type === "python-panel-2") {
+      const panelSelectors = [
+        ".python-errors-panel",
+        ".python-runtime-panel",
+        ".python-dependencies-panel",
+      ];
+      const startPythonPanelHeights = panelSelectors.map(
+        (selector) =>
+          pythonSideColumnRef.current
+            ?.querySelector<HTMLElement>(selector)
+            ?.getBoundingClientRect().height ?? 0,
+      ) as [number, number, number];
+
+      dragRef.current = {
+        type,
+        startX: event.clientX,
+        startY: event.clientY,
+        startColumnWidths: [0, 0, 0],
+        startTopRowHeight: 0,
+        availableWidth: 0,
+        maxTopRowHeight: 0,
+        startPythonPanelHeights,
+      };
+      return;
+    }
 
     const grid = gridRef.current;
     const gridStyles = grid ? window.getComputedStyle(grid) : null;
@@ -1618,6 +1657,7 @@ export function ProjectDashboardContent({
         DASHBOARD_MIN_TOP_ROW,
         availableHeight - DASHBOARD_MIN_BOTTOM_ROW,
       ),
+      startPythonPanelHeights: [0, 0, 0],
     };
   };
 
@@ -1634,6 +1674,51 @@ export function ProjectDashboardContent({
     }
 
     const baseLayout = pendingLayoutRef.current ?? layout;
+
+    if (drag.type === "python-panel-1" || drag.type === "python-panel-2") {
+      const delta = event.clientY - drag.startY;
+      const nextHeights: [number, number, number] = [
+        drag.startPythonPanelHeights[0],
+        drag.startPythonPanelHeights[1],
+        drag.startPythonPanelHeights[2],
+      ];
+
+      if (drag.type === "python-panel-1") {
+        const pairHeight =
+          drag.startPythonPanelHeights[0] + drag.startPythonPanelHeights[1];
+        nextHeights[0] = clamp(
+          drag.startPythonPanelHeights[0] + delta,
+          PYTHON_PANEL_MIN_HEIGHT,
+          pairHeight - PYTHON_PANEL_MIN_HEIGHT,
+        );
+        nextHeights[1] = pairHeight - nextHeights[0];
+      } else {
+        const pairHeight =
+          drag.startPythonPanelHeights[1] + drag.startPythonPanelHeights[2];
+        nextHeights[1] = clamp(
+          drag.startPythonPanelHeights[1] + delta,
+          PYTHON_PANEL_MIN_HEIGHT,
+          pairHeight - PYTHON_PANEL_MIN_HEIGHT,
+        );
+        nextHeights[2] = pairHeight - nextHeights[1];
+      }
+
+      const nextTotal = nextHeights.reduce((total, value) => total + value, 0);
+      const pythonPanelRatios =
+        nextTotal <= 0
+          ? DEFAULT_PYTHON_PANEL_RATIOS
+          : (nextHeights.map((height) => height / nextTotal) as [
+              number,
+              number,
+              number,
+            ]);
+
+      scheduleGridLayout({
+        ...baseLayout,
+        pythonPanelRatios,
+      });
+      return;
+    }
 
     if (drag.type === "row") {
       const nextTopHeight = clamp(
@@ -1715,6 +1800,9 @@ export function ProjectDashboardContent({
       frontendEnabled,
     ),
     "--dashboard-row-template": dashboardRowTemplate(layout.topRowHeight),
+    "--python-side-row-template": pythonSideRowTemplate(
+      layout.pythonPanelRatios,
+    ),
   } as CSSProperties;
 
   return (
@@ -1767,11 +1855,31 @@ export function ProjectDashboardContent({
         {showBuildPanels ? (
           <BuildStatusPanel projectId={projectId} projectState={projectState} />
         ) : (
-          <div className="python-side-column">
+          <div className="python-side-column" ref={pythonSideColumnRef}>
             <PythonErrorsPanel lines={projectState.logs.python} />
+            <div
+              className="grid-splitter python-panel-splitter python-panel-splitter-one"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize Recent Errors and Runtime Status panels"
+              onPointerDown={(event) => startResize("python-panel-1", event)}
+              onPointerMove={resizeLayout}
+              onPointerUp={stopResize}
+              onPointerCancel={stopResize}
+            />
             <PythonRuntimePanel
               status={backendStatus}
               settings={projectState.settings}
+            />
+            <div
+              className="grid-splitter python-panel-splitter python-panel-splitter-two"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize Runtime Status and Dependencies panels"
+              onPointerDown={(event) => startResize("python-panel-2", event)}
+              onPointerMove={resizeLayout}
+              onPointerUp={stopResize}
+              onPointerCancel={stopResize}
             />
             <PythonDependenciesPanel
               dependencies={projectState.pythonDependencies}
@@ -1903,7 +2011,11 @@ export function ProjectDashboardContent({
 }
 
 function readStoredLayout(projectId: string): DashboardLayout {
-  const fallback: DashboardLayout = { columnWidths: null, topRowHeight: null };
+  const fallback: DashboardLayout = {
+    columnWidths: null,
+    topRowHeight: null,
+    pythonPanelRatios: null,
+  };
   const stored = window.localStorage.getItem(
     `ivs-dashboard-layout-${projectId}`,
   );
@@ -1919,6 +2031,14 @@ function readStoredLayout(projectId: string): DashboardLayout {
         : null,
       topRowHeight:
         typeof parsed.topRowHeight === "number" ? parsed.topRowHeight : null,
+      pythonPanelRatios:
+        Array.isArray(parsed.pythonPanelRatios) &&
+        parsed.pythonPanelRatios.length === 3 &&
+        parsed.pythonPanelRatios.every(
+          (ratio) => typeof ratio === "number" && ratio > 0,
+        )
+          ? parsed.pythonPanelRatios
+          : null,
     };
   } catch {
     return fallback;

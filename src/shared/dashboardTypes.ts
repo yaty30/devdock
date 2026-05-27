@@ -253,7 +253,7 @@ export type ProjectDashboardSummary = {
     backendManagementUrl: string;
     backendLabel: string;
     backendServerType: string;
-    backendHealthUrl: string;
+    backendHealthPort: string;
   };
 };
 

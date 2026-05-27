@@ -1,6 +1,6 @@
 {
   "name": "ivs-dashboard",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "IVS Dashboard.",
   "main": "build/main/index.js",
   "productName": "IVS Dashboard",

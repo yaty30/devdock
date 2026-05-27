@@ -26,6 +26,7 @@ import {
   getProjectBackendServiceName,
   getPythonServerTypeLabel,
   isProjectFrontendEnabled,
+  extractPortFromUrl,
 } from "../../../../shared/projectFrontend";
 
 function FieldRow({
@@ -62,6 +63,22 @@ function FieldRow({
   );
 }
 
+function StaticFieldRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}): JSX.Element {
+  return (
+    <div className="settings-field-row settings-field-row-static">
+      <span>{label}</span>
+      <span className="settings-static-value">{value}</span>
+      <span />
+    </div>
+  );
+}
+
 function shouldApplyPythonDefault(
   currentValue: string,
   previousDefault: string,
@@ -80,6 +97,11 @@ function shellQuoteIfNeeded(value: string): string {
 function pythonActivationCommand(venvPath: string | undefined): string {
   const normalizedVenvPath = normalizePythonVenvPath(venvPath);
   return shellQuoteIfNeeded(`${normalizedVenvPath}\\Scripts\\activate`);
+}
+
+function formatHealthCheckPort(appUrl: string): string {
+  const port = extractPortFromUrl(appUrl);
+  return port === null ? "No port detected" : String(port);
 }
 
 const PROFILE_ROW_EXIT_MS = 180;
@@ -1103,7 +1125,9 @@ export function SettingsContent({
             </Panel>
 
             <Panel
-              title={backendService === "python" ? "Python Web Server" : backendLabel}
+              title={
+                backendService === "python" ? "Python Web Server" : backendLabel
+              }
               className="settings-form-panel"
             >
               {backendService === "python" ? (
@@ -1112,7 +1136,9 @@ export function SettingsContent({
                     label="Directory"
                     value={draft.python.directory}
                     browse
-                    onChange={(value) => updatePythonConfig({ directory: value })}
+                    onChange={(value) =>
+                      updatePythonConfig({ directory: value })
+                    }
                     onBrowse={() =>
                       browseDirectory(
                         "Select Python server directory",
@@ -1148,22 +1174,25 @@ export function SettingsContent({
                   <FieldRow
                     label="Install command"
                     value={draft.python.installCommand ?? ""}
-                    onChange={(value) => updatePythonConfig({ installCommand: value })}
+                    onChange={(value) =>
+                      updatePythonConfig({ installCommand: value })
+                    }
                   />
                   <FieldRow
                     label="Start command"
                     value={draft.python.startCommand}
-                    onChange={(value) => updatePythonConfig({ startCommand: value })}
+                    onChange={(value) =>
+                      updatePythonConfig({ startCommand: value })
+                    }
                   />
                   <FieldRow
                     label="App URL"
                     value={draft.python.appUrl}
                     onChange={(value) => updatePythonConfig({ appUrl: value })}
                   />
-                  <FieldRow
-                    label="Health Check URL"
-                    value={draft.python.healthCheckUrl ?? ""}
-                    onChange={(value) => updatePythonConfig({ healthCheckUrl: value })}
+                  <StaticFieldRow
+                    label="Health Check Port"
+                    value={formatHealthCheckPort(draft.python.appUrl)}
                   />
                 </>
               ) : (
@@ -1180,7 +1209,11 @@ export function SettingsContent({
                         `Select ${backendLabel} directory`,
                         backendConfig.workingDirectory,
                         (value) =>
-                          updateService(backendService, "workingDirectory", value),
+                          updateService(
+                            backendService,
+                            "workingDirectory",
+                            value,
+                          ),
                       )
                     }
                   />
@@ -1198,13 +1231,13 @@ export function SettingsContent({
                       updateService(backendService, "healthUrl", value)
                     }
                   />
-                <FieldRow
-                  label="Admin Console URL"
-                  value={backendConfig.managementUrl ?? ""}
-                  onChange={(value) =>
-                    updateService(backendService, "managementUrl", value)
-                  }
-                />
+                  <FieldRow
+                    label="Admin Console URL"
+                    value={backendConfig.managementUrl ?? ""}
+                    onChange={(value) =>
+                      updateService(backendService, "managementUrl", value)
+                    }
+                  />
                   <FieldRow
                     label="KMU URL"
                     value={backendConfig.appUrl ?? ""}

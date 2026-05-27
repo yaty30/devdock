@@ -12,13 +12,13 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  readSync,
   readdirSync,
+  readSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { dirname, isAbsolute, join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -97,6 +97,7 @@ import {
   getProjectServiceNames,
   isProjectFrontendEnabled,
   normalizeBackendType,
+  extractPortFromUrl,
   normalizePythonServerType,
   normalizeProjectSettings,
 } from "../shared/projectFrontend";
@@ -1582,10 +1583,10 @@ export class DashboardBackend {
             settings.backendType === "python"
               ? getPythonServerTypeLabel(settings.python.serverType)
               : "",
-          backendHealthUrl:
+          backendHealthPort:
             settings.backendType === "python"
-              ? (settings.python.healthCheckUrl ?? "")
-              : settings.services.wildfly.healthUrl,
+              ? formatPort(extractPortFromUrl(settings.python.appUrl))
+              : "",
         },
       };
     });
@@ -2023,7 +2024,9 @@ export class DashboardBackend {
       if (!python.directory.trim()) {
         errors.push("Python directory is required");
       } else if (!isExistingDirectory(python.directory.trim())) {
-        errors.push(`Python directory does not exist: ${python.directory.trim()}`);
+        errors.push(
+          `Python directory does not exist: ${python.directory.trim()}`,
+        );
       }
       if (!python.startCommand.trim()) {
         errors.push("Python start command is required");
@@ -2398,7 +2401,10 @@ export class DashboardBackend {
     pending.push(captured);
     this.apiFetchEventBuffer.set(projectId, pending);
     if (this.apiFetchEventTimer === null) {
-      this.apiFetchEventTimer = setTimeout(() => this.flushApiFetchEvents(), 200);
+      this.apiFetchEventTimer = setTimeout(
+        () => this.flushApiFetchEvents(),
+        200,
+      );
     }
   }
 
@@ -2416,6 +2422,7 @@ export class DashboardBackend {
     const statuses = await Promise.all(
       getProjectServiceNames(settings).map(async (service) => {
         const config = settings.services[service];
+        const statusUrl = serviceStatusUrl(config, service);
         const processKey = serviceProcessKey(projectId, service);
         const runningProcess = this.serviceProcesses.get(processKey);
         const explicitlyStopped =
@@ -2427,7 +2434,7 @@ export class DashboardBackend {
             service,
             "stopped",
             "Stopped",
-            config.healthUrl,
+            statusUrl,
           );
           this.upsertStatus(projectId, status);
           return status;
@@ -2438,7 +2445,7 @@ export class DashboardBackend {
             service,
             "stopping",
             "Stopping",
-            config.healthUrl,
+            statusUrl,
             runningProcess.startedAt,
           );
           this.upsertStatus(projectId, status);
@@ -2450,9 +2457,64 @@ export class DashboardBackend {
             service,
             "failed",
             previousStatus?.message ?? "Service failed to start",
-            config.healthUrl,
+            statusUrl,
             normalizeOptionalDate(previousStatus?.startedAt),
           );
+          this.upsertStatus(projectId, status);
+          return status;
+        }
+
+        const startedAt =
+          runningProcess?.startedAt ||
+          normalizeOptionalDate(previousStatus?.startedAt);
+        const startupLogActive = runningProcess
+          ? hasRecentServiceStartupSignal(runningProcess)
+          : false;
+        const stillStarting =
+          Boolean(runningProcess) &&
+          (startupLogActive ||
+            (previousStatus?.state === "starting" &&
+              Boolean(startedAt) &&
+              Date.now() - new Date(startedAt as string).getTime() <
+                SERVICE_STARTING_GRACE_MS));
+
+        if (service === "python") {
+          const port = extractPortFromUrl(config.appUrl);
+          if (!port) {
+            const status = this.statusRecord(
+              service,
+              stillStarting
+                ? "starting"
+                : runningProcess
+                  ? "failed"
+                  : "stopped",
+              "No health check port detected in App URL",
+              statusUrl,
+              stillStarting ? startedAt : undefined,
+            );
+            this.upsertStatus(projectId, status);
+            return status;
+          }
+
+          const portCheck = await checkPortListening(port);
+          const status: ServiceStatusRecord = {
+            service,
+            state: portCheck.listening
+              ? "running"
+              : stillStarting
+                ? "starting"
+                : runningProcess
+                  ? "failed"
+                  : "stopped",
+            message: portCheck.message,
+            url: statusUrl,
+            checkedAt: new Date().toISOString(),
+            startedAt: portCheck.listening
+              ? startedAt || new Date().toISOString()
+              : stillStarting
+                ? startedAt
+                : undefined,
+          };
           this.upsertStatus(projectId, status);
           return status;
         }
@@ -2464,7 +2526,7 @@ export class DashboardBackend {
                   service,
                   "starting",
                   "Startup output detected",
-                  config.healthUrl,
+                  statusUrl,
                   runningProcess.startedAt,
                 )
               : this.statusFromProcess(
@@ -2486,19 +2548,6 @@ export class DashboardBackend {
           service === "wildfly"
             ? wildflyReadyByLog || (!runningProcess && reachable)
             : reachable;
-        const startedAt =
-          runningProcess?.startedAt ||
-          normalizeOptionalDate(previousStatus?.startedAt);
-        const startupLogActive = runningProcess
-          ? hasRecentServiceStartupSignal(runningProcess)
-          : false;
-        const stillStarting =
-          Boolean(runningProcess) &&
-          (startupLogActive ||
-            (previousStatus?.state === "starting" &&
-              Boolean(startedAt) &&
-              Date.now() - new Date(startedAt as string).getTime() <
-                SERVICE_STARTING_GRACE_MS));
         const status: ServiceStatusRecord = {
           service,
           state: canReportRunning
@@ -2512,7 +2561,7 @@ export class DashboardBackend {
             service === "wildfly" && reachable && !canReportRunning
               ? `Waiting for "${WILDFLY_READY_LOG_FRAGMENT}"`
               : health.message,
-          url: config.healthUrl,
+          url: statusUrl,
           checkedAt: new Date().toISOString(),
           startedAt: canReportRunning
             ? startedAt || new Date().toISOString()
@@ -3024,8 +3073,10 @@ export class DashboardBackend {
     pythonServerType: PythonServerType = "custom",
   ): ProjectSettingsRecord {
     const normalizedBackendType = normalizeBackendType(backendType);
-    const normalizedPythonServerType = normalizePythonServerType(pythonServerType);
-    const pythonDefaults = PYTHON_WEB_SERVER_DEFAULTS[normalizedPythonServerType];
+    const normalizedPythonServerType =
+      normalizePythonServerType(pythonServerType);
+    const pythonDefaults =
+      PYTHON_WEB_SERVER_DEFAULTS[normalizedPythonServerType];
     return {
       backendType: normalizedBackendType,
       appLogFile: "",
@@ -3109,7 +3160,7 @@ export class DashboardBackend {
   private getPythonDependencies(
     settings: ProjectSettingsRecord,
   ): PythonDependencyRecord[] {
-    return readPythonDependencies(settings.python.directory.trim());
+    return readPythonDependencies(settings.python);
   }
 
   private writeProjectConfig(
@@ -3137,6 +3188,7 @@ export class DashboardBackend {
   ): Promise<ServiceStatusRecord> {
     const settings = this.getSettings(projectId);
     const config = settings.services[service];
+    const statusUrl = serviceStatusUrl(config, service);
     if (service === "frontend" && !isProjectFrontendEnabled(settings)) {
       return this.statusRecord(
         service,
@@ -3166,7 +3218,7 @@ export class DashboardBackend {
         service,
         "failed",
         RUNNING_SERVER_LIMIT_MESSAGE,
-        config.healthUrl,
+        statusUrl,
       );
       this.upsertStatus(projectId, status);
       this.appendLog(projectId, service, stamp(RUNNING_SERVER_LIMIT_MESSAGE));
@@ -3178,7 +3230,7 @@ export class DashboardBackend {
         service,
         "failed",
         `Working directory does not exist: ${config.workingDirectory}`,
-        config.healthUrl,
+        statusUrl,
       );
       this.upsertStatus(projectId, status);
       return status;
@@ -3189,7 +3241,7 @@ export class DashboardBackend {
         service,
         "failed",
         "No command configured",
-        config.healthUrl,
+        statusUrl,
       );
       this.upsertStatus(projectId, status);
       return status;
@@ -3241,7 +3293,7 @@ export class DashboardBackend {
           service,
           code === 0 ? "stopped" : "failed",
           `Process exited with code ${code ?? "unknown"}`,
-          config.healthUrl,
+          statusUrl,
           serviceProcess.startedAt,
         );
         this.upsertStatus(projectId, status);
@@ -3264,7 +3316,7 @@ export class DashboardBackend {
             service,
             "failed",
             message,
-            config.healthUrl,
+            statusUrl,
             serviceProcess.startedAt,
           ),
         );
@@ -3275,7 +3327,7 @@ export class DashboardBackend {
       service,
       "starting",
       "Process starting",
-      config.healthUrl,
+      statusUrl,
       startedAt,
     );
     this.upsertStatus(projectId, status);
@@ -3298,6 +3350,7 @@ export class DashboardBackend {
     const running = this.serviceProcesses.get(key);
     const settings = this.getSettings(projectId);
     const config = settings.services[service];
+    const statusUrl = serviceStatusUrl(config, service);
     if (service === "frontend" && !isProjectFrontendEnabled(settings)) {
       return this.statusRecord(
         service,
@@ -3311,7 +3364,7 @@ export class DashboardBackend {
       service,
       "stopping",
       "Stopping",
-      config.healthUrl,
+      statusUrl,
       running?.startedAt,
     );
     this.upsertStatus(projectId, stoppingStatus);
@@ -3326,8 +3379,8 @@ export class DashboardBackend {
       }
     } else {
       // Process not tracked (e.g. started before this session).
-      // Best-effort: kill by the port advertised in the health URL.
-      const port = extractPort(config.healthUrl);
+      // Best-effort: kill by the advertised status port.
+      const port = extractPortFromUrl(statusUrl);
       if (port) {
         killProcessByPort(port);
         this.appendLog(
@@ -3350,12 +3403,7 @@ export class DashboardBackend {
       "service",
     );
 
-    const status = this.statusRecord(
-      service,
-      "stopped",
-      "Stopped",
-      config.healthUrl,
-    );
+    const status = this.statusRecord(service, "stopped", "Stopped", statusUrl);
     this.upsertStatus(projectId, status);
     this.clearStoppedServiceDashboardHistory(projectId, service);
     void this.refreshStatus(projectId);
@@ -4318,6 +4366,22 @@ type UrlCheckResult = {
   message: string;
 };
 
+type PortCheckResult = {
+  listening: boolean;
+  message: string;
+};
+
+function serviceStatusUrl(
+  config: { appUrl?: string; healthUrl: string },
+  service: ServiceName,
+): string {
+  return service === "python" ? (config.appUrl ?? "") : config.healthUrl;
+}
+
+function formatPort(port: number | null): string {
+  return port === null ? "" : String(port);
+}
+
 function checkUrl(url: string): Promise<UrlCheckResult> {
   return new Promise((resolvePromise) => {
     let parsed: URL;
@@ -4362,6 +4426,95 @@ function checkUrl(url: string): Promise<UrlCheckResult> {
       }),
     );
     request.end();
+  });
+}
+
+function checkPortListening(port: number): Promise<PortCheckResult> {
+  const command = createPortCheckCommand(port);
+  return new Promise((resolvePromise) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let timedOut = false;
+
+    const child = spawn(command.executable, command.args, {
+      windowsHide: true,
+    });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, 3000);
+
+    const resolveOnce = (result: PortCheckResult): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolvePromise(result);
+    };
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (error) =>
+      resolveOnce({
+        listening: false,
+        message: `Port ${port} check failed: ${error.message}`,
+      }),
+    );
+    child.on("close", () => {
+      if (timedOut) {
+        resolveOnce({
+          listening: false,
+          message: `Port ${port} check timed out`,
+        });
+        return;
+      }
+
+      const output = `${stdout}\n${stderr}`;
+      const listening = hasListeningPortLine(output, port);
+      resolveOnce({
+        listening,
+        message: listening
+          ? `Port ${port} is listening`
+          : `Port ${port} is not listening`,
+      });
+    });
+  });
+}
+
+function createPortCheckCommand(port: number): {
+  executable: string;
+  args: string[];
+} {
+  if (process.platform === "win32") {
+    return {
+      executable: "cmd",
+      args: ["/c", `netstat -ano | findstr :${port}`],
+    };
+  }
+
+  return {
+    executable: "sh",
+    args: [
+      "-c",
+      `if command -v lsof >/dev/null 2>&1; then lsof -nP -iTCP:${port} -sTCP:LISTEN; elif command -v ss >/dev/null 2>&1; then ss -ltnp | grep -E '[:.]${port}\\b'; else netstat -an | grep -E '[:.]${port}\\b'; fi`,
+    ],
+  };
+}
+
+function hasListeningPortLine(output: string, port: number): boolean {
+  const portPattern = new RegExp(`[:.]${port}(?:$|[^0-9])`);
+  return output.split(/\r?\n/).some((line) => {
+    const normalized = line.trim();
+    if (!normalized || !/\bLISTEN(?:ING)?\b/i.test(normalized)) {
+      return false;
+    }
+    return normalized.split(/\s+/).some((token) => portPattern.test(token));
   });
 }
 
@@ -5289,11 +5442,22 @@ function parseAccessLogLine(line: string): ParsedAccessLog | null {
 
 function parseCommonLogDate(value: string): string | undefined {
   // Examples: "22/May/2026 10:00:00" or "22/May/2026:10:00:00 +0000"
-  const match = /^(\d{2})\/([A-Za-z]+)\/(\d{4})[\s:](\d{2}):(\d{2}):(\d{2})/.exec(value);
+  const match =
+    /^(\d{2})\/([A-Za-z]+)\/(\d{4})[\s:](\d{2}):(\d{2}):(\d{2})/.exec(value);
   if (!match) return undefined;
   const months: Record<string, number> = {
-    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11,
+    Jan: 0,
+    Feb: 1,
+    Mar: 2,
+    Apr: 3,
+    May: 4,
+    Jun: 5,
+    Jul: 6,
+    Aug: 7,
+    Sep: 8,
+    Oct: 9,
+    Nov: 10,
+    Dec: 11,
   };
   const month = months[match[2] as keyof typeof months];
   if (month === undefined) return undefined;
@@ -5880,7 +6044,10 @@ function profileChangeCount(
   );
 }
 
-function readPythonDependencies(projectDirectory: string): PythonDependencyRecord[] {
+function readPythonDependencies(
+  python: PythonWebServerConfig,
+): PythonDependencyRecord[] {
+  const projectDirectory = python.directory.trim();
   if (!projectDirectory || !existsSync(projectDirectory)) {
     return [];
   }
@@ -5893,97 +6060,75 @@ function readPythonDependencies(projectDirectory: string): PythonDependencyRecor
     return [];
   }
 
-  const dependencies = new Map<string, PythonDependencyRecord>();
-  for (const file of pythonDependencyFiles(projectDirectory)) {
-    let content = "";
-    try {
-      content = readFileSync(file.path, "utf8");
-    } catch {
+  for (const executable of pythonExecutableCandidates(
+    projectDirectory,
+    python.venvPath,
+  )) {
+    const result = spawnSync(executable, ["-m", "pip", "freeze"], {
+      cwd: projectDirectory,
+      windowsHide: true,
+      encoding: "utf8",
+      timeout: 10000,
+    });
+
+    if (result.error || result.status !== 0) {
       continue;
     }
 
-    for (const dependency of parsePythonDependencyFile(
-      content,
-      file.source,
-      file.kind,
-    )) {
-      addPythonDependency(dependencies, dependency);
-    }
+    return parseRequirementsDependencies(
+      (result.stdout as string) ?? "",
+      "python -m pip freeze",
+    )
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 200);
   }
 
-  return [...dependencies.values()]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .slice(0, 200);
+  return [];
 }
 
-type PythonDependencyFile = {
-  path: string;
-  source: string;
-  kind: "requirements" | "pyproject" | "poetry-lock" | "pipfile" | "pipfile-lock";
-};
-
-function pythonDependencyFiles(
+function pythonExecutableCandidates(
   projectDirectory: string,
-): PythonDependencyFile[] {
-  const files: PythonDependencyFile[] = [];
-
-  try {
-    for (const entry of readdirSync(projectDirectory, { withFileTypes: true })) {
-      if (!entry.isFile()) {
-        continue;
-      }
-
-      const name = entry.name;
-      const lowerName = name.toLowerCase();
-      const path = join(projectDirectory, name);
-
-      if (/^requirements.*\.txt$/i.test(name)) {
-        files.push({ path, source: name, kind: "requirements" });
-      } else if (lowerName === "pyproject.toml") {
-        files.push({ path, source: name, kind: "pyproject" });
-      } else if (lowerName === "poetry.lock") {
-        files.push({ path, source: name, kind: "poetry-lock" });
-      } else if (lowerName === "pipfile") {
-        files.push({ path, source: name, kind: "pipfile" });
-      } else if (lowerName === "pipfile.lock") {
-        files.push({ path, source: name, kind: "pipfile-lock" });
-      }
+  venvPath: string | undefined,
+): string[] {
+  const candidates: string[] = [];
+  for (const venv of pythonVenvCandidates(projectDirectory, venvPath)) {
+    const executable = join(
+      venv,
+      process.platform === "win32" ? "Scripts" : "bin",
+      process.platform === "win32" ? "python.exe" : "python",
+    );
+    if (existsSync(executable)) {
+      candidates.push(executable);
     }
-  } catch {
-    return [];
   }
 
-  return files;
+  candidates.push("python");
+  if (process.platform !== "win32") {
+    candidates.push("python3");
+  }
+
+  return [...new Set(candidates)];
 }
 
-function parsePythonDependencyFile(
-  content: string,
-  source: string,
-  kind: "requirements" | "pyproject" | "poetry-lock" | "pipfile" | "pipfile-lock",
-): PythonDependencyRecord[] {
-  switch (kind) {
-    case "requirements":
-      return parseRequirementsDependencies(content, source);
-    case "pyproject":
-      return parsePyprojectDependencies(content, source);
-    case "poetry-lock":
-      return parsePoetryLockDependencies(content, source);
-    case "pipfile":
-      return parsePipfileDependencies(content, source);
-    case "pipfile-lock":
-      return parsePipfileLockDependencies(content, source);
+function pythonVenvCandidates(
+  projectDirectory: string,
+  venvPath: string | undefined,
+): string[] {
+  const candidates: string[] = [];
+  const normalizedVenvPath = (venvPath ?? "").trim().replace(/[\\/]+$/, "");
+  if (normalizedVenvPath) {
+    candidates.push(
+      isAbsolute(normalizedVenvPath)
+        ? normalizedVenvPath
+        : join(projectDirectory, normalizedVenvPath),
+    );
   }
-}
 
-function addPythonDependency(
-  dependencies: Map<string, PythonDependencyRecord>,
-  dependency: PythonDependencyRecord,
-): void {
-  const key = dependency.name.toLowerCase();
-  const existing = dependencies.get(key);
-  if (!existing || existing.version === "Unpinned") {
-    dependencies.set(key, dependency);
-  }
+  candidates.push(
+    join(projectDirectory, ".venv"),
+    join(projectDirectory, "venv"),
+  );
+  return [...new Set(candidates)];
 }
 
 function parseRequirementsDependencies(
@@ -6006,6 +6151,15 @@ function parseRequirementSpec(
     .replace(/\s+#.*$/, "")
     .split(";")[0]
     .trim();
+  const editable = cleaned.match(/^-e\s+.+[#&]egg=([A-Za-z0-9_.-]+)/iu);
+  if (editable) {
+    return {
+      name: normalizePythonDependencyName(editable[1]),
+      version: "Editable install",
+      source,
+    };
+  }
+
   if (
     !cleaned ||
     cleaned.startsWith("#") ||
@@ -6048,128 +6202,6 @@ function parseRequirementSpec(
     version: "Unpinned",
     source,
   };
-}
-
-function parsePyprojectDependencies(
-  content: string,
-  source: string,
-): PythonDependencyRecord[] {
-  const dependencies: PythonDependencyRecord[] = [];
-  for (const arrayMatch of content.matchAll(
-    /(?:^|\n)\s*dependencies\s*=\s*\[([\s\S]*?)\]/gu,
-  )) {
-    for (const itemMatch of arrayMatch[1].matchAll(/["']([^"']+)["']/gu)) {
-      const dependency = parseRequirementSpec(itemMatch[1], source);
-      if (dependency) {
-        dependencies.push(dependency);
-      }
-    }
-  }
-
-  const poetrySection = content.match(
-    /(?:^|\n)\[tool\.poetry\.dependencies\]([\s\S]*?)(?=\n\[|$)/u,
-  );
-  if (poetrySection) {
-    dependencies.push(...parseTomlDependencySection(poetrySection[1], source));
-  }
-
-  return dependencies;
-}
-
-function parsePipfileDependencies(
-  content: string,
-  source: string,
-): PythonDependencyRecord[] {
-  const packagesSection = content.match(
-    /(?:^|\n)\[packages\]([\s\S]*?)(?=\n\[|$)/u,
-  );
-  return packagesSection
-    ? parseTomlDependencySection(packagesSection[1], source)
-    : [];
-}
-
-function parseTomlDependencySection(
-  content: string,
-  source: string,
-): PythonDependencyRecord[] {
-  const dependencies: PythonDependencyRecord[] = [];
-  for (const line of content.split(/\r?\n/)) {
-    const cleaned = line.replace(/\s+#.*$/, "").trim();
-    if (!cleaned) {
-      continue;
-    }
-
-    const match = cleaned.match(/^["']?([^"'=]+?)["']?\s*=\s*(.+)$/u);
-    if (!match) {
-      continue;
-    }
-
-    const name = normalizePythonDependencyName(match[1].trim());
-    if (name.toLowerCase() === "python") {
-      continue;
-    }
-
-    const value = match[2].trim();
-    const inlineVersion = value.match(/version\s*=\s*["']([^"']+)["']/u);
-    const stringVersion = value.match(/^["']([^"']+)["']/u);
-    const version = inlineVersion?.[1] ?? stringVersion?.[1] ?? "Unpinned";
-    dependencies.push({
-      name,
-      version: version === "*" ? "Unpinned" : version,
-      source,
-    });
-  }
-
-  return dependencies;
-}
-
-function parsePoetryLockDependencies(
-  content: string,
-  source: string,
-): PythonDependencyRecord[] {
-  return content
-    .split(/\n(?=\[\[package\]\])/u)
-    .map((block) => {
-      const name = block.match(/(?:^|\n)name\s*=\s*["']([^"']+)["']/u)?.[1];
-      const version = block.match(
-        /(?:^|\n)version\s*=\s*["']([^"']+)["']/u,
-      )?.[1];
-      return name && version
-        ? {
-            name: normalizePythonDependencyName(name),
-            version,
-            source,
-          }
-        : null;
-    })
-    .filter((dependency): dependency is PythonDependencyRecord =>
-      Boolean(dependency),
-    );
-}
-
-function parsePipfileLockDependencies(
-  content: string,
-  source: string,
-): PythonDependencyRecord[] {
-  try {
-    const parsed = JSON.parse(content) as {
-      default?: Record<string, { version?: unknown }>;
-      develop?: Record<string, { version?: unknown }>;
-    };
-    return Object.entries({
-      ...(parsed.default ?? {}),
-      ...(parsed.develop ?? {}),
-    }).map(([name, metadata]) => ({
-      name: normalizePythonDependencyName(name),
-      version:
-        typeof metadata.version === "string" && metadata.version.trim()
-          ? metadata.version
-          : "Unpinned",
-      source,
-    }));
-  } catch {
-    return [];
-  }
 }
 
 function normalizePythonDependencyName(name: string): string {
@@ -6228,16 +6260,6 @@ function formatTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
-}
-
-function extractPort(url: string): number | null {
-  try {
-    const parsed = new URL(url);
-    const port = parseInt(parsed.port, 10);
-    return isNaN(port) ? null : port;
-  } catch {
-    return null;
-  }
 }
 
 function killProcessByPort(port: number): void {

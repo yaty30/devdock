@@ -72,6 +72,39 @@ export function normalizePythonServerType(value: unknown): PythonServerType {
     : "custom";
 }
 
+export function extractPortFromUrl(value: string | undefined): number | null {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    try {
+      parsed = new URL(`http://${trimmed}`);
+    } catch {
+      return null;
+    }
+  }
+
+  if (parsed.port) {
+    const port = Number.parseInt(parsed.port, 10);
+    return Number.isInteger(port) && port > 0 && port <= 65535 ? port : null;
+  }
+
+  if (parsed.protocol === "http:") {
+    return 80;
+  }
+
+  if (parsed.protocol === "https:") {
+    return 443;
+  }
+
+  return null;
+}
+
 export function getProjectBackendUrl(settings: ProjectSettingsRecord): string {
   if (settings.backendType === "python") {
     return settings.python.appUrl || settings.python.healthCheckUrl || "";
