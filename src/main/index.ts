@@ -13,6 +13,14 @@ import type {
   SaveDialogOptions,
 } from "electron";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdir as mkdirAsync,
+  readFile,
+  readdir,
+  rename as renameAsync,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -41,6 +49,9 @@ import type {
   BackendType,
   PythonServerType,
   RecentBuildRecord,
+  DirectoryEntry,
+  FilePreviewResult,
+  DirectoryListResult,
   SshConnectRequest,
 } from "../shared/dashboardTypes";
 import type {
@@ -92,6 +103,8 @@ const DEFAULT_CHAT_SERVICE_HOST =
   process.env.IVS_DASHBOARD_CHAT_HOST ??
   uncHostFromPath(DEFAULT_CHAT_ROOT) ??
   "127.0.0.1";
+const FILE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
+const FILE_PREVIEW_SAMPLE_BYTES = 4096;
 const DEFAULT_CHAT_BIND_HOST =
   process.env.IVS_DASHBOARD_CHAT_BIND_HOST ??
   (isLoopbackHost(DEFAULT_CHAT_SERVICE_HOST)
@@ -167,6 +180,77 @@ function registerIpc(): void {
   );
   ipcMain.handle("ssh:exec", (_event, sessionId: string, command: string) =>
     withLoggedErrors("ssh:exec", () => sshService.exec(sessionId, command)),
+  );
+  ipcMain.handle("ssh:write", (_event, sessionId: string, data: string) =>
+    withLoggedErrors("ssh:write", () => sshService.write(sessionId, data)),
+  );
+  ipcMain.handle("fs:listLocalDirectory", (_event, path?: string | null) =>
+    withLoggedErrors("fs:listLocalDirectory", () => listLocalDirectory(path)),
+  );
+  ipcMain.handle(
+    "fs:createDirectory",
+    (_event, parentPath: string, name: string) =>
+      withLoggedErrors("fs:createDirectory", () =>
+        createLocalDirectory(parentPath, name),
+      ),
+  );
+  ipcMain.handle("fs:renamePath", (_event, path: string, newName: string) =>
+    withLoggedErrors("fs:renamePath", () => renameLocalPath(path, newName)),
+  );
+  ipcMain.handle("fs:deletePath", (_event, path: string) =>
+    withLoggedErrors("fs:deletePath", () => deleteLocalPath(path)),
+  );
+  ipcMain.handle("fs:previewFile", (_event, path: string) =>
+    withLoggedErrors("fs:previewFile", () => previewLocalFile(path)),
+  );
+  ipcMain.handle(
+    "ssh:listDirectory",
+    (_event, sessionId: string, path?: string | null) =>
+      withLoggedErrors("ssh:listDirectory", () =>
+        sshService.listDirectory(sessionId, path),
+      ),
+  );
+  ipcMain.handle(
+    "ssh:createDirectory",
+    (_event, sessionId: string, parentPath: string, name: string) =>
+      withLoggedErrors("ssh:createDirectory", () =>
+        sshService.createDirectory(sessionId, parentPath, name),
+      ),
+  );
+  ipcMain.handle(
+    "ssh:renamePath",
+    (_event, sessionId: string, path: string, newName: string) =>
+      withLoggedErrors("ssh:renamePath", () =>
+        sshService.renamePath(sessionId, path, newName),
+      ),
+  );
+  ipcMain.handle(
+    "ssh:deletePath",
+    (_event, sessionId: string, path: string, type: "file" | "folder") =>
+      withLoggedErrors("ssh:deletePath", () =>
+        sshService.deletePath(sessionId, path, type),
+      ),
+  );
+  ipcMain.handle(
+    "ssh:uploadFile",
+    (_event, sessionId: string, localPath: string, remoteDirectory: string) =>
+      withLoggedErrors("ssh:uploadFile", () =>
+        sshService.uploadFile(sessionId, localPath, remoteDirectory),
+      ),
+  );
+  ipcMain.handle(
+    "ssh:downloadFile",
+    (_event, sessionId: string, remotePath: string, localDirectory: string) =>
+      withLoggedErrors("ssh:downloadFile", () =>
+        sshService.downloadFile(sessionId, remotePath, localDirectory),
+      ),
+  );
+  ipcMain.handle(
+    "ssh:previewFile",
+    (_event, sessionId: string, remotePath: string) =>
+      withLoggedErrors("ssh:previewFile", () =>
+        sshService.previewFile(sessionId, remotePath),
+      ),
   );
   ipcMain.handle(
     API_TESTER_REQUEST_CHANNEL,
@@ -610,6 +694,369 @@ async function withLoggedErrors<T>(
     console.error(`[${label}]`, error);
     throw error;
   }
+}
+
+async function listLocalDirectory(
+  requestedPath?: string | null,
+): Promise<DirectoryListResult> {
+  const targetPath = requestedPath?.trim() || getLocalHomePath();
+  try {
+    const entries = await readdir(targetPath, { withFileTypes: true });
+    const items: DirectoryEntry[] = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory() || entry.isFile())
+        .map(async (entry) => {
+          const fullPath = join(targetPath, entry.name);
+          const stats = await stat(fullPath);
+          return {
+            name: entry.name,
+            path: fullPath,
+            type: entry.isDirectory() ? "folder" : "file",
+            size: entry.isDirectory() ? null : stats.size,
+            modifiedMs: stats.mtimeMs,
+          };
+        }),
+    );
+
+    return {
+      ok: true,
+      path: targetPath,
+      items: sortDirectoryItems(items),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      path: targetPath,
+      items: [],
+      error: error instanceof Error ? error.message : "Unable to list directory.",
+    };
+  }
+}
+
+async function createLocalDirectory(
+  parentPath: string,
+  name: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const safeName = sanitizeDirectoryActionName(name);
+  if (!safeName) {
+    return { ok: false, error: "Folder name is required." };
+  }
+
+  try {
+    await mkdirAsync(join(parentPath, safeName));
+    return { ok: true };
+  } catch (error) {
+    return formatDirectoryActionError(error, "Unable to create folder.");
+  }
+}
+
+async function renameLocalPath(
+  path: string,
+  newName: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const safeName = sanitizeDirectoryActionName(newName);
+  if (!safeName) {
+    return { ok: false, error: "New name is required." };
+  }
+
+  try {
+    await renameAsync(path, join(dirname(path), safeName));
+    return { ok: true };
+  } catch (error) {
+    return formatDirectoryActionError(error, "Unable to rename item.");
+  }
+}
+
+async function deleteLocalPath(path: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await rm(path, { recursive: true, force: false });
+    return { ok: true };
+  } catch (error) {
+    return formatDirectoryActionError(error, "Unable to delete item.");
+  }
+}
+
+async function previewLocalFile(path: string): Promise<FilePreviewResult> {
+  const fileName = path.split(/[\\/]/).pop() ?? path;
+  const initialMetadata = getPreviewMetadata(fileName);
+
+  try {
+    const stats = await stat(path);
+    if (stats.size > FILE_PREVIEW_MAX_BYTES) {
+      return {
+        ok: false,
+        kind: initialMetadata.kind,
+        fileName,
+        mimeType: initialMetadata.mimeType,
+        error: "Preview is limited to files 5 MB or smaller.",
+      };
+    }
+    const buffer = await readFile(path);
+    const metadata = resolvePreviewMetadata(fileName, initialMetadata, buffer);
+    if (metadata.kind === "unsupported") {
+      return { ok: true, fileName, ...metadata };
+    }
+    return formatPreviewBuffer(fileName, metadata, buffer);
+  } catch (error) {
+    return {
+      ok: false,
+      kind: initialMetadata.kind,
+      fileName,
+      mimeType: initialMetadata.mimeType,
+      error: error instanceof Error ? error.message : "Unable to preview file.",
+    };
+  }
+}
+
+function getLocalHomePath(): string {
+  const homeDrive = process.env.HOMEDRIVE ?? "";
+  const homePath = process.env.HOMEPATH ?? "";
+  const windowsHome = `${homeDrive}${homePath}`.trim();
+  return windowsHome || os.homedir();
+}
+
+function sanitizeDirectoryActionName(name: string): string {
+  const trimmed = name.trim();
+  return trimmed === "." || trimmed === ".." || /[\\/]/.test(trimmed)
+    ? ""
+    : trimmed;
+}
+
+function formatDirectoryActionError(
+  error: unknown,
+  fallback: string,
+): { ok: false; error: string } {
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : fallback,
+  };
+}
+
+function getPreviewMetadata(
+  fileName: string,
+): { kind: FilePreviewResult["kind"]; mimeType: string } {
+  const extension = extname(fileName).toLowerCase();
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extension)) {
+    return { kind: "image", mimeType: getImageMimeType(extension) };
+  }
+  if (extension === ".pdf") {
+    return { kind: "pdf", mimeType: "application/pdf" };
+  }
+  if (extension === ".json") {
+    return { kind: "json", mimeType: "application/json" };
+  }
+  if ([".xml", ".xsd", ".xsl"].includes(extension)) {
+    return { kind: "xml", mimeType: "application/xml" };
+  }
+  if ([".txt", ".log", ".md", ".csv", ".ini", ".env", ".yaml", ".yml"].includes(extension)) {
+    return { kind: "text", mimeType: "text/plain" };
+  }
+  const mimeType = getKnownMimeType(extension);
+  if (isPreviewableTextMimeType(mimeType)) {
+    return { kind: "text", mimeType };
+  }
+  return { kind: "unsupported", mimeType };
+}
+
+function resolvePreviewMetadata(
+  fileName: string,
+  metadata: { kind: FilePreviewResult["kind"]; mimeType: string },
+  buffer: Buffer,
+): { kind: FilePreviewResult["kind"]; mimeType: string } {
+  if (metadata.kind !== "unsupported" || isKnownPreviewExtension(fileName)) {
+    return metadata;
+  }
+  if (isPreviewableTextMimeType(metadata.mimeType) || looksLikeText(buffer)) {
+    return {
+      kind: "text",
+      mimeType: metadata.mimeType === "application/octet-stream" ? "text/plain" : metadata.mimeType,
+    };
+  }
+  return metadata;
+}
+
+function isKnownPreviewExtension(fileName: string): boolean {
+  return [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".svg",
+    ".pdf",
+    ".json",
+    ".xml",
+    ".xsd",
+    ".xsl",
+    ".txt",
+    ".log",
+    ".md",
+    ".csv",
+    ".ini",
+    ".env",
+    ".yaml",
+    ".yml",
+  ].includes(extname(fileName).toLowerCase());
+}
+
+function getKnownMimeType(extension: string): string {
+  switch (extension) {
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return "application/javascript";
+    case ".ts":
+    case ".tsx":
+      return "application/typescript";
+    case ".css":
+      return "text/css";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".sql":
+      return "application/sql";
+    case ".toml":
+      return "application/toml";
+    case ".properties":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function isPreviewableTextMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("text/") || [
+    "application/json",
+    "application/xml",
+    "application/javascript",
+    "application/typescript",
+    "application/x-yaml",
+    "application/yaml",
+    "application/toml",
+    "application/sql",
+    "application/x-sh",
+    "application/x-shellscript",
+  ].includes(mimeType);
+}
+
+function looksLikeText(buffer: Buffer): boolean {
+  const sample = buffer.subarray(0, FILE_PREVIEW_SAMPLE_BYTES);
+  if (sample.length === 0) {
+    return true;
+  }
+  if (sample.includes(0)) {
+    return looksLikeUtf16Text(sample);
+  }
+  const decoded = sample.toString("utf8");
+  if (decoded.includes("\uFFFD")) {
+    return false;
+  }
+  return !containsBinaryControlCharacters(decoded);
+}
+
+function looksLikeUtf16Text(sample: Buffer): boolean {
+  if (sample.length < 4) {
+    return false;
+  }
+  const evenNulls = countNullBytes(sample, 0);
+  const oddNulls = countNullBytes(sample, 1);
+  const pairs = Math.floor(sample.length / 2);
+  if (evenNulls / pairs < 0.3 && oddNulls / pairs < 0.3) {
+    return false;
+  }
+  const decoded = evenNulls > oddNulls
+    ? swapUtf16ByteOrder(sample).toString("utf16le")
+    : sample.toString("utf16le");
+  return !decoded.includes("\uFFFD") && !containsBinaryControlCharacters(decoded);
+}
+
+function swapUtf16ByteOrder(sample: Buffer): Buffer {
+  const swapped = Buffer.from(sample);
+  for (let index = 0; index + 1 < swapped.length; index += 2) {
+    const first = swapped[index];
+    swapped[index] = swapped[index + 1];
+    swapped[index + 1] = first;
+  }
+  return swapped;
+}
+
+function countNullBytes(sample: Buffer, offset: number): number {
+  let count = 0;
+  for (let index = offset; index < sample.length; index += 2) {
+    if (sample[index] === 0) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function containsBinaryControlCharacters(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13 && code !== 12) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getImageMimeType(extension: string): string {
+  switch (extension) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
+    default:
+      return "image/png";
+  }
+}
+
+function formatPreviewBuffer(
+  fileName: string,
+  metadata: { kind: FilePreviewResult["kind"]; mimeType: string },
+  buffer: Buffer,
+): FilePreviewResult {
+  if (metadata.kind === "image" || metadata.kind === "pdf") {
+    return {
+      ok: true,
+      kind: metadata.kind,
+      fileName,
+      mimeType: metadata.mimeType,
+      content: buffer.toString("base64"),
+      encoding: "base64",
+    };
+  }
+
+  return {
+    ok: true,
+    kind: metadata.kind,
+    fileName,
+    mimeType: metadata.mimeType,
+    content: buffer.toString("utf8"),
+    encoding: "utf8",
+  };
+}
+
+function sortDirectoryItems<T extends { name: string; type: "file" | "folder" }>(
+  items: T[],
+): T[] {
+  return [...items].sort((left, right) => {
+    if (left.type !== right.type) {
+      return left.type === "folder" ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
 }
 
 async function sendApiTesterRequest(
@@ -1527,6 +1974,14 @@ const createWindow = (): void => {
   mainWindow.on("unmaximize", emitMaximizedState);
   mainWindow.on("enter-full-screen", emitMaximizedState);
   mainWindow.on("leave-full-screen", emitMaximizedState);
+
+  sshService.setShellDataSink((sessionId, data) => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    win.webContents.send("ssh:shell-data", { sessionId, data });
+  });
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;

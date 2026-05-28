@@ -1,22 +1,36 @@
 import { randomUUID } from "node:crypto";
+import { join as joinLocalPath, posix } from "node:path";
 import { Client } from "ssh2";
-import type { ClientChannel, ConnectConfig } from "ssh2";
 import type {
+  ClientChannel,
+  ConnectConfig,
+  FileEntryWithStats,
+  SFTPWrapper,
+} from "ssh2";
+import type {
+  DirectoryActionResult,
+  DirectoryListResult,
+  FilePreviewResult,
   SshConnectRequest,
   SshConnectResult,
   SshDisconnectResult,
   SshExecResult,
+  SshWriteResult,
 } from "../shared/dashboardTypes";
+
+export type SshShellDataSink = (sessionId: string, data: string) => void;
 
 type SshSession = {
   id: string;
   serverId: string;
   client: Client;
+  sftp?: SFTPWrapper;
   shell?: ClientChannel;
   shellReady?: Promise<string>;
   pending?: boolean;
   shellPending?: PendingShellCommand;
   cwd?: string;
+  homeCwd?: string;
 };
 
 type PendingShellCommand = {
@@ -27,8 +41,33 @@ type PendingShellCommand = {
   resolve: (result: SshExecResult) => void;
 };
 
+const FILE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
+const FILE_PREVIEW_SAMPLE_BYTES = 4096;
+
 export class SshService {
   private readonly sessions = new Map<string, SshSession>();
+  private shellDataSink: SshShellDataSink | null = null;
+
+  setShellDataSink(sink: SshShellDataSink | null): void {
+    this.shellDataSink = sink;
+  }
+
+  write(sessionId: string, data: string): Promise<SshWriteResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return Promise.resolve({ ok: false, error: "SSH session is not active." });
+    }
+    return this.ensureShell(session)
+      .then(() => {
+        try {
+          session.shell?.write(data);
+          return { ok: true } as SshWriteResult;
+        } catch (error) {
+          return { ok: false, error: formatError(error) } as SshWriteResult;
+        }
+      })
+      .catch((error) => ({ ok: false, error: formatError(error) } as SshWriteResult));
+  }
 
   connect(request: SshConnectRequest): Promise<SshConnectResult> {
     const endpoint = parseSshAddress(request.address);
@@ -49,6 +88,18 @@ export class SshService {
       readyTimeout: 15000,
       keepaliveInterval: 15000,
     };
+    const hmac = parseAlgorithmList(request.macs);
+    const cipher = parseAlgorithmList(request.ciphers);
+    if (hmac.length > 0 || cipher.length > 0) {
+      const algorithms: NonNullable<ConnectConfig["algorithms"]> = {};
+      if (hmac.length > 0) {
+        algorithms.hmac = hmac as NonNullable<typeof algorithms.hmac>;
+      }
+      if (cipher.length > 0) {
+        algorithms.cipher = cipher as NonNullable<typeof algorithms.cipher>;
+      }
+      config.algorithms = algorithms;
+    }
 
     return new Promise((resolve) => {
       let settled = false;
@@ -72,7 +123,19 @@ export class SshService {
         client.once("close", () => {
           this.sessions.delete(sessionId);
         });
-        finish({ ok: true, sessionId });
+        void getRemoteWorkingDirectory(client)
+          .then((cwd) => {
+            session.cwd = cwd || undefined;
+            session.homeCwd = session.cwd;
+            finish({ ok: true, sessionId, cwd: session.cwd });
+          })
+          .catch(() => {
+            finish({ ok: true, sessionId });
+          })
+          .finally(() => {
+            // Eagerly open the interactive shell so the renderer can stream output and send raw input.
+            void this.ensureShell(session).catch(() => undefined);
+          });
       });
 
       client.on("error", (error) => {
@@ -140,6 +203,157 @@ export class SshService {
     }
 
     return this.execInShell(session, trimmed);
+  }
+
+  async listDirectory(
+    sessionId: string,
+    requestedPath?: string | null,
+  ): Promise<DirectoryListResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        path: requestedPath?.trim() || "",
+        items: [],
+        error: "SSH session is not active.",
+      };
+    }
+
+    const targetPath = requestedPath?.trim() || session.cwd || ".";
+    try {
+      const sftp = await this.ensureSftp(session);
+      const list = await readRemoteDirectory(sftp, targetPath);
+      return {
+        ok: true,
+        path: targetPath,
+        items: sortDirectoryItems(
+          list
+            .filter((entry) =>
+              entry.attrs.isDirectory() || entry.attrs.isFile(),
+            )
+            .map((entry) => ({
+              name: entry.filename,
+              path: joinRemotePath(targetPath, entry.filename),
+              type: entry.attrs.isDirectory() ? "folder" : "file",
+              size: entry.attrs.isDirectory() ? null : entry.attrs.size,
+              modifiedMs: entry.attrs.mtime ? entry.attrs.mtime * 1000 : null,
+            })),
+        ),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        path: targetPath,
+        items: [],
+        error: error instanceof Error ? error.message : "Unable to list directory.",
+      };
+    }
+  }
+
+  async createDirectory(
+    sessionId: string,
+    parentPath: string,
+    name: string,
+  ): Promise<DirectoryActionResult> {
+    const safeName = sanitizeRemoteActionName(name);
+    if (!safeName) {
+      return { ok: false, error: "Folder name is required." };
+    }
+    return this.withSftp(sessionId, (sftp) =>
+      sftpAction((resolve) =>
+        sftp.mkdir(joinRemotePath(parentPath, safeName), resolve),
+      ),
+    );
+  }
+
+  async renamePath(
+    sessionId: string,
+    path: string,
+    newName: string,
+  ): Promise<DirectoryActionResult> {
+    const safeName = sanitizeRemoteActionName(newName);
+    if (!safeName) {
+      return { ok: false, error: "New name is required." };
+    }
+    return this.withSftp(sessionId, (sftp) =>
+      sftpAction((resolve) =>
+        sftp.rename(path, joinRemotePath(posix.dirname(path), safeName), resolve),
+      ),
+    );
+  }
+
+  async deletePath(
+    sessionId: string,
+    path: string,
+    type: "file" | "folder",
+  ): Promise<DirectoryActionResult> {
+    return this.withSftp(sessionId, (sftp) =>
+      sftpAction((resolve) => {
+        if (type === "folder") {
+          sftp.rmdir(path, resolve);
+        } else {
+          sftp.unlink(path, resolve);
+        }
+      }),
+    );
+  }
+
+  async uploadFile(
+    sessionId: string,
+    localPath: string,
+    remoteDirectory: string,
+  ): Promise<DirectoryActionResult> {
+    return this.withSftp(sessionId, (sftp) =>
+      sftpAction((resolve) =>
+        sftp.fastPut(
+          localPath,
+          joinRemotePath(remoteDirectory, getLocalPathBaseName(localPath)),
+          resolve,
+        ),
+      ),
+    );
+  }
+
+  async downloadFile(
+    sessionId: string,
+    remotePath: string,
+    localDirectory: string,
+  ): Promise<DirectoryActionResult> {
+    return this.withSftp(sessionId, (sftp) =>
+      sftpAction((resolve) =>
+        sftp.fastGet(
+          remotePath,
+          joinLocalPath(localDirectory, posix.basename(remotePath)),
+          resolve,
+        ),
+      ),
+    );
+  }
+
+  async previewFile(
+    sessionId: string,
+    remotePath: string,
+  ): Promise<FilePreviewResult> {
+    const fileName = posix.basename(remotePath);
+    const initialMetadata = getPreviewMetadata(fileName);
+
+    return this.withSftpPreview(sessionId, async (sftp) => {
+      const buffer = await readRemoteFile(sftp, remotePath);
+      if (buffer.byteLength > FILE_PREVIEW_MAX_BYTES) {
+        return {
+          ok: false,
+          kind: initialMetadata.kind,
+          fileName,
+          mimeType: initialMetadata.mimeType,
+          error: "Preview is limited to files 5 MB or smaller.",
+        };
+      }
+      const metadata = resolvePreviewMetadata(fileName, initialMetadata, buffer);
+      if (metadata.kind === "unsupported") {
+        return { ok: true, fileName, ...metadata };
+      }
+      return formatPreviewBuffer(fileName, metadata, buffer);
+    });
   }
 
   disconnectAll(): void {
@@ -237,7 +451,75 @@ export class SshService {
     return session.shellReady;
   }
 
+  private ensureSftp(session: SshSession): Promise<SFTPWrapper> {
+    if (session.sftp) {
+      return Promise.resolve(session.sftp);
+    }
+
+    return new Promise<SFTPWrapper>((resolve, reject) => {
+      session.client.sftp((error, sftp) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        session.sftp = sftp;
+        resolve(sftp);
+      });
+    });
+  }
+
+  private async withSftp(
+    sessionId: string,
+    action: (sftp: SFTPWrapper) => Promise<DirectoryActionResult>,
+  ): Promise<DirectoryActionResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return { ok: false, error: "SSH session is not active." };
+    }
+
+    try {
+      return await action(await this.ensureSftp(session));
+    } catch (error) {
+      return formatDirectoryActionError(error, "SSH file operation failed.");
+    }
+  }
+
+  private async withSftpPreview(
+    sessionId: string,
+    action: (sftp: SFTPWrapper) => Promise<FilePreviewResult>,
+  ): Promise<FilePreviewResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return {
+        ok: false,
+        kind: "unsupported",
+        fileName: "",
+        mimeType: "application/octet-stream",
+        error: "SSH session is not active.",
+      };
+    }
+
+    try {
+      return await action(await this.ensureSftp(session));
+    } catch (error) {
+      return {
+        ok: false,
+        kind: "unsupported",
+        fileName: "",
+        mimeType: "application/octet-stream",
+        error: error instanceof Error ? error.message : "Unable to preview file.",
+      };
+    }
+  }
+
   private handleShellData(session: SshSession, text: string): void {
+    if (this.shellDataSink) {
+      try {
+        this.shellDataSink(session.id, text);
+      } catch {
+        // ignore sink errors
+      }
+    }
     if (session.shellPending) {
       this.handleCommandData(session, text);
     }
@@ -277,8 +559,10 @@ export class SshService {
     }
     session.pending = false;
     session.shellPending = undefined;
+    const stdout = cleanInteractiveShellOutput(pending.output, pending.command);
+    updateShellCwdFromCommand(session, pending.command, stdout);
     pending.resolve({
-      stdout: cleanInteractiveShellOutput(pending.output, pending.command),
+      stdout,
       stderr: "",
       exitCode: null,
       cwd: session.cwd,
@@ -310,6 +594,16 @@ export class SshService {
   }
 }
 
+function parseAlgorithmList(value?: string): string[] {
+  if (!value) {
+    return [];
+  }
+  return value
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
 function parseSshAddress(address: string): { host: string; port: number } | null {
   const trimmed = address.trim();
   if (!trimmed) {
@@ -333,6 +627,370 @@ function parseSshAddress(address: string): { host: string; port: number } | null
 
 function cleanShellOutput(output: string): string {
   return output.replace(/^\n+/, "").replace(/\n+$/, "");
+}
+
+function getRemoteWorkingDirectory(client: Client): Promise<string> {
+  return new Promise((resolve, reject) => {
+    client.exec("pwd", (error, stream) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      let output = "";
+      stream.on("data", (chunk: Buffer | string) => {
+        output += toText(chunk);
+      });
+      stream.stderr.on("data", () => undefined);
+      stream.once("error", reject);
+      stream.once("close", () => {
+        const cwd = normalizeLineEndings(output)
+          .split("\n")
+          .map((line) => line.trim())
+          .find(Boolean);
+        resolve(cwd ?? "");
+      });
+    });
+  });
+}
+
+function readRemoteDirectory(
+  sftp: SFTPWrapper,
+  path: string,
+): Promise<FileEntryWithStats[]> {
+  return new Promise((resolve, reject) => {
+    sftp.readdir(path, (error, list) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(list);
+    });
+  });
+}
+
+function readRemoteFile(sftp: SFTPWrapper, path: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    sftp.readFile(path, (error, buffer) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(buffer);
+    });
+  });
+}
+
+function sftpAction(
+  run: (resolve: (error?: Error | null) => void) => void,
+): Promise<DirectoryActionResult> {
+  return new Promise((resolve) => {
+    run((error?: Error | null) => {
+      if (error) {
+        resolve(formatDirectoryActionError(error, "SSH file operation failed."));
+        return;
+      }
+      resolve({ ok: true });
+    });
+  });
+}
+
+function joinRemotePath(parentPath: string, name: string): string {
+  const base = parentPath.trim() || "/";
+  return posix.join(base, name);
+}
+
+function sanitizeRemoteActionName(name: string): string {
+  const trimmed = name.trim();
+  return trimmed === "." || trimmed === ".." || trimmed.includes("/")
+    ? ""
+    : trimmed;
+}
+
+function getLocalPathBaseName(path: string): string {
+  return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "upload";
+}
+
+function formatDirectoryActionError(
+  error: unknown,
+  fallback: string,
+): { ok: false; error: string } {
+  return {
+    ok: false,
+    error: error instanceof Error ? error.message : fallback,
+  };
+}
+
+function getPreviewMetadata(
+  fileName: string,
+): { kind: FilePreviewResult["kind"]; mimeType: string } {
+  const extension = posix.extname(fileName).toLowerCase();
+  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extension)) {
+    return { kind: "image", mimeType: getImageMimeType(extension) };
+  }
+  if (extension === ".pdf") {
+    return { kind: "pdf", mimeType: "application/pdf" };
+  }
+  if (extension === ".json") {
+    return { kind: "json", mimeType: "application/json" };
+  }
+  if ([".xml", ".xsd", ".xsl"].includes(extension)) {
+    return { kind: "xml", mimeType: "application/xml" };
+  }
+  if ([".txt", ".log", ".md", ".csv", ".ini", ".env", ".yaml", ".yml"].includes(extension)) {
+    return { kind: "text", mimeType: "text/plain" };
+  }
+  const mimeType = getKnownMimeType(extension);
+  if (isPreviewableTextMimeType(mimeType)) {
+    return { kind: "text", mimeType };
+  }
+  return { kind: "unsupported", mimeType };
+}
+
+function resolvePreviewMetadata(
+  fileName: string,
+  metadata: { kind: FilePreviewResult["kind"]; mimeType: string },
+  buffer: Buffer,
+): { kind: FilePreviewResult["kind"]; mimeType: string } {
+  if (metadata.kind !== "unsupported" || isKnownPreviewExtension(fileName)) {
+    return metadata;
+  }
+  if (isPreviewableTextMimeType(metadata.mimeType) || looksLikeText(buffer)) {
+    return {
+      kind: "text",
+      mimeType: metadata.mimeType === "application/octet-stream" ? "text/plain" : metadata.mimeType,
+    };
+  }
+  return metadata;
+}
+
+function isKnownPreviewExtension(fileName: string): boolean {
+  return [
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".svg",
+    ".pdf",
+    ".json",
+    ".xml",
+    ".xsd",
+    ".xsl",
+    ".txt",
+    ".log",
+    ".md",
+    ".csv",
+    ".ini",
+    ".env",
+    ".yaml",
+    ".yml",
+  ].includes(posix.extname(fileName).toLowerCase());
+}
+
+function getKnownMimeType(extension: string): string {
+  switch (extension) {
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return "application/javascript";
+    case ".ts":
+    case ".tsx":
+      return "application/typescript";
+    case ".css":
+      return "text/css";
+    case ".html":
+    case ".htm":
+      return "text/html";
+    case ".sql":
+      return "application/sql";
+    case ".toml":
+      return "application/toml";
+    case ".properties":
+      return "text/plain";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function isPreviewableTextMimeType(mimeType: string): boolean {
+  return mimeType.startsWith("text/") || [
+    "application/json",
+    "application/xml",
+    "application/javascript",
+    "application/typescript",
+    "application/x-yaml",
+    "application/yaml",
+    "application/toml",
+    "application/sql",
+    "application/x-sh",
+    "application/x-shellscript",
+  ].includes(mimeType);
+}
+
+function looksLikeText(buffer: Buffer): boolean {
+  const sample = buffer.subarray(0, FILE_PREVIEW_SAMPLE_BYTES);
+  if (sample.length === 0) {
+    return true;
+  }
+  if (sample.includes(0)) {
+    return looksLikeUtf16Text(sample);
+  }
+  const decoded = sample.toString("utf8");
+  if (decoded.includes("\uFFFD")) {
+    return false;
+  }
+  return !containsBinaryControlCharacters(decoded);
+}
+
+function looksLikeUtf16Text(sample: Buffer): boolean {
+  if (sample.length < 4) {
+    return false;
+  }
+  const evenNulls = countNullBytes(sample, 0);
+  const oddNulls = countNullBytes(sample, 1);
+  const pairs = Math.floor(sample.length / 2);
+  if (evenNulls / pairs < 0.3 && oddNulls / pairs < 0.3) {
+    return false;
+  }
+  const decoded = evenNulls > oddNulls
+    ? swapUtf16ByteOrder(sample).toString("utf16le")
+    : sample.toString("utf16le");
+  return !decoded.includes("\uFFFD") && !containsBinaryControlCharacters(decoded);
+}
+
+function countNullBytes(sample: Buffer, offset: number): number {
+  let count = 0;
+  for (let index = offset; index < sample.length; index += 2) {
+    if (sample[index] === 0) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function swapUtf16ByteOrder(sample: Buffer): Buffer {
+  const swapped = Buffer.from(sample);
+  for (let index = 0; index + 1 < swapped.length; index += 2) {
+    const first = swapped[index];
+    swapped[index] = swapped[index + 1];
+    swapped[index + 1] = first;
+  }
+  return swapped;
+}
+
+function containsBinaryControlCharacters(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13 && code !== 12) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getImageMimeType(extension: string): string {
+  switch (extension) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".bmp":
+      return "image/bmp";
+    case ".svg":
+      return "image/svg+xml";
+    default:
+      return "image/png";
+  }
+}
+
+function formatPreviewBuffer(
+  fileName: string,
+  metadata: { kind: FilePreviewResult["kind"]; mimeType: string },
+  buffer: Buffer,
+): FilePreviewResult {
+  if (metadata.kind === "image" || metadata.kind === "pdf") {
+    return {
+      ok: true,
+      kind: metadata.kind,
+      fileName,
+      mimeType: metadata.mimeType,
+      content: buffer.toString("base64"),
+      encoding: "base64",
+    };
+  }
+
+  return {
+    ok: true,
+    kind: metadata.kind,
+    fileName,
+    mimeType: metadata.mimeType,
+    content: buffer.toString("utf8"),
+    encoding: "utf8",
+  };
+}
+
+function sortDirectoryItems<
+  T extends { name: string; type: "file" | "folder" },
+>(items: T[]): T[] {
+  return [...items].sort((left, right) => {
+    if (left.type !== right.type) {
+      return left.type === "folder" ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+}
+
+function updateShellCwdFromCommand(
+  session: SshSession,
+  command: string,
+  stdout: string,
+): void {
+  if (stdout.trim()) {
+    return;
+  }
+
+  const target = parseCdTarget(command);
+  if (target === null) {
+    return;
+  }
+
+  if (!target || target === "~") {
+    session.cwd = session.homeCwd ?? session.cwd;
+    return;
+  }
+
+  if (target.startsWith("/")) {
+    session.cwd = posix.normalize(target);
+    return;
+  }
+
+  const base = session.cwd || session.homeCwd || "/";
+  session.cwd = posix.normalize(posix.join(base, target));
+}
+
+function parseCdTarget(command: string): string | null {
+  const match = /^cd(?:\s+(.+))?$/.exec(command.trim());
+  if (!match) {
+    return null;
+  }
+
+  const rawTarget = match[1]?.trim() ?? "";
+  if (
+    (rawTarget.startsWith("\"") && rawTarget.endsWith("\"")) ||
+    (rawTarget.startsWith("'") && rawTarget.endsWith("'"))
+  ) {
+    return rawTarget.slice(1, -1);
+  }
+
+  return rawTarget;
 }
 
 function cleanInteractiveShellOutput(output: string, command: string): string {

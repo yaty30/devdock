@@ -62,6 +62,7 @@ import {
   storeSshServers,
   type SshConnectionStatus,
   type SshServerConfig,
+  type SshToolTab,
 } from "./features/tools/SshTool";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
@@ -166,6 +167,7 @@ function App(): JSX.Element {
     readStoredSelectedSshServerId(sshServers),
   );
   const [sshSettingsOpen, setSshSettingsOpen] = useState(false);
+  const [activeSshTab, setActiveSshTab] = useState<SshToolTab>("ssh");
   const [sshConnectionStatus, setSshConnectionStatus] =
     useState<SshConnectionStatus>("idle");
   const [sshReconnectAttempt, setSshReconnectAttempt] = useState(0);
@@ -778,6 +780,8 @@ function App(): JSX.Element {
         address: server.address,
         username: server.username,
         password: server.password,
+        macs: server.macs,
+        ciphers: server.ciphers,
       })
       .catch((error) => ({
         ok: false,
@@ -1845,7 +1849,7 @@ function App(): JSX.Element {
             ) : activeSection === "tools" && activeTool === "notebook" ? (
               <SingleToolHeaderTabs label="Notes" />
             ) : activeSection === "tools" && activeTool === "ssh" ? (
-              <SshHeaderTabs />
+              <SshHeaderTabs activeTab={activeSshTab} onTabChange={setActiveSshTab} />
             ) : null}
           </AppHeader>
 
@@ -1876,12 +1880,14 @@ function App(): JSX.Element {
             ) : activeTool === "ssh" ? (
               <SshTool
                 selectedServer={selectedSshServer}
+                activeTab={activeSshTab}
                 disabled={!sshHasValidCredential}
                 connectionStatus={sshConnectionStatus}
                 reconnectAttempt={sshReconnectAttempt}
                 reconnectMaxAttempts={
                   selectedSshServer?.maxReconnectAttempts ?? 0
                 }
+                sshSessionId={sshActiveSessionId}
                 remoteCwd={sshRemoteCwd}
                 onConfigure={() => setSshSettingsOpen(true)}
                 onCommandSubmit={handleSshCommandSubmit}
@@ -2151,7 +2157,7 @@ function App(): JSX.Element {
           ) : activeSection === "tools" && activeTool === "notebook" ? (
             <SingleToolHeaderTabs label="Notes" />
           ) : activeSection === "tools" && activeTool === "ssh" ? (
-            <SshHeaderTabs />
+            <SshHeaderTabs activeTab={activeSshTab} onTabChange={setActiveSshTab} />
           ) : null}
         </AppHeader>
 
@@ -2208,12 +2214,14 @@ function App(): JSX.Element {
           ) : activeTool === "ssh" ? (
             <SshTool
               selectedServer={selectedSshServer}
+              activeTab={activeSshTab}
               disabled={!sshHasValidCredential}
               connectionStatus={sshConnectionStatus}
               reconnectAttempt={sshReconnectAttempt}
               reconnectMaxAttempts={
                 selectedSshServer?.maxReconnectAttempts ?? 0
               }
+              sshSessionId={sshActiveSessionId}
               remoteCwd={sshRemoteCwd}
               onConfigure={() => setSshSettingsOpen(true)}
               onCommandSubmit={handleSshCommandSubmit}
@@ -2270,6 +2278,8 @@ function App(): JSX.Element {
       <SshSettingsModal
         open={sshSettingsOpen}
         servers={sshServers}
+        selectedServerId={selectedSshServerId}
+        connectionStatus={sshConnectionStatus}
         credentialRequired={sshSettingsRequired}
         onSave={saveSshServers}
         onClose={closeSshSettings}

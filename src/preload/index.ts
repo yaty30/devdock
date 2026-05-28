@@ -28,6 +28,38 @@ const api: DashboardApi = {
     ipcRenderer.invoke("ssh:disconnect", sessionId),
   sshExec: (sessionId, command) =>
     ipcRenderer.invoke("ssh:exec", sessionId, command),
+  sshWrite: (sessionId, data) =>
+    ipcRenderer.invoke("ssh:write", sessionId, data),
+  onSshShellData: (listener) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      payload: { sessionId: string; data: string },
+    ) => listener(payload);
+    ipcRenderer.on("ssh:shell-data", handler);
+    return () => ipcRenderer.off("ssh:shell-data", handler);
+  },
+  listLocalDirectory: (path) =>
+    ipcRenderer.invoke("fs:listLocalDirectory", path),
+  sshListDirectory: (sessionId, path) =>
+    ipcRenderer.invoke("ssh:listDirectory", sessionId, path),
+  createLocalDirectory: (parentPath, name) =>
+    ipcRenderer.invoke("fs:createDirectory", parentPath, name),
+  renameLocalPath: (path, newName) =>
+    ipcRenderer.invoke("fs:renamePath", path, newName),
+  deleteLocalPath: (path) => ipcRenderer.invoke("fs:deletePath", path),
+  previewLocalFile: (path) => ipcRenderer.invoke("fs:previewFile", path),
+  sshCreateDirectory: (sessionId, parentPath, name) =>
+    ipcRenderer.invoke("ssh:createDirectory", sessionId, parentPath, name),
+  sshRenamePath: (sessionId, path, newName) =>
+    ipcRenderer.invoke("ssh:renamePath", sessionId, path, newName),
+  sshDeletePath: (sessionId, path, type) =>
+    ipcRenderer.invoke("ssh:deletePath", sessionId, path, type),
+  sshUploadFile: (sessionId, localPath, remoteDirectory) =>
+    ipcRenderer.invoke("ssh:uploadFile", sessionId, localPath, remoteDirectory),
+  sshDownloadFile: (sessionId, remotePath, localDirectory) =>
+    ipcRenderer.invoke("ssh:downloadFile", sessionId, remotePath, localDirectory),
+  sshPreviewFile: (sessionId, remotePath) =>
+    ipcRenderer.invoke("ssh:previewFile", sessionId, remotePath),
   sendApiTesterRequest: (request) =>
     ipcRenderer.invoke("apiTester:sendRequest", request),
   getApiTesterSavedRequests: (scopeId) =>

@@ -88,6 +88,11 @@ test.describe("SSH Tool", () => {
     await expect(terminal).toContainText(
       `Connected to ${sshUsername}@${sshHost}:${sshPort}.`,
     );
+    await expect(
+      directoryPanel(page, `Remote: ${sshUsername}@${sshHost}`).getByLabel(
+        `Remote: ${sshUsername}@${sshHost} path`,
+      ),
+    ).not.toHaveValue("");
 
     await page.getByLabel("SSH command").fill("ls");
     await page.getByRole("button", { name: "Run" }).click();
@@ -138,6 +143,12 @@ async function openSshTool(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "SSH" })).toBeVisible();
   await page.getByRole("button", { name: "SSH" }).click();
   await expect(page.getByLabel("SSH command")).toBeVisible();
+}
+
+function directoryPanel(page: Page, title: string) {
+  return page.locator(".ssh-directory-panel").filter({
+    has: page.getByRole("heading", { name: title }),
+  });
 }
 
 async function getCollapsedDirectoryLayout(

@@ -588,6 +588,8 @@ export type SshConnectRequest = {
   address: string;
   username: string;
   password: string;
+  macs?: string;
+  ciphers?: string;
 };
 
 export type SshConnectResult = {
@@ -610,6 +612,54 @@ export type SshExecResult = {
   error?: string;
 };
 
+export type SshWriteResult = {
+  ok: boolean;
+  error?: string;
+};
+
+export type SshShellDataEvent = {
+  sessionId: string;
+  data: string;
+};
+
+export type DirectoryEntry = {
+  name: string;
+  path: string;
+  type: "file" | "folder";
+  size: number | null;
+  modifiedMs: number | null;
+};
+
+export type DirectoryListResult = {
+  ok: boolean;
+  path: string;
+  items: DirectoryEntry[];
+  error?: string;
+};
+
+export type DirectoryActionResult = {
+  ok: boolean;
+  error?: string;
+};
+
+export type FilePreviewKind =
+  | "image"
+  | "pdf"
+  | "text"
+  | "json"
+  | "xml"
+  | "unsupported";
+
+export type FilePreviewResult = {
+  ok: boolean;
+  kind: FilePreviewKind;
+  fileName: string;
+  mimeType: string;
+  content?: string;
+  encoding?: "utf8" | "base64";
+  error?: string;
+};
+
 export type DashboardApi = {
   getFeatureFlags: () => Promise<{
     chatEnabled: boolean;
@@ -623,6 +673,54 @@ export type DashboardApi = {
   sshConnect: (request: SshConnectRequest) => Promise<SshConnectResult>;
   sshDisconnect: (sessionId: string) => Promise<SshDisconnectResult>;
   sshExec: (sessionId: string, command: string) => Promise<SshExecResult>;
+  sshWrite: (sessionId: string, data: string) => Promise<SshWriteResult>;
+  onSshShellData: (
+    listener: (event: SshShellDataEvent) => void,
+  ) => () => void;
+  listLocalDirectory: (path?: string | null) => Promise<DirectoryListResult>;
+  sshListDirectory: (
+    sessionId: string,
+    path?: string | null,
+  ) => Promise<DirectoryListResult>;
+  createLocalDirectory: (
+    parentPath: string,
+    name: string,
+  ) => Promise<DirectoryActionResult>;
+  renameLocalPath: (
+    path: string,
+    newName: string,
+  ) => Promise<DirectoryActionResult>;
+  deleteLocalPath: (path: string) => Promise<DirectoryActionResult>;
+  previewLocalFile: (path: string) => Promise<FilePreviewResult>;
+  sshCreateDirectory: (
+    sessionId: string,
+    parentPath: string,
+    name: string,
+  ) => Promise<DirectoryActionResult>;
+  sshRenamePath: (
+    sessionId: string,
+    path: string,
+    newName: string,
+  ) => Promise<DirectoryActionResult>;
+  sshDeletePath: (
+    sessionId: string,
+    path: string,
+    type: "file" | "folder",
+  ) => Promise<DirectoryActionResult>;
+  sshUploadFile: (
+    sessionId: string,
+    localPath: string,
+    remoteDirectory: string,
+  ) => Promise<DirectoryActionResult>;
+  sshDownloadFile: (
+    sessionId: string,
+    remotePath: string,
+    localDirectory: string,
+  ) => Promise<DirectoryActionResult>;
+  sshPreviewFile: (
+    sessionId: string,
+    remotePath: string,
+  ) => Promise<FilePreviewResult>;
   sendApiTesterRequest: (
     request: ApiTesterRequest,
   ) => Promise<ApiTesterResponse>;

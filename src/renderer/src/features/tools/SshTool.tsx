@@ -4,22 +4,22 @@ import {
   useRef,
   useState,
   type DragEvent,
-  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeft,
   ArrowRight,
-  ChevronDown,
-  ChevronRight,
   Download,
   Eye,
   EyeOff,
+  File as FileIcon,
   FileText,
   Folder,
   FolderPlus,
-  FolderUp,
   Home,
+  Image,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
@@ -41,7 +41,11 @@ import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Modal } from "../../components/dialogs/Modal";
 import { FontSizeDropdown } from "../../components/layout/HeaderActions";
 import type { FontSizeMode } from "../../types";
-import type { SshExecResult } from "../../../../shared/dashboardTypes";
+import type {
+  DirectoryEntry,
+  FilePreviewResult,
+  SshExecResult,
+} from "../../../../shared/dashboardTypes";
 
 export type SshServerConfig = {
   id: string;
@@ -49,6 +53,8 @@ export type SshServerConfig = {
   address: string;
   username: string;
   password: string;
+  macs: string;
+  ciphers: string;
   autoLogin: boolean;
   autoReconnect: boolean;
   maxReconnectAttempts: number;
@@ -73,19 +79,71 @@ export const SSH_RECONNECT_DELAY_DEFAULT_MS = 3000;
 type SftpItem = {
   id: string;
   name: string;
+  path: string;
   type: "file" | "folder";
   size: string;
   modified: string;
 };
 
-type SftpTreeRow = SftpItem & {
-  depth: number;
-  expanded?: boolean;
-  hasChildren?: boolean;
+type DirectorySource = "local" | "remote";
+
+export type SshToolTab = "ssh" | "monitor";
+
+type SftpActionMenuState = {
+  source: DirectorySource;
+  item: SftpItem;
+  x?: number;
+  y?: number;
+} | null;
+
+type SftpNameDialogState = {
+  mode: "new-folder" | "rename";
+  source: DirectorySource;
+  item?: SftpItem;
+  value: string;
+} | null;
+
+type SftpDeleteState = {
+  source: DirectorySource;
+  item: SftpItem;
+} | null;
+
+type FilePreviewState = {
+  source: DirectorySource;
+  item: SftpItem;
+  loading: boolean;
+  result: FilePreviewResult | null;
+  error: string | null;
+} | null;
+
+type DirectoryActionLogEntry = {
+  id: string;
+  time: string;
+  action: string;
+  location: string;
+  source: DirectorySource;
+  item: string;
+  status: "success" | "failed";
+  detail: string;
+};
+
+type TerminalCommandLogEntry = {
+  id: string;
+  time: string;
+  command: string;
+  location: string;
+  status: "success" | "failed";
+  exitCode: string;
+};
+
+type TerminalSuggestion = {
+  value: string;
+  label: string;
+  source: "command" | "path" | "file" | "history";
 };
 
 type TransferDragPayload = {
-  source: "local" | "remote";
+  source: DirectorySource;
   itemId: string;
 };
 
@@ -99,109 +157,12 @@ const DEFAULT_SSH_SERVERS: SshServerConfig[] = [
     address: "127.0.0.1:22",
     username: "",
     password: "",
+    macs: "",
+    ciphers: "",
     autoLogin: false,
     autoReconnect: false,
     maxReconnectAttempts: SSH_RECONNECT_ATTEMPTS_DEFAULT,
     reconnectDelayMs: SSH_RECONNECT_DELAY_DEFAULT_MS,
-  },
-];
-const INITIAL_LOCAL_ITEMS: SftpItem[] = [
-  {
-    id: "local-src",
-    name: "src",
-    type: "folder",
-    size: "--",
-    modified: "Today 09:42",
-  },
-  {
-    id: "local-env",
-    name: ".env.local",
-    type: "file",
-    size: "2 KB",
-    modified: "Today 08:16",
-  },
-  {
-    id: "local-package",
-    name: "package.json",
-    type: "file",
-    size: "5 KB",
-    modified: "Yesterday 17:31",
-  },
-];
-const INITIAL_REMOTE_ITEMS: SftpItem[] = [
-  {
-    id: "remote-app",
-    name: "app",
-    type: "folder",
-    size: "--",
-    modified: "May 27 10:12",
-  },
-  {
-    id: "remote-logs",
-    name: "logs",
-    type: "folder",
-    size: "--",
-    modified: "May 27 10:04",
-  },
-  {
-    id: "remote-env",
-    name: ".env",
-    type: "file",
-    size: "1 KB",
-    modified: "May 27 09:58",
-  },
-  {
-    id: "remote-readme",
-    name: "README.md",
-    type: "file",
-    size: "3 KB",
-    modified: "May 26 15:22",
-  },
-];
-const LOCAL_TREE_CHILDREN: SftpItem[] = [
-  {
-    id: "local-src-components",
-    name: "components",
-    type: "folder",
-    size: "--",
-    modified: "Today 09:20",
-  },
-  {
-    id: "local-src-pages",
-    name: "pages",
-    type: "folder",
-    size: "--",
-    modified: "Today 08:58",
-  },
-  {
-    id: "local-src-assets",
-    name: "assets",
-    type: "folder",
-    size: "--",
-    modified: "Today 08:45",
-  },
-];
-const REMOTE_TREE_CHILDREN: SftpItem[] = [
-  {
-    id: "remote-app-http",
-    name: "Http",
-    type: "folder",
-    size: "--",
-    modified: "May 27 10:11",
-  },
-  {
-    id: "remote-app-models",
-    name: "Models",
-    type: "folder",
-    size: "--",
-    modified: "May 27 10:11",
-  },
-  {
-    id: "remote-app-providers",
-    name: "Providers",
-    type: "folder",
-    size: "--",
-    modified: "May 27 10:11",
   },
 ];
 const TERMINAL_DIRECTORY_NAMES = new Set([
@@ -216,6 +177,29 @@ const TERMINAL_DIRECTORY_NAMES = new Set([
   "Videos",
 ]);
 const SSH_TERMINAL_ROW_HEIGHT = 20;
+const SSH_COMMAND_SUGGESTIONS = [
+  "ls",
+  "ls -la",
+  "ls -ltr",
+  "pwd",
+  "cd",
+  "cat",
+  "clear",
+  "cp",
+  "df -h",
+  "du -sh",
+  "find",
+  "grep",
+  "head",
+  "less",
+  "mkdir",
+  "mv",
+  "pwd",
+  "rm",
+  "tail",
+  "touch",
+  "vim",
+];
 
 export function readStoredSshServers(): SshServerConfig[] {
   const stored = window.localStorage.getItem(SSH_SERVERS_STORAGE_KEY);
@@ -268,11 +252,32 @@ export function hasValidSshCredential(
   return servers.some(isValidSshServerCredential);
 }
 
-export function SshHeaderTabs(): JSX.Element {
+export function SshHeaderTabs({
+  activeTab = "ssh",
+  onTabChange,
+}: {
+  activeTab?: SshToolTab;
+  onTabChange?: (tab: SshToolTab) => void;
+}): JSX.Element {
   return (
     <div className="tabs" role="tablist" aria-label="SSH sections">
-      <button className="tab active" type="button" role="tab" aria-selected>
+      <button
+        className={`tab${activeTab === "ssh" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "ssh"}
+        onClick={() => onTabChange?.("ssh")}
+      >
         SSH
+      </button>
+      <button
+        className={`tab${activeTab === "monitor" ? " active" : ""}`}
+        type="button"
+        role="tab"
+        aria-selected={activeTab === "monitor"}
+        onClick={() => onTabChange?.("monitor")}
+      >
+        Monitor
       </button>
     </div>
   );
@@ -335,7 +340,7 @@ export function SshHeaderActions({
         disabled={disabled}
       />
       <button
-        className="icon-button primary header-settings-button ssh-header-disconnect-button"
+        className={`icon-button primary header-settings-button ${connected ? "ssh-header-connected-button" : "ssh-header-connect-button"}`}
         type="button"
         aria-label={toggleLabel}
         title={toggleLabel}
@@ -365,21 +370,28 @@ export function SshHeaderActions({
 export function SshSettingsModal({
   open,
   servers,
+  selectedServerId,
+  connectionStatus = "idle",
   credentialRequired = false,
   onSave,
   onClose,
 }: {
   open: boolean;
   servers: SshServerConfig[];
+  selectedServerId?: string;
+  connectionStatus?: SshConnectionStatus;
   credentialRequired?: boolean;
   onSave: (servers: SshServerConfig[]) => void;
   onClose: () => void;
 }): JSX.Element {
   const [draftServers, setDraftServers] = useState<SshServerConfig[]>(servers);
+  const [selectedDraftServerId, setSelectedDraftServerId] = useState(
+    selectedServerId ?? servers[0]?.id ?? "",
+  );
   const [visiblePasswordIds, setVisiblePasswordIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
 
   const dirty = useMemo(
     () => !areSshServerConfigsEqual(draftServers, servers),
@@ -389,6 +401,23 @@ export function SshSettingsModal({
     () => new Set(servers.map((server) => server.id)),
     [servers],
   );
+  const selectedServer =
+    draftServers.find((server) => server.id === selectedDraftServerId) ??
+    draftServers[0] ??
+    null;
+  const selectedServerIndex = selectedServer
+    ? draftServers.findIndex((server) => server.id === selectedServer.id)
+    : -1;
+  const selectedDisplayName = selectedServer
+    ? getSshSettingsServerName(selectedServer, selectedServerIndex)
+    : "New Connection";
+  const selectedStatus = selectedServer
+    ? getSshSettingsStatus(
+        selectedServer.id,
+        selectedServerId,
+        connectionStatus,
+      )
+    : "disconnected";
   const draftHasValidCredential = useMemo(
     () => hasValidSshCredential(draftServers),
     [draftServers],
@@ -399,17 +428,27 @@ export function SshSettingsModal({
   useEffect(() => {
     if (open) {
       setDraftServers(servers);
+      setSelectedDraftServerId(
+        servers.some((server) => server.id === selectedServerId)
+          ? (selectedServerId ?? "")
+          : (servers[0]?.id ?? ""),
+      );
       setVisiblePasswordIds(new Set());
-      setDiscardConfirmOpen(false);
+      setDeleteConfirmOpen(false);
     }
-  }, [open, servers]);
+  }, [open, selectedServerId, servers]);
 
-  function requestClose(): void {
-    if (dirty) {
-      setDiscardConfirmOpen(true);
+  useEffect(() => {
+    if (draftServers.length === 0) {
+      setSelectedDraftServerId("");
       return;
     }
+    if (!draftServers.some((server) => server.id === selectedDraftServerId)) {
+      setSelectedDraftServerId(draftServers[0].id);
+    }
+  }, [draftServers, selectedDraftServerId]);
 
+  function requestClose(): void {
     onClose();
   }
 
@@ -425,37 +464,60 @@ export function SshSettingsModal({
   }
 
   function addServer(): void {
-    const nextIndex = draftServers.length + 1;
-    setDraftServers((current) => [
-      ...current,
-      {
-        id: `ssh-${Date.now()}`,
-        name: `Remote ${nextIndex}`,
-        address: "",
-        username: "",
-        password: "",
-        autoLogin: false,
-        autoReconnect: false,
-        maxReconnectAttempts: SSH_RECONNECT_ATTEMPTS_DEFAULT,
-        reconnectDelayMs: SSH_RECONNECT_DELAY_DEFAULT_MS,
-      },
-    ]);
+    const nextServer = {
+      id: `ssh-${Date.now()}`,
+      name: "",
+      address: "",
+      username: "",
+      password: "",
+      macs: "",
+      ciphers: "",
+      autoLogin: false,
+      autoReconnect: false,
+      maxReconnectAttempts: SSH_RECONNECT_ATTEMPTS_DEFAULT,
+      reconnectDelayMs: SSH_RECONNECT_DELAY_DEFAULT_MS,
+    } satisfies SshServerConfig;
+    setDraftServers((current) => [...current, nextServer]);
+    setSelectedDraftServerId(nextServer.id);
+    window.setTimeout(() => {
+      const input = document.querySelector<HTMLInputElement>(
+        `[data-ssh-field="remote-name-${nextServer.id}"]`,
+      );
+      input?.focus();
+    }, 0);
   }
 
-  function removeServer(serverId: string): void {
-    setDraftServers((current) =>
-      current.length <= 1
-        ? current
-        : current.filter((server) => server.id !== serverId),
+  function deleteSelectedServer(): void {
+    if (!selectedServer || draftServers.length <= 1) {
+      return;
+    }
+    setDeleteConfirmOpen(true);
+  }
+
+  function confirmDeleteSelectedServer(): void {
+    if (!selectedServer || draftServers.length <= 1) {
+      setDeleteConfirmOpen(false);
+      return;
+    }
+    const removedServerId = selectedServer.id;
+    const nextServers = draftServers.filter(
+      (server) => server.id !== removedServerId,
     );
+    const nextIndex = Math.min(
+      Math.max(0, selectedServerIndex),
+      nextServers.length - 1,
+    );
+    setDraftServers(nextServers);
+    setSelectedDraftServerId(nextServers[nextIndex]?.id ?? "");
     setVisiblePasswordIds((current) => {
-      if (!current.has(serverId)) {
+      if (!current.has(removedServerId)) {
         return current;
       }
       const next = new Set(current);
-      next.delete(serverId);
+      next.delete(removedServerId);
       return next;
     });
+    setDeleteConfirmOpen(false);
   }
 
   function togglePasswordVisibility(serverId: string): void {
@@ -476,6 +538,8 @@ export function SshSettingsModal({
       name: server.name.trim() || `Remote ${index + 1}`,
       address: server.address.trim(),
       username: server.username.trim(),
+      macs: normalizeSshAlgorithmList(server.macs),
+      ciphers: normalizeSshAlgorithmList(server.ciphers),
       maxReconnectAttempts: clampInteger(
         server.maxReconnectAttempts,
         SSH_RECONNECT_ATTEMPTS_MIN,
@@ -493,21 +557,32 @@ export function SshSettingsModal({
       return;
     }
     onSave(normalized);
-    setDiscardConfirmOpen(false);
+    setDeleteConfirmOpen(false);
     onClose();
+  }
+
+  function updateSelectedServer(updates: Partial<SshServerConfig>): void {
+    if (!selectedServer) {
+      return;
+    }
+    updateServer(selectedServer.id, updates);
+  }
+
+  function updateSelectedNumber(
+    key: "maxReconnectAttempts" | "reconnectDelayMs",
+    value: string,
+    fallback: number,
+  ): void {
+    const parsed = Number.parseInt(value, 10);
+    updateSelectedServer({
+      [key]: Number.isFinite(parsed) ? parsed : fallback,
+    });
   }
 
   return (
     <Modal
       open={open}
-      title={
-        <span className="ssh-settings-title">
-          SSH Settings
-          <span className="build-profiles-count-badge">
-            {draftServers.length}
-          </span>
-        </span>
-      }
+      title="SSH Settings"
       size="xl"
       className="ssh-settings-modal"
       contentClassName="ssh-settings-modal-content"
@@ -516,222 +591,281 @@ export function SshSettingsModal({
         <button
           className="icon-button primary"
           type="button"
-          aria-label="Add SSH server"
-          title="Add SSH server"
+          aria-label="Add connection"
+          title="Add connection"
           onClick={addServer}
         >
-          <Plus size={16} />
+          <Plus size={18} />
         </button>
       }
       onClose={requestClose}
     >
-      <div className="ssh-settings-table-wrap">
-        <table className="build-profiles-table ssh-settings-table">
-          <thead>
-            <tr>
-              <th>Remote Name</th>
-              <th>Address</th>
-              <th>Username</th>
-              <th>Password</th>
-              <th>Auto-login</th>
-              <th>Auto-reconnect</th>
-              <th>Retry attempts</th>
-              <th>Retry delay (ms)</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {draftServers.map((server) => {
-              const passwordVisible = visiblePasswordIds.has(server.id);
-
+      <div className="ssh-settings-layout">
+        <aside className="ssh-settings-sidebar" aria-label="Saved SSH connections">
+          <div className="ssh-settings-connection-list">
+            {draftServers.map((server, index) => {
+              const displayName = getSshSettingsServerName(server, index);
+              const serverStatus = getSshSettingsStatus(
+                server.id,
+                selectedServerId,
+                connectionStatus,
+              );
+              const selected = server.id === selectedDraftServerId;
               return (
-                <tr
-                  className={
-                    savedServerIds.has(server.id)
-                      ? undefined
-                      : "ssh-server-row-new"
-                  }
+                <button
+                  className={`ssh-settings-connection-card${
+                    selected ? " selected" : ""
+                  }${savedServerIds.has(server.id) ? "" : " is-new"}`}
+                  type="button"
                   key={server.id}
+                  aria-pressed={selected}
+                  onClick={() => setSelectedDraftServerId(server.id)}
                 >
-                  <td>
-                    <div className="ssh-server-name-cell">
-                      {!savedServerIds.has(server.id) ? (
-                        <span
-                          className="ssh-server-new-dot"
-                          aria-hidden="true"
-                        />
-                      ) : null}
-                      <input
-                        aria-label="Remote name"
-                        type="text"
-                        value={server.name}
-                        onChange={(event) =>
-                          updateServer(server.id, { name: event.target.value })
-                        }
-                      />
-                    </div>
-                  </td>
-                  <td>
-                    <input
-                      aria-label="Address"
-                      placeholder="host:22"
-                      type="text"
-                      value={server.address}
-                      onChange={(event) =>
-                        updateServer(server.id, { address: event.target.value })
-                      }
-                    />
-                  </td>
-                  <td>
-                    <input
-                      aria-label="Username"
-                      type="text"
-                      value={server.username}
-                      onChange={(event) =>
-                        updateServer(server.id, {
-                          username: event.target.value,
-                        })
-                      }
-                    />
-                  </td>
-                  <td>
-                    <span className="ssh-password-field">
-                      <input
-                        aria-label="Password"
-                        type={passwordVisible ? "text" : "password"}
-                        value={server.password}
-                        autoComplete="current-password"
-                        onChange={(event) =>
-                          updateServer(server.id, {
-                            password: event.target.value,
-                          })
-                        }
-                      />
-                      <button
-                        className="icon-button secondary ssh-password-toggle"
-                        type="button"
-                        aria-label={
-                          passwordVisible ? "Hide password" : "Show password"
-                        }
-                        title={
-                          passwordVisible ? "Hide password" : "Show password"
-                        }
-                        onClick={() => togglePasswordVisibility(server.id)}
-                      >
-                        {passwordVisible ? (
-                          <EyeOff size={15} />
-                        ) : (
-                          <Eye size={15} />
-                        )}
-                      </button>
+                  <span className="ssh-settings-connection-icon" aria-hidden="true">
+                    <TerminalSquare size={22} />
+                  </span>
+                  <span className="ssh-settings-connection-copy">
+                    <strong>{displayName}</strong>
+                    <span>{formatSshSettingsEndpoint(server)}</span>
+                  </span>
+                  {serverStatus === "connected" ? (
+                    <span className="ssh-settings-card-status" aria-label={`${displayName} connected`} />
+                  ) : selected ? null : (
+                    <span className="ssh-settings-card-menu" aria-hidden="true">
+                      <MoreHorizontal size={16} />
                     </span>
-                  </td>
-                  <td>
-                    <label className="builder-confirm ssh-auto-login-field">
-                      <input
-                        type="checkbox"
-                        checked={server.autoLogin}
-                        onChange={(event) =>
-                          updateServer(server.id, {
-                            autoLogin: event.target.checked,
-                          })
-                        }
-                      />
-                    </label>
-                  </td>
-                  <td>
-                    <label className="builder-confirm ssh-auto-login-field">
-                      <input
-                        type="checkbox"
-                        checked={server.autoReconnect}
-                        onChange={(event) =>
-                          updateServer(server.id, {
-                            autoReconnect: event.target.checked,
-                          })
-                        }
-                      />
-                    </label>
-                  </td>
-                  <td>
-                    <input
-                      aria-label="Retry attempts"
-                      className="ssh-numeric-input"
-                      type="number"
-                      min={SSH_RECONNECT_ATTEMPTS_MIN}
-                      max={SSH_RECONNECT_ATTEMPTS_MAX}
-                      step={1}
-                      disabled={!server.autoReconnect}
-                      value={server.maxReconnectAttempts}
-                      onChange={(event) => {
-                        const parsed = Number.parseInt(event.target.value, 10);
-                        updateServer(server.id, {
-                          maxReconnectAttempts: Number.isFinite(parsed)
-                            ? parsed
-                            : SSH_RECONNECT_ATTEMPTS_DEFAULT,
-                        });
-                      }}
-                      onBlur={(event) => {
-                        const parsed = Number.parseInt(event.target.value, 10);
-                        updateServer(server.id, {
-                          maxReconnectAttempts: clampInteger(
-                            parsed,
-                            SSH_RECONNECT_ATTEMPTS_MIN,
-                            SSH_RECONNECT_ATTEMPTS_MAX,
-                            SSH_RECONNECT_ATTEMPTS_DEFAULT,
-                          ),
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      aria-label="Retry delay in milliseconds"
-                      className="ssh-numeric-input"
-                      type="number"
-                      min={SSH_RECONNECT_DELAY_MIN_MS}
-                      max={SSH_RECONNECT_DELAY_MAX_MS}
-                      step={500}
-                      disabled={!server.autoReconnect}
-                      value={server.reconnectDelayMs}
-                      onChange={(event) => {
-                        const parsed = Number.parseInt(event.target.value, 10);
-                        updateServer(server.id, {
-                          reconnectDelayMs: Number.isFinite(parsed)
-                            ? parsed
-                            : SSH_RECONNECT_DELAY_DEFAULT_MS,
-                        });
-                      }}
-                      onBlur={(event) => {
-                        const parsed = Number.parseInt(event.target.value, 10);
-                        updateServer(server.id, {
-                          reconnectDelayMs: clampInteger(
-                            parsed,
-                            SSH_RECONNECT_DELAY_MIN_MS,
-                            SSH_RECONNECT_DELAY_MAX_MS,
-                            SSH_RECONNECT_DELAY_DEFAULT_MS,
-                          ),
-                        });
-                      }}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      className="icon-button danger"
-                      type="button"
-                      aria-label="Remove server"
-                      title="Remove server"
-                      disabled={draftServers.length <= 1}
-                      onClick={() => removeServer(server.id)}
-                    >
-                      <Trash2 size={15} />
-                    </button>
-                  </td>
-                </tr>
+                  )}
+                </button>
               );
             })}
-          </tbody>
-        </table>
+          </div>
+          <button
+            className="ssh-settings-add-connection"
+            type="button"
+            onClick={addServer}
+          >
+            <Plus size={18} />
+            Add connection
+          </button>
+        </aside>
+
+        {selectedServer ? (
+          <section className="ssh-settings-editor" aria-label="SSH connection editor">
+            <div className="ssh-settings-editor-header">
+              <h3>{selectedDisplayName}</h3>
+              <span className={`ssh-settings-status-badge ${selectedStatus}`}>
+                <span aria-hidden="true" />
+                {formatSshSettingsStatus(selectedStatus)}
+              </span>
+            </div>
+
+            <div className="ssh-settings-section">
+              <h4>
+                <TerminalSquare size={17} />
+                Connection
+              </h4>
+              <label className="ssh-settings-field">
+                <span>Remote Name</span>
+                <input
+                  aria-label="Remote Name"
+                  data-ssh-field={`remote-name-${selectedServer.id}`}
+                  type="text"
+                  value={selectedServer.name}
+                  placeholder="Local Dev"
+                  onChange={(event) => updateSelectedServer({ name: event.target.value })}
+                />
+              </label>
+              <label className="ssh-settings-field">
+                <span>Address</span>
+                <input
+                  aria-label="Address"
+                  type="text"
+                  value={selectedServer.address}
+                  placeholder="host:22"
+                  onChange={(event) => updateSelectedServer({ address: event.target.value })}
+                />
+              </label>
+              <label className="ssh-settings-field">
+                <span>Username</span>
+                <input
+                  aria-label="Username"
+                  type="text"
+                  value={selectedServer.username}
+                  placeholder="admin"
+                  onChange={(event) => updateSelectedServer({ username: event.target.value })}
+                />
+              </label>
+              <label className="ssh-settings-field">
+                <span>Password</span>
+                <span className="ssh-password-field">
+                  <input
+                    aria-label="Password"
+                    type={visiblePasswordIds.has(selectedServer.id) ? "text" : "password"}
+                    value={selectedServer.password}
+                    autoComplete="current-password"
+                    onChange={(event) => updateSelectedServer({ password: event.target.value })}
+                  />
+                  <button
+                    className="icon-button secondary ssh-password-toggle"
+                    type="button"
+                    aria-label={
+                      visiblePasswordIds.has(selectedServer.id)
+                        ? "Hide password"
+                        : "Show password"
+                    }
+                    title={
+                      visiblePasswordIds.has(selectedServer.id)
+                        ? "Hide password"
+                        : "Show password"
+                    }
+                    onClick={() => togglePasswordVisibility(selectedServer.id)}
+                  >
+                    {visiblePasswordIds.has(selectedServer.id) ? (
+                      <EyeOff size={16} />
+                    ) : (
+                      <Eye size={16} />
+                    )}
+                  </button>
+                </span>
+              </label>
+            </div>
+
+            <div className="ssh-settings-section">
+              <h4>
+                <PlugZap size={17} />
+                Advanced SSH Algorithms
+              </h4>
+              <label className="ssh-settings-field">
+                <span>MACs</span>
+                <input
+                  aria-label="MACs"
+                  type="text"
+                  value={selectedServer.macs}
+                  placeholder="hmac-sha2-256"
+                  onChange={(event) => updateSelectedServer({ macs: event.target.value })}
+                />
+              </label>
+              <label className="ssh-settings-field">
+                <span>Ciphers</span>
+                <input
+                  aria-label="Ciphers"
+                  type="text"
+                  value={selectedServer.ciphers}
+                  placeholder="aes128-ctr"
+                  onChange={(event) => updateSelectedServer({ ciphers: event.target.value })}
+                />
+              </label>
+              <p className="ssh-settings-helper ssh-settings-helper-full">
+                Use comma or space separated values, matching OpenSSH options like MACs=hmac-sha2-256 and Ciphers=aes128-ctr.
+              </p>
+            </div>
+
+            <div className="ssh-settings-section compact">
+              <h4>
+                <Settings size={17} />
+                Options
+              </h4>
+              <label className="ssh-settings-check-field">
+                <span>Auto-login</span>
+                <span className="ssh-settings-checkbox-copy">
+                  <input
+                    type="checkbox"
+                    checked={selectedServer.autoLogin}
+                    onChange={(event) => updateSelectedServer({ autoLogin: event.target.checked })}
+                  />
+                  Enable auto-login
+                </span>
+              </label>
+              <label className="ssh-settings-check-field">
+                <span>Auto-reconnect</span>
+                <span className="ssh-settings-checkbox-copy">
+                  <input
+                    type="checkbox"
+                    checked={selectedServer.autoReconnect}
+                    onChange={(event) => updateSelectedServer({ autoReconnect: event.target.checked })}
+                  />
+                  Enable auto-reconnect
+                </span>
+              </label>
+            </div>
+
+            <div className="ssh-settings-section">
+              <h4>
+                <RefreshCw size={17} />
+                Retry Settings
+              </h4>
+              <label className="ssh-settings-field">
+                <span>Retry attempts</span>
+                <input
+                  aria-label="Retry attempts"
+                  className="ssh-numeric-input"
+                  type="number"
+                  min={SSH_RECONNECT_ATTEMPTS_MIN}
+                  max={SSH_RECONNECT_ATTEMPTS_MAX}
+                  step={1}
+                  disabled={!selectedServer.autoReconnect}
+                  value={selectedServer.maxReconnectAttempts}
+                  onChange={(event) =>
+                    updateSelectedNumber(
+                      "maxReconnectAttempts",
+                      event.target.value,
+                      SSH_RECONNECT_ATTEMPTS_DEFAULT,
+                    )
+                  }
+                  onBlur={(event) => {
+                    const parsed = Number.parseInt(event.target.value, 10);
+                    updateSelectedServer({
+                      maxReconnectAttempts: clampInteger(
+                        parsed,
+                        SSH_RECONNECT_ATTEMPTS_MIN,
+                        SSH_RECONNECT_ATTEMPTS_MAX,
+                        SSH_RECONNECT_ATTEMPTS_DEFAULT,
+                      ),
+                    });
+                  }}
+                />
+              </label>
+              <label className="ssh-settings-field">
+                <span>Retry delay (ms)</span>
+                <input
+                  aria-label="Retry delay in milliseconds"
+                  className="ssh-numeric-input"
+                  type="number"
+                  min={SSH_RECONNECT_DELAY_MIN_MS}
+                  max={SSH_RECONNECT_DELAY_MAX_MS}
+                  step={500}
+                  disabled={!selectedServer.autoReconnect}
+                  value={selectedServer.reconnectDelayMs}
+                  onChange={(event) =>
+                    updateSelectedNumber(
+                      "reconnectDelayMs",
+                      event.target.value,
+                      SSH_RECONNECT_DELAY_DEFAULT_MS,
+                    )
+                  }
+                  onBlur={(event) => {
+                    const parsed = Number.parseInt(event.target.value, 10);
+                    updateSelectedServer({
+                      reconnectDelayMs: clampInteger(
+                        parsed,
+                        SSH_RECONNECT_DELAY_MIN_MS,
+                        SSH_RECONNECT_DELAY_MAX_MS,
+                        SSH_RECONNECT_DELAY_DEFAULT_MS,
+                      ),
+                    });
+                  }}
+                />
+              </label>
+              {!selectedServer.autoReconnect ? (
+                <p className="ssh-settings-helper">
+                  Retry settings are disabled while auto-reconnect is off.
+                </p>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
       </div>
+
       {shouldShowCredentialWarning ? (
         <div className="ssh-settings-warning" role="status">
           Add at least one server address, username, and password to enable SSH.
@@ -743,65 +877,154 @@ export function SshSettingsModal({
       ) : null}
       <div className="ssh-settings-footer">
         <button
-          className="button secondary compact"
+          className="button danger compact ssh-settings-delete-button"
           type="button"
-          onClick={requestClose}
+          disabled={!selectedServer || draftServers.length <= 1}
+          onClick={deleteSelectedServer}
         >
-          Cancel
+          <Trash2 size={16} />
+          Delete
         </button>
-        <button
-          className="button primary compact"
-          type="button"
-          disabled={!draftHasValidCredential}
-          onClick={saveSettings}
-        >
-          Save
-        </button>
+        <div className="ssh-settings-footer-actions">
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={requestClose}
+          >
+            Cancel
+          </button>
+          <button
+            className="button primary compact"
+            type="button"
+            disabled={!draftHasValidCredential}
+            onClick={saveSettings}
+          >
+            Save
+          </button>
+        </div>
       </div>
-      {discardConfirmOpen ? (
+      {deleteConfirmOpen && selectedServer ? (
         <ConfirmDialog
-          title="Discard SSH settings changes?"
-          message=""
-          confirmLabel="Discard changes"
+          title="Delete SSH connection?"
+          message={`Delete ${selectedDisplayName}? This only removes the saved connection profile.`}
+          confirmLabel="Delete"
           cancelLabel="Cancel"
-          variant="warning"
-          onClose={() => setDiscardConfirmOpen(false)}
-          onConfirm={() => {
-            setDiscardConfirmOpen(false);
-            onClose();
-          }}
+          variant="danger"
+          onClose={() => setDeleteConfirmOpen(false)}
+          onConfirm={confirmDeleteSelectedServer}
         />
       ) : null}
     </Modal>
   );
 }
 
+function getSshSettingsServerName(
+  server: SshServerConfig,
+  index: number,
+): string {
+  return server.name.trim() || (index >= 0 ? `New Connection` : "New Connection");
+}
+
+function formatSshSettingsEndpoint(server: SshServerConfig): string {
+  const rawAddress = server.address.trim();
+  const address = rawAddress
+    ? rawAddress.includes(":")
+      ? rawAddress.slice(0, rawAddress.lastIndexOf(":"))
+      : rawAddress
+    : "No address";
+  const username = server.username.trim() || "No user";
+  return `${address} · ${username}`;
+}
+
+function getSshSettingsStatus(
+  serverId: string,
+  activeServerId: string | undefined,
+  connectionStatus: SshConnectionStatus,
+): "connected" | "connecting" | "disconnected" {
+  if (serverId !== activeServerId) {
+    return "disconnected";
+  }
+  if (connectionStatus === "connected") {
+    return "connected";
+  }
+  if (connectionStatus === "connecting" || connectionStatus === "reconnecting") {
+    return "connecting";
+  }
+  return "disconnected";
+}
+
+function formatSshSettingsStatus(
+  status: "connected" | "connecting" | "disconnected",
+): string {
+  if (status === "connected") {
+    return "Connected";
+  }
+  if (status === "connecting") {
+    return "Connecting";
+  }
+  return "Disconnected";
+}
+
+function normalizeSshAlgorithmList(value: string): string {
+  return value
+    .split(/[\s,]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .join(",");
+}
+
 export function SshTool({
   selectedServer,
+  activeTab = "ssh",
   disabled = false,
   connectionStatus = "idle",
   reconnectAttempt = 0,
   reconnectMaxAttempts = 0,
+  sshSessionId = null,
   remoteCwd = null,
   onConfigure,
   onCommandSubmit,
 }: {
   selectedServer: SshServerConfig | null;
+  activeTab?: SshToolTab;
   disabled?: boolean;
   connectionStatus?: SshConnectionStatus;
   reconnectAttempt?: number;
   reconnectMaxAttempts?: number;
+  sshSessionId?: string | null;
   remoteCwd?: string | null;
   onConfigure?: () => void;
   onCommandSubmit?: (command: string) => Promise<SshExecResult>;
 }): JSX.Element {
   const [command, setCommand] = useState("");
   const [commandRunning, setCommandRunning] = useState(false);
-  const [localPath, setLocalPath] = useState("D:/Projects/ivs-dashboard");
-  const [remotePath, setRemotePath] = useState("/var/www/app");
-  const [localItems, setLocalItems] = useState<SftpItem[]>(INITIAL_LOCAL_ITEMS);
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyCursor, setHistoryCursor] = useState<number | null>(null);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0);
+  const [terminalScrollRequest, setTerminalScrollRequest] = useState(0);
+  const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
+  const [localPath, setLocalPath] = useState("");
+  const [localHomePath, setLocalHomePath] = useState("");
+  const [remotePath, setRemotePath] = useState("");
+  const [remoteHomePath, setRemoteHomePath] = useState("");
+  const [localItems, setLocalItems] = useState<SftpItem[]>([]);
   const [remoteItems, setRemoteItems] =
-    useState<SftpItem[]>(INITIAL_REMOTE_ITEMS);
+    useState<SftpItem[]>([]);
+  const [selectedLocalIds, setSelectedLocalIds] = useState<string[]>([]);
+  const [selectedRemoteIds, setSelectedRemoteIds] = useState<string[]>([]);
+  const [actionMenu, setActionMenu] = useState<SftpActionMenuState>(null);
+  const [nameDialog, setNameDialog] = useState<SftpNameDialogState>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SftpDeleteState>(null);
+  const [filePreview, setFilePreview] = useState<FilePreviewState>(null);
+  const [localBusyCount, setLocalBusyCount] = useState(0);
+  const [remoteBusyCount, setRemoteBusyCount] = useState(0);
+  const [directoryActionLog, setDirectoryActionLog] = useState<DirectoryActionLogEntry[]>([]);
+  const [terminalCommandLog, setTerminalCommandLog] = useState<TerminalCommandLogEntry[]>([]);
+  const [localHistory, setLocalHistory] = useState<string[]>([]);
+  const [localFuture, setLocalFuture] = useState<string[]>([]);
+  const [remoteHistory, setRemoteHistory] = useState<string[]>([]);
+  const [remoteFuture, setRemoteFuture] = useState<string[]>([]);
   const [commandPanelCollapsed, setCommandPanelCollapsed] = useState(false);
   const [dragOverPanel, setDragOverPanel] = useState<"local" | "remote" | null>(
     null,
@@ -810,12 +1033,164 @@ export function SshTool({
     "SSH session idle.",
     "Select a server and enter a command.",
   ]);
+  const [streamPartialLine, setStreamPartialLine] = useState("");
+  const [passwordMode, setPasswordMode] = useState(false);
+  const [activeRemoteHost, setActiveRemoteHost] = useState<string | null>(null);
+  const streamPartialRef = useRef("");
+  const activeRemoteHostRef = useRef<string | null>(null);
+  const passwordModeRef = useRef(false);
   const previousStatusRef = useRef<SshConnectionStatus>(connectionStatus);
   const previousServerIdRef = useRef<string | null>(selectedServer?.id ?? null);
 
   const connected = connectionStatus === "connected";
-  const commandInputDisabled = disabled;
   const commandSubmitDisabled = disabled || commandRunning;
+  const fallbackRemoteTitle = formatRemoteDirectoryTitle(selectedServer);
+  const remoteTitle = activeRemoteHost
+    ? formatRemoteDirectoryTitleForHost(selectedServer, activeRemoteHost)
+    : fallbackRemoteTitle;
+  const promptLocation = remoteCwd?.trim() || remotePath || "";
+  const fallbackPrompt = formatSshPrompt(selectedServer, promptLocation);
+  const activePrompt =
+    connected && streamPartialLine ? streamPartialLine : fallbackPrompt;
+  const commandSuggestions = useMemo(
+    () =>
+      buildTerminalSuggestions({
+        command,
+        history: commandHistory,
+        remoteItems,
+        remotePath: promptLocation,
+      }),
+    [command, commandHistory, promptLocation, remoteItems],
+  );
+  const visibleSuggestions = suggestionsOpen ? commandSuggestions.slice(0, 8) : [];
+
+  useEffect(() => {
+    let canceled = false;
+    window.ivsDashboard
+      .listLocalDirectory(null)
+      .then((result) => {
+        if (canceled) {
+          return;
+        }
+        if (result.ok) {
+          setLocalHomePath(result.path);
+          setLocalPath(result.path);
+          setLocalItems(toSftpItems(result.items, result.path, "local"));
+        } else {
+          setLocalHomePath(result.path);
+          setLocalPath(result.path);
+          setLocalItems([]);
+          appendLines([`Local directory error: ${result.error ?? "Unable to list directory."}`]);
+        }
+      })
+      .catch((error) => {
+        if (!canceled) {
+          appendLines([
+            `Local directory error: ${
+              error instanceof Error ? error.message : "Unable to list directory."
+            }`,
+          ]);
+        }
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!connected || !sshSessionId) {
+      setRemotePath(remoteCwd ?? "");
+      setRemoteHomePath(remoteCwd ?? "");
+      setRemoteItems([]);
+      setRemoteHistory([]);
+      setRemoteFuture([]);
+      return;
+    }
+
+    const startPath = remoteCwd?.trim() || null;
+    void loadRemoteDirectory(startPath, { recordHistory: false });
+  }, [connected, sshSessionId, remoteCwd]);
+
+  useEffect(() => {
+    // Reset stream state whenever the active session changes.
+    streamPartialRef.current = "";
+    setStreamPartialLine("");
+    setPasswordMode(false);
+    passwordModeRef.current = false;
+    if (!sshSessionId) {
+      activeRemoteHostRef.current = null;
+      setActiveRemoteHost(null);
+    }
+  }, [sshSessionId]);
+
+  useEffect(() => {
+    if (!sshSessionId || !window.ivsDashboard.onSshShellData) {
+      return undefined;
+    }
+    const unsubscribe = window.ivsDashboard.onSshShellData((event) => {
+      if (event.sessionId !== sshSessionId) {
+        return;
+      }
+      handleShellStreamData(event.data);
+    });
+    return () => {
+      try {
+        unsubscribe();
+      } catch {
+        // ignore
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sshSessionId]);
+
+  useEffect(() => {
+    if (commandSuggestions.length === 0) {
+      setSuggestionsOpen(false);
+      setHighlightedSuggestionIndex(0);
+      return;
+    }
+    setHighlightedSuggestionIndex((current) =>
+      Math.min(current, Math.max(0, commandSuggestions.length - 1)),
+    );
+  }, [commandSuggestions.length]);
+
+  useEffect(() => {
+    if (!actionMenu) {
+      return undefined;
+    }
+
+    function dismissActionMenu(): void {
+      setActionMenu(null);
+    }
+
+    function dismissOnOutsidePointer(event: PointerEvent): void {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        dismissActionMenu();
+        return;
+      }
+      if (target.closest(".ssh-row-action-menu, .ssh-row-action-button")) {
+        return;
+      }
+      dismissActionMenu();
+    }
+
+    function dismissOnEscape(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        dismissActionMenu();
+      }
+    }
+
+    document.addEventListener("pointerdown", dismissOnOutsidePointer);
+    document.addEventListener("keydown", dismissOnEscape);
+    document.addEventListener("scroll", dismissActionMenu, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnOutsidePointer);
+      document.removeEventListener("keydown", dismissOnEscape);
+      document.removeEventListener("scroll", dismissActionMenu, true);
+    };
+  }, [actionMenu]);
 
   useEffect(() => {
     const serverId = selectedServer?.id ?? null;
@@ -877,42 +1252,215 @@ export function SshTool({
     }
     setTerminalLines((current) => [...current, ...lines]);
   }
-  async function submitCommand(
-    event: FormEvent<HTMLFormElement>,
-  ): Promise<void> {
-    event.preventDefault();
+
+  function setPanelBusy(source: DirectorySource, busy: boolean): void {
+    const update = (current: number): number => Math.max(0, current + (busy ? 1 : -1));
+    if (source === "local") {
+      setLocalBusyCount(update);
+    } else {
+      setRemoteBusyCount(update);
+    }
+  }
+
+  function appendDirectoryActionLog(
+    entry: Omit<DirectoryActionLogEntry, "id" | "time">,
+  ): void {
+    setDirectoryActionLog((current) => [
+      {
+        ...entry,
+        id: `dir-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        time: formatMonitorTime(new Date()),
+      },
+      ...current,
+    ].slice(0, 100));
+  }
+
+  function appendTerminalCommandLog(
+    entry: Omit<TerminalCommandLogEntry, "id" | "time">,
+  ): void {
+    setTerminalCommandLog((current) => [
+      {
+        ...entry,
+        id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        time: formatMonitorTime(new Date()),
+      },
+      ...current,
+    ].slice(0, 100));
+  }
+
+  function requestTerminalInputFocus(): void {
+    setTerminalFocusRequest((current) => current + 1);
+  }
+
+  function requestTerminalScrollToLatest(): void {
+    setTerminalScrollRequest((current) => current + 1);
+  }
+
+  function handleShellStreamData(data: string): void {
+    if (!data) {
+      return;
+    }
+    const normalized = data
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n");
+    const combined = streamPartialRef.current + normalized;
+    const parts = combined.split("\n");
+    const remainder = parts.pop() ?? "";
+    streamPartialRef.current = remainder;
+    if (parts.length > 0) {
+      const finishedLines = parts.map((line) =>
+        stripAnsiControlSequences(line),
+      );
+      setTerminalLines((current) => [...current, ...finishedLines]);
+      // Newline arrived; password mode resets.
+      if (passwordModeRef.current) {
+        passwordModeRef.current = false;
+        setPasswordMode(false);
+      }
+      requestTerminalScrollToLatest();
+    }
+
+    const partialClean = stripAnsiControlSequences(remainder);
+    setStreamPartialLine(partialClean);
+
+    if (isInteractivePasswordPrompt(partialClean)) {
+      if (!passwordModeRef.current) {
+        passwordModeRef.current = true;
+        setPasswordMode(true);
+      }
+    }
+
+    detectActiveHostFromPrompt(partialClean);
+  }
+
+  function detectActiveHostFromPrompt(partialLine: string): void {
+    const match = /\[?([A-Za-z0-9._-]+)@([A-Za-z0-9._-]+)(?:[\s:][^\n]*)?[\]$#%>]\s*$/.exec(
+      partialLine,
+    );
+    if (!match) {
+      return;
+    }
+    const host = match[2];
+    if (!host || host === activeRemoteHostRef.current) {
+      return;
+    }
+    activeRemoteHostRef.current = host;
+    setActiveRemoteHost(host);
+    // Refresh the remote directory to point at the new active host's cwd.
+    if (sshSessionId) {
+      void loadRemoteDirectory(null, { recordHistory: false });
+    }
+  }
+
+  async function runCommand(): Promise<void> {
     if (commandSubmitDisabled) {
       return;
     }
-    const trimmed = command.trim();
+    const rawValue = command;
+    const trimmed = passwordMode ? rawValue : rawValue.trim();
+
+    // Connected: send raw input directly to the PTY (handles passwords, sudo,
+    // nested ssh, and any interactive prompt). Do not echo locally; the remote
+    // shell will echo what it wants.
+    if (connected && sshSessionId && window.ivsDashboard.sshWrite) {
+      setCommand("");
+      setHistoryCursor(null);
+      setSuggestionsOpen(false);
+
+      if (passwordMode) {
+        // Send the password followed by newline. Do not log, do not push to history.
+        await window.ivsDashboard
+          .sshWrite(sshSessionId, `${rawValue}\n`)
+          .catch(() => undefined);
+        passwordModeRef.current = false;
+        setPasswordMode(false);
+        requestTerminalInputFocus();
+        return;
+      }
+
+      // Local "clear" convenience: do not send to PTY, just clear scrollback.
+      if (trimmed === "clear") {
+        setTerminalLines([]);
+        setCommandHistory((current) => addCommandHistoryEntry(current, trimmed));
+        requestTerminalScrollToLatest();
+        requestTerminalInputFocus();
+        return;
+      }
+
+      if (trimmed.length > 0) {
+        setCommandHistory((current) => addCommandHistoryEntry(current, trimmed));
+        appendTerminalCommandLog({
+          command: trimmed,
+          location: promptLocation || "--",
+          status: "success",
+          exitCode: "--",
+        });
+      }
+
+      await window.ivsDashboard
+        .sshWrite(sshSessionId, `${rawValue}\n`)
+        .catch(() => undefined);
+      requestTerminalInputFocus();
+      return;
+    }
+
+    // Not connected (or no stream backend): preserve the legacy synthetic prompt.
+    const commandLocation = promptLocation;
+    const prompt = formatSshPrompt(selectedServer, commandLocation);
     if (!trimmed) {
+      appendLines([prompt]);
+      setCommand("");
+      setHistoryCursor(null);
+      setSuggestionsOpen(false);
+      requestTerminalScrollToLatest();
+      requestTerminalInputFocus();
       return;
     }
     setCommand("");
+    setHistoryCursor(null);
+    setSuggestionsOpen(false);
 
     if (trimmed === "clear") {
-      setTerminalLines([formatSshPrompt(selectedServer, remoteCwd)]);
+      setTerminalLines([]);
+      setCommandHistory((current) => addCommandHistoryEntry(current, trimmed));
+      requestTerminalScrollToLatest();
+      requestTerminalInputFocus();
       return;
     }
 
-    const prompt = formatSshPrompt(selectedServer, remoteCwd);
     appendLines([`${prompt} ${trimmed}`]);
+    setCommandHistory((current) => addCommandHistoryEntry(current, trimmed));
+    requestTerminalScrollToLatest();
 
     if (!connected) {
       appendLines(["Not connected. Please connect to the SSH server first."]);
+      requestTerminalInputFocus();
       return;
     }
 
     if (!onCommandSubmit) {
       appendLines(["SSH backend is not available. Command was not executed."]);
+      requestTerminalInputFocus();
       return;
     }
 
     setCommandRunning(true);
     try {
       const result = await onCommandSubmit(trimmed);
+      appendTerminalCommandLog({
+        command: trimmed,
+        location: commandLocation || "--",
+        status: result.error || (result.exitCode !== null && result.exitCode !== 0) ? "failed" : "success",
+        exitCode: result.exitCode === null ? "--" : String(result.exitCode),
+      });
       appendLines(formatSshExecResult(result));
     } catch (error) {
+      appendTerminalCommandLog({
+        command: trimmed,
+        location: commandLocation || "--",
+        status: "failed",
+        exitCode: "--",
+      });
       appendLines([
         `Command error: ${
           error instanceof Error
@@ -922,7 +1470,96 @@ export function SshTool({
       ]);
     } finally {
       setCommandRunning(false);
+      requestTerminalInputFocus();
     }
+  }
+
+  function handleCommandChange(value: string): void {
+    setCommand(value);
+    setHistoryCursor(null);
+    setSuggestionsOpen(value.trim().length > 0);
+    setHighlightedSuggestionIndex(0);
+  }
+
+  function acceptSuggestion(suggestion: TerminalSuggestion): void {
+    setCommand(
+      suggestion.source === "command" || suggestion.source === "history"
+        ? suggestion.value
+        : applyTerminalSuggestion(command, suggestion.value),
+    );
+    setSuggestionsOpen(false);
+    setHighlightedSuggestionIndex(0);
+  }
+
+  function handleCommandKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Escape") {
+      if (suggestionsOpen) {
+        event.preventDefault();
+        setSuggestionsOpen(false);
+      }
+      return;
+    }
+
+    if (event.key === "Tab") {
+      if (visibleSuggestions.length > 0) {
+        event.preventDefault();
+        acceptSuggestion(visibleSuggestions[highlightedSuggestionIndex] ?? visibleSuggestions[0]);
+      }
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (suggestionsOpen && visibleSuggestions.length > 0) {
+        acceptSuggestion(visibleSuggestions[highlightedSuggestionIndex] ?? visibleSuggestions[0]);
+        return;
+      }
+      void runCommand();
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (suggestionsOpen && visibleSuggestions.length > 0) {
+        setHighlightedSuggestionIndex((current) =>
+          current <= 0 ? visibleSuggestions.length - 1 : current - 1,
+        );
+        return;
+      }
+      navigateCommandHistory("previous");
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (suggestionsOpen && visibleSuggestions.length > 0) {
+        setHighlightedSuggestionIndex((current) =>
+          current >= visibleSuggestions.length - 1 ? 0 : current + 1,
+        );
+        return;
+      }
+      navigateCommandHistory("next");
+    }
+  }
+
+  function navigateCommandHistory(direction: "previous" | "next"): void {
+    if (commandHistory.length === 0) {
+      return;
+    }
+    setHistoryCursor((current) => {
+      const nextIndex = direction === "previous"
+        ? current === null
+          ? commandHistory.length - 1
+          : Math.max(0, current - 1)
+        : current === null
+          ? null
+          : current >= commandHistory.length - 1
+            ? null
+            : current + 1;
+      setCommand(nextIndex === null ? "" : (commandHistory[nextIndex] ?? ""));
+      setSuggestionsOpen(false);
+      return nextIndex;
+    });
   }
 
   function handleItemDragStart(
@@ -967,7 +1604,7 @@ export function SshTool({
       "application/x-ivs-ssh-item",
     );
     if (payloadText) {
-      transferListedItem(payloadText, target);
+      void transferListedItem(payloadText, target);
       return;
     }
 
@@ -975,21 +1612,62 @@ export function SshTool({
     if (droppedFiles.length === 0) {
       return;
     }
-    const items = droppedFiles.map(fileToSftpItem);
-    if (target === "local") {
-      setLocalItems((current) => mergeSftpItems(current, items));
-    } else {
-      setRemoteItems((current) => mergeSftpItems(current, items));
+    if (target !== "remote" || !connected || !sshSessionId) {
+      appendTransferLine("Drop skipped: connect SSH and drop files on the remote panel.");
+      return;
     }
-    appendTransferLine(
-      `${items.length} item${items.length === 1 ? "" : "s"} added to ${target}.`,
-    );
+    void uploadDroppedFiles(droppedFiles);
   }
 
-  function transferListedItem(
+  async function uploadDroppedFiles(files: File[]): Promise<void> {
+    if (!sshSessionId) {
+      return;
+    }
+    setPanelBusy("remote", true);
+    try {
+      for (const file of files) {
+        const filePath = (file as File & { path?: string }).path;
+        if (!filePath) {
+          appendTransferLine(`Upload skipped for ${file.name}: file path is unavailable.`);
+          appendDirectoryActionLog({
+            action: "Upload",
+            location: remotePath || "--",
+            source: "remote",
+            item: file.name,
+            status: "failed",
+            detail: "File path is unavailable.",
+          });
+          continue;
+        }
+        const result = await window.ivsDashboard.sshUploadFile(
+          sshSessionId,
+          filePath,
+          remotePath,
+        );
+        appendDirectoryActionLog({
+          action: "Upload",
+          location: remotePath || "--",
+          source: "remote",
+          item: file.name,
+          status: result.ok ? "success" : "failed",
+          detail: result.ok ? remotePath : (result.error ?? "Unknown error."),
+        });
+        appendTransferLine(
+          result.ok
+            ? `Uploaded ${file.name} to ${remotePath}.`
+            : `Upload failed for ${file.name}: ${result.error ?? "Unknown error."}`,
+        );
+      }
+    } finally {
+      setPanelBusy("remote", false);
+    }
+    refreshDirectory("remote");
+  }
+
+  async function transferListedItem(
     payloadText: string,
     target: "local" | "remote",
-  ): void {
+  ): Promise<void> {
     try {
       const payload = JSON.parse(payloadText) as TransferDragPayload;
       if (payload.source === target) {
@@ -1002,17 +1680,58 @@ export function SshTool({
       if (!item) {
         return;
       }
-      const copiedItem = {
-        ...item,
-        id: `${target}-${Date.now()}-${item.name}`,
-        modified: "Just now",
-      };
+      if (item.type !== "file") {
+        appendTransferLine(`Transfer skipped for ${item.name}: select a file.`);
+        return;
+      }
+      if (!connected || !sshSessionId) {
+        appendTransferLine("Transfer failed: Not connected.");
+        return;
+      }
       if (target === "local") {
-        setLocalItems((current) => mergeSftpItems(current, [copiedItem]));
-        appendTransferLine(`Downloaded ${item.name} to ${localPath}.`);
+        setPanelBusy("local", true);
+        const result = await window.ivsDashboard.sshDownloadFile(
+          sshSessionId,
+          item.path,
+          localPath,
+        );
+        appendDirectoryActionLog({
+          action: "Download",
+          location: localPath || "--",
+          source: "local",
+          item: item.name,
+          status: result.ok ? "success" : "failed",
+          detail: result.ok ? localPath : (result.error ?? "Unknown error."),
+        });
+        setPanelBusy("local", false);
+        appendTransferLine(
+          result.ok
+            ? `Downloaded ${item.name} to ${localPath}.`
+            : `Download failed for ${item.name}: ${result.error ?? "Unknown error."}`,
+        );
+        refreshDirectory("local");
       } else {
-        setRemoteItems((current) => mergeSftpItems(current, [copiedItem]));
-        appendTransferLine(`Uploaded ${item.name} to ${remotePath}.`);
+        setPanelBusy("remote", true);
+        const result = await window.ivsDashboard.sshUploadFile(
+          sshSessionId,
+          item.path,
+          remotePath,
+        );
+        appendDirectoryActionLog({
+          action: "Upload",
+          location: remotePath || "--",
+          source: "remote",
+          item: item.name,
+          status: result.ok ? "success" : "failed",
+          detail: result.ok ? remotePath : (result.error ?? "Unknown error."),
+        });
+        setPanelBusy("remote", false);
+        appendTransferLine(
+          result.ok
+            ? `Uploaded ${item.name} to ${remotePath}.`
+            : `Upload failed for ${item.name}: ${result.error ?? "Unknown error."}`,
+        );
+        refreshDirectory("remote");
       }
     } catch {
       // Ignore malformed external drag data.
@@ -1021,6 +1740,405 @@ export function SshTool({
 
   function appendTransferLine(line: string): void {
     setTerminalLines((current) => [...current, line]);
+  }
+
+  async function loadLocalDirectory(
+    path: string | null,
+    options: { recordHistory?: boolean } = {},
+  ): Promise<void> {
+    setPanelBusy("local", true);
+    const currentPath = localPath;
+    try {
+      const result = await window.ivsDashboard.listLocalDirectory(path);
+      if (!result.ok) {
+        appendLines([`Local directory error: ${result.error ?? "Unable to list directory."}`]);
+        return;
+      }
+
+      if (options.recordHistory !== false && currentPath && currentPath !== result.path) {
+        setLocalHistory((history) => [...history, currentPath]);
+        setLocalFuture([]);
+      }
+      if (!localHomePath) {
+        setLocalHomePath(result.path);
+      }
+      setLocalPath(result.path);
+      setLocalItems(toSftpItems(result.items, result.path, "local"));
+      setSelectedLocalIds([]);
+    } finally {
+      setPanelBusy("local", false);
+    }
+  }
+
+  async function loadRemoteDirectory(
+    path: string | null,
+    options: { recordHistory?: boolean } = {},
+  ): Promise<void> {
+    if (!connected || !sshSessionId) {
+      appendLines(["Remote directory error: Not connected."]);
+      return;
+    }
+
+    setPanelBusy("remote", true);
+    const currentPath = remotePath;
+    try {
+      const result = await window.ivsDashboard.sshListDirectory(sshSessionId, path);
+      if (!result.ok) {
+        appendLines([`Remote directory error: ${result.error ?? "Unable to list directory."}`]);
+        return;
+      }
+
+      if (options.recordHistory !== false && currentPath && currentPath !== result.path) {
+        setRemoteHistory((history) => [...history, currentPath]);
+        setRemoteFuture([]);
+      }
+      if (!remoteHomePath) {
+        setRemoteHomePath(result.path);
+      }
+      setRemotePath(result.path);
+      setRemoteItems(toSftpItems(result.items, result.path, "remote"));
+      setSelectedRemoteIds([]);
+    } finally {
+      setPanelBusy("remote", false);
+    }
+  }
+
+  function navigateDirectory(source: "local" | "remote", path: string): void {
+    if (source === "local") {
+      void loadLocalDirectory(path);
+      return;
+    }
+    void loadRemoteDirectory(path);
+  }
+
+  function navigateHomeDirectory(source: "local" | "remote"): void {
+    const path =
+      source === "local"
+        ? localHomePath || null
+        : remoteHomePath || remoteCwd || null;
+    if (source === "local") {
+      void loadLocalDirectory(path);
+      return;
+    }
+    void loadRemoteDirectory(path);
+  }
+
+  function refreshDirectory(source: "local" | "remote"): void {
+    if (source === "local") {
+      void loadLocalDirectory(localPath || null, { recordHistory: false });
+      return;
+    }
+    void loadRemoteDirectory(remotePath || null, { recordHistory: false });
+  }
+
+  function navigateBack(source: "local" | "remote"): void {
+    if (source === "local") {
+      const previous = localHistory[localHistory.length - 1];
+      if (!previous) {
+        return;
+      }
+      setLocalHistory((history) => history.slice(0, -1));
+      if (localPath) {
+        setLocalFuture((future) => [localPath, ...future]);
+      }
+      void loadLocalDirectory(previous, { recordHistory: false });
+      return;
+    }
+
+    const previous = remoteHistory[remoteHistory.length - 1];
+    if (!previous) {
+      return;
+    }
+    setRemoteHistory((history) => history.slice(0, -1));
+    if (remotePath) {
+      setRemoteFuture((future) => [remotePath, ...future]);
+    }
+    void loadRemoteDirectory(previous, { recordHistory: false });
+  }
+
+  function navigateForward(source: "local" | "remote"): void {
+    if (source === "local") {
+      const next = localFuture[0];
+      if (!next) {
+        return;
+      }
+      setLocalFuture((future) => future.slice(1));
+      if (localPath) {
+        setLocalHistory((history) => [...history, localPath]);
+      }
+      void loadLocalDirectory(next, { recordHistory: false });
+      return;
+    }
+
+    const next = remoteFuture[0];
+    if (!next) {
+      return;
+    }
+    setRemoteFuture((future) => future.slice(1));
+    if (remotePath) {
+      setRemoteHistory((history) => [...history, remotePath]);
+    }
+    void loadRemoteDirectory(next, { recordHistory: false });
+  }
+
+  function openDirectoryItem(source: "local" | "remote", item: SftpItem): void {
+    if (item.type !== "folder") {
+      return;
+    }
+    const basePath = source === "local" ? localPath : remotePath;
+    navigateDirectory(source, joinDirectoryPath(basePath, item.name, source));
+  }
+
+  function toggleItemSelection(
+    source: DirectorySource,
+    item: SftpItem,
+    multiSelect: boolean,
+  ): void {
+    if (item.type === "folder") {
+      openDirectoryItem(source, item);
+      return;
+    }
+
+    const setSelected = source === "local" ? setSelectedLocalIds : setSelectedRemoteIds;
+    setSelected((current) => {
+      if (!multiSelect) {
+        return [item.id];
+      }
+      return current.includes(item.id)
+        ? current.filter((id) => id !== item.id)
+        : [...current, item.id];
+    });
+    void openFilePreview(source, item);
+  }
+
+  async function openFilePreview(source: DirectorySource, item: SftpItem): Promise<void> {
+    if (item.type !== "file") {
+      return;
+    }
+    if (source === "remote" && (!connected || !sshSessionId)) {
+      setFilePreview({
+        source,
+        item,
+        loading: false,
+        result: null,
+        error: "Not connected.",
+      });
+      return;
+    }
+
+    setFilePreview({ source, item, loading: true, result: null, error: null });
+    try {
+      const result =
+        source === "local"
+          ? await window.ivsDashboard.previewLocalFile(item.path)
+          : await window.ivsDashboard.sshPreviewFile(sshSessionId as string, item.path);
+      setFilePreview({
+        source,
+        item,
+        loading: false,
+        result,
+        error: result.ok ? null : (result.error ?? "Unable to preview file."),
+      });
+    } catch (error) {
+      setFilePreview({
+        source,
+        item,
+        loading: false,
+        result: null,
+        error: error instanceof Error ? error.message : "Unable to preview file.",
+      });
+    }
+  }
+
+  async function uploadSelectedItems(): Promise<void> {
+    if (!connected || !sshSessionId) {
+      appendLines(["Upload failed: Not connected."]);
+      return;
+    }
+    const selectedItems = localItems.filter(
+      (item) => selectedLocalIds.includes(item.id) && item.type === "file",
+    );
+    if (selectedItems.length === 0) {
+      appendLines(["Upload skipped: select one or more local files."]);
+      return;
+    }
+
+    setPanelBusy("remote", true);
+    try {
+      for (const item of selectedItems) {
+        const result = await window.ivsDashboard.sshUploadFile(
+          sshSessionId,
+          item.path,
+          remotePath,
+        );
+        appendDirectoryActionLog({
+          action: "Upload",
+          location: remotePath || "--",
+          source: "remote",
+          item: item.name,
+          status: result.ok ? "success" : "failed",
+          detail: result.ok ? remotePath : (result.error ?? "Unknown error."),
+        });
+        appendLines([
+          result.ok
+            ? `Uploaded ${item.name} to ${remotePath}.`
+            : `Upload failed for ${item.name}: ${result.error ?? "Unknown error."}`,
+        ]);
+      }
+    } finally {
+      setPanelBusy("remote", false);
+    }
+    refreshDirectory("remote");
+  }
+
+  async function downloadSelectedItems(): Promise<void> {
+    if (!connected || !sshSessionId) {
+      appendLines(["Download failed: Not connected."]);
+      return;
+    }
+    const selectedItems = remoteItems.filter(
+      (item) => selectedRemoteIds.includes(item.id) && item.type === "file",
+    );
+    if (selectedItems.length === 0) {
+      appendLines(["Download skipped: select one or more remote files."]);
+      return;
+    }
+
+    setPanelBusy("local", true);
+    try {
+      for (const item of selectedItems) {
+        const result = await window.ivsDashboard.sshDownloadFile(
+          sshSessionId,
+          item.path,
+          localPath,
+        );
+        appendDirectoryActionLog({
+          action: "Download",
+          location: localPath || "--",
+          source: "local",
+          item: item.name,
+          status: result.ok ? "success" : "failed",
+          detail: result.ok ? localPath : (result.error ?? "Unknown error."),
+        });
+        appendLines([
+          result.ok
+            ? `Downloaded ${item.name} to ${localPath}.`
+            : `Download failed for ${item.name}: ${result.error ?? "Unknown error."}`,
+        ]);
+      }
+    } finally {
+      setPanelBusy("local", false);
+    }
+    refreshDirectory("local");
+  }
+
+  function openNewFolderDialog(source: DirectorySource): void {
+    setNameDialog({ mode: "new-folder", source, value: "" });
+  }
+
+  function openRenameDialog(source: DirectorySource, item: SftpItem): void {
+    setActionMenu(null);
+    setNameDialog({ mode: "rename", source, item, value: item.name });
+  }
+
+  function openDeleteDialog(source: DirectorySource, item: SftpItem): void {
+    setActionMenu(null);
+    setDeleteTarget({ source, item });
+  }
+
+  async function saveNameDialog(): Promise<void> {
+    if (!nameDialog) {
+      return;
+    }
+    const value = nameDialog.value.trim();
+    if (!value) {
+      return;
+    }
+
+    setPanelBusy(nameDialog.source, true);
+    const result = await (nameDialog.mode === "new-folder"
+      ? createDirectoryForSource(nameDialog.source, value)
+      : nameDialog.item
+        ? renameItemForSource(nameDialog.source, nameDialog.item, value)
+        : Promise.resolve({ ok: false, error: "No item selected." }));
+    appendDirectoryActionLog({
+      action: nameDialog.mode === "new-folder" ? "New Folder" : "Rename",
+      location: getDirectoryLocation(nameDialog.source, localPath, remotePath),
+      source: nameDialog.source,
+      item: nameDialog.mode === "new-folder" ? value : (nameDialog.item?.name ?? value),
+      status: result.ok ? "success" : "failed",
+      detail: result.ok
+        ? nameDialog.mode === "new-folder"
+          ? "Created"
+          : `Renamed to ${value}`
+        : (result.error ?? "Unknown error."),
+    });
+    setPanelBusy(nameDialog.source, false);
+    if (!result.ok) {
+      appendLines([
+        `${nameDialog.mode === "new-folder" ? "New folder" : "Rename"} failed: ${result.error ?? "Unknown error."}`,
+      ]);
+      return;
+    }
+
+    setNameDialog(null);
+    refreshDirectory(nameDialog.source);
+  }
+
+  async function createDirectoryForSource(
+    source: DirectorySource,
+    name: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (source === "local") {
+      return window.ivsDashboard.createLocalDirectory(localPath, name);
+    }
+    if (!connected || !sshSessionId) {
+      return { ok: false, error: "Not connected." };
+    }
+    return window.ivsDashboard.sshCreateDirectory(sshSessionId, remotePath, name);
+  }
+
+  async function renameItemForSource(
+    source: DirectorySource,
+    item: SftpItem,
+    newName: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    if (source === "local") {
+      return window.ivsDashboard.renameLocalPath(item.path, newName);
+    }
+    if (!connected || !sshSessionId) {
+      return { ok: false, error: "Not connected." };
+    }
+    return window.ivsDashboard.sshRenamePath(sshSessionId, item.path, newName);
+  }
+
+  async function confirmDeleteItem(): Promise<void> {
+    if (!deleteTarget) {
+      return;
+    }
+    const { source, item } = deleteTarget;
+    setPanelBusy(source, true);
+    const result = await (source === "local"
+      ? window.ivsDashboard.deleteLocalPath(item.path)
+      : connected && sshSessionId
+        ? window.ivsDashboard.sshDeletePath(sshSessionId, item.path, item.type)
+        : Promise.resolve({ ok: false, error: "Not connected." }));
+    appendDirectoryActionLog({
+      action: "Delete",
+      location: getDirectoryLocation(source, localPath, remotePath),
+      source,
+      item: item.name,
+      status: result.ok ? "success" : "failed",
+      detail: result.ok ? "Deleted" : (result.error ?? "Unknown error."),
+    });
+    setPanelBusy(source, false);
+
+    if (!result.ok) {
+      appendLines([`Delete failed for ${item.name}: ${result.error ?? "Unknown error."}`]);
+      return;
+    }
+    setDeleteTarget(null);
+    refreshDirectory(source);
   }
 
   return (
@@ -1051,6 +2169,13 @@ export function SshTool({
           </button>
         </div>
       ) : null}
+      {activeTab === "monitor" ? (
+        <SshMonitorTab
+          directoryActionLog={directoryActionLog}
+          terminalCommandLog={terminalCommandLog}
+        />
+      ) : (
+        <>
       <Panel
         title="CLI"
         className="ssh-cli-panel"
@@ -1087,28 +2212,22 @@ export function SshTool({
           </span>
         }
       >
-        <SshTerminalOutput lines={terminalLines} />
-        <form className="ssh-command-row" onSubmit={submitCommand}>
-          <TerminalSquare size={17} />
-          <input
-            value={command}
-            onChange={(event) => setCommand(event.target.value)}
-            placeholder={
-              connected
-                ? "Type here"
-                : "Connect to a server to run commands"
-            }
-            aria-label="SSH command"
-            disabled={commandInputDisabled}
-          />
-          <button
-            className="button primary compact"
-            type="submit"
-            disabled={commandSubmitDisabled}
-          >
-            {commandRunning ? "Running" : "Run"}
-          </button>
-        </form>
+        <SshTerminalOutput
+          lines={terminalLines}
+          prompt={activePrompt}
+          command={command}
+          disabled={disabled}
+          running={commandRunning}
+          passwordMode={passwordMode}
+          suggestions={visibleSuggestions}
+          highlightedSuggestionIndex={highlightedSuggestionIndex}
+          scrollRequest={terminalScrollRequest}
+          focusRequest={terminalFocusRequest}
+          onCommandChange={handleCommandChange}
+          onCommandKeyDown={handleCommandKeyDown}
+          onSuggestionHover={setHighlightedSuggestionIndex}
+          onSuggestionSelect={acceptSuggestion}
+        />
       </Panel>
 
       <div className="ssh-directory-column">
@@ -1119,26 +2238,105 @@ export function SshTool({
           source="local"
           dragOver={dragOverPanel === "local"}
           disabled={disabled}
+          loading={localBusyCount > 0}
+          selectedItemIds={selectedLocalIds}
           onPathChange={setLocalPath}
+          canGoBack={localHistory.length > 0}
+          canGoForward={localFuture.length > 0}
+          onBack={() => navigateBack("local")}
+          onForward={() => navigateForward("local")}
+          onHome={() => navigateHomeDirectory("local")}
+          onRefresh={() => refreshDirectory("local")}
+          onUpload={() => void uploadSelectedItems()}
+          onDownload={() => void downloadSelectedItems()}
+          onNewFolder={() => openNewFolderDialog("local")}
+          uploadDisabled={!connected || selectedLocalIds.length === 0}
+          downloadDisabled={!connected || selectedRemoteIds.length === 0}
+          onSubmitPath={(path) => navigateDirectory("local", path)}
+          onSelectItem={(item, multiSelect) => toggleItemSelection("local", item, multiSelect)}
+          actionMenu={actionMenu}
+          onToggleActionMenu={(item, position) =>
+            setActionMenu((current) =>
+              current?.source === "local" && current.item.id === item.id && !position
+                ? null
+                : { source: "local", item, ...position },
+            )
+          }
+          onCloseActionMenu={() => setActionMenu(null)}
+          onRenameItem={(item) => openRenameDialog("local", item)}
+          onDeleteItem={(item) => openDeleteDialog("local", item)}
           onDragStart={handleItemDragStart}
           onDragOver={handleDirectoryDragOver}
           onDrop={handleDirectoryDrop}
           onDragLeave={() => setDragOverPanel(null)}
         />
         <SftpPanel
-          title="Remote: admin@promaxgb10-64b5"
+          title={remoteTitle}
           path={remotePath}
           items={remoteItems}
           source="remote"
           dragOver={dragOverPanel === "remote"}
-          disabled={disabled}
+          disabled={disabled || !connected}
+          loading={remoteBusyCount > 0}
+          selectedItemIds={selectedRemoteIds}
           onPathChange={setRemotePath}
+          canGoBack={remoteHistory.length > 0}
+          canGoForward={remoteFuture.length > 0}
+          onBack={() => navigateBack("remote")}
+          onForward={() => navigateForward("remote")}
+          onHome={() => navigateHomeDirectory("remote")}
+          onRefresh={() => refreshDirectory("remote")}
+          onUpload={() => void uploadSelectedItems()}
+          onDownload={() => void downloadSelectedItems()}
+          onNewFolder={() => openNewFolderDialog("remote")}
+          uploadDisabled={!connected || selectedLocalIds.length === 0}
+          downloadDisabled={!connected || selectedRemoteIds.length === 0}
+          onSubmitPath={(path) => navigateDirectory("remote", path)}
+          onSelectItem={(item, multiSelect) => toggleItemSelection("remote", item, multiSelect)}
+          actionMenu={actionMenu}
+          onToggleActionMenu={(item, position) =>
+            setActionMenu((current) =>
+              current?.source === "remote" && current.item.id === item.id && !position
+                ? null
+                : { source: "remote", item, ...position },
+            )
+          }
+          onCloseActionMenu={() => setActionMenu(null)}
+          onRenameItem={(item) => openRenameDialog("remote", item)}
+          onDeleteItem={(item) => openDeleteDialog("remote", item)}
           onDragStart={handleItemDragStart}
           onDragOver={handleDirectoryDragOver}
           onDrop={handleDirectoryDrop}
           onDragLeave={() => setDragOverPanel(null)}
         />
       </div>
+        </>
+      )}
+      {nameDialog ? (
+        <SftpNameDialog
+          state={nameDialog}
+          onChange={(value) =>
+            setNameDialog((current) => (current ? { ...current, value } : current))
+          }
+          onClose={() => setNameDialog(null)}
+          onSave={() => void saveNameDialog()}
+        />
+      ) : null}
+      {deleteTarget ? (
+        <ConfirmDialog
+          title={`Delete ${deleteTarget.item.type}?`}
+          message={`Delete "${deleteTarget.item.name}"? This action cannot be undone.`}
+          confirmLabel="Delete"
+          cancelLabel="Cancel"
+          variant="danger"
+          onClose={() => setDeleteTarget(null)}
+          onConfirm={() => void confirmDeleteItem()}
+        />
+      ) : null}
+      <FilePreviewModal
+        preview={filePreview}
+        onClose={() => setFilePreview(null)}
+      />
     </section>
   );
 }
@@ -1150,7 +2348,27 @@ function SftpPanel({
   source,
   dragOver,
   disabled,
+  loading,
+  selectedItemIds,
   onPathChange,
+  canGoBack,
+  canGoForward,
+  onBack,
+  onForward,
+  onHome,
+  onRefresh,
+  onUpload,
+  onDownload,
+  onNewFolder,
+  uploadDisabled,
+  downloadDisabled,
+  onSubmitPath,
+  onSelectItem,
+  actionMenu,
+  onToggleActionMenu,
+  onCloseActionMenu,
+  onRenameItem,
+  onDeleteItem,
   onDragStart,
   onDragOver,
   onDrop,
@@ -1162,7 +2380,27 @@ function SftpPanel({
   source: "local" | "remote";
   dragOver: boolean;
   disabled: boolean;
+  loading: boolean;
+  selectedItemIds: string[];
   onPathChange: (path: string) => void;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onBack: () => void;
+  onForward: () => void;
+  onHome: () => void;
+  onRefresh: () => void;
+  onUpload: () => void;
+  onDownload: () => void;
+  onNewFolder: () => void;
+  uploadDisabled: boolean;
+  downloadDisabled: boolean;
+  onSubmitPath: (path: string) => void;
+  onSelectItem: (item: SftpItem, multiSelect: boolean) => void;
+  actionMenu: SftpActionMenuState;
+  onToggleActionMenu: (item: SftpItem, position?: { x: number; y: number }) => void;
+  onCloseActionMenu: () => void;
+  onRenameItem: (item: SftpItem) => void;
+  onDeleteItem: (item: SftpItem) => void;
   onDragStart: (
     event: DragEvent<HTMLDivElement>,
     source: "local" | "remote",
@@ -1178,40 +2416,65 @@ function SftpPanel({
   ) => void;
   onDragLeave: () => void;
 }): JSX.Element {
-  const treeRows = buildSftpTreeRows(source, items);
   const panelLabel = source === "local" ? "Local Directory" : "Remote Directory";
 
   return (
     <Panel
       title={title}
-      className={`ssh-directory-panel${dragOver ? " drag-over" : ""}`}
-      action={<SftpPanelActions disabled={disabled} label={panelLabel} />}
+      className={`ssh-directory-panel${dragOver ? " drag-over" : ""}${loading ? " loading" : ""}`}
+      action={
+        <SftpPanelActions
+          disabled={disabled}
+          label={panelLabel}
+          onUpload={onUpload}
+          onDownload={onDownload}
+          onNewFolder={onNewFolder}
+          onRefresh={onRefresh}
+          uploadDisabled={uploadDisabled}
+          downloadDisabled={downloadDisabled}
+        />
+      }
     >
       <div className="ssh-path-row" aria-label={`${title} navigation`}>
-        <SftpNavButton label={`${panelLabel} back`} disabled={disabled}>
+        <SftpNavButton
+          label={`${panelLabel} back`}
+          disabled={disabled || !canGoBack}
+          onClick={onBack}
+        >
           <ArrowLeft size={15} />
         </SftpNavButton>
-        <SftpNavButton label={`${panelLabel} forward`} disabled={disabled}>
-          <ArrowRight size={15} />
-        </SftpNavButton>
         <SftpNavButton
-          label={`${panelLabel} parent directory`}
-          disabled={disabled}
-          onClick={() => onPathChange(getParentDirectoryPath(path, source))}
+          label={`${panelLabel} forward`}
+          disabled={disabled || !canGoForward}
+          onClick={onForward}
         >
-          <FolderUp size={15} />
+          <ArrowRight size={15} />
         </SftpNavButton>
         <SftpNavButton
           label={`${panelLabel} home`}
           disabled={disabled}
-          onClick={() => onPathChange(getDefaultDirectoryPath(source))}
+          onClick={onHome}
         >
           <Home size={15} />
+        </SftpNavButton>
+        <SftpNavButton
+          label={`${panelLabel} refresh`}
+          disabled={disabled}
+          onClick={onRefresh}
+        >
+          <RefreshCw size={15} />
         </SftpNavButton>
         <input
           className="ssh-path-input"
           value={path}
           onChange={(event) => onPathChange(event.target.value)}
+          onBlur={() => onSubmitPath(path)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+              onSubmitPath(event.currentTarget.value);
+            }
+          }}
           aria-label={`${title} path`}
           disabled={disabled}
         />
@@ -1230,44 +2493,82 @@ function SftpPanel({
           <span aria-hidden="true" />
         </div>
         <div className="ssh-file-tree-body">
-          {treeRows.map((item) => (
+          {items.map((item) => (
             <div
-              className={`ssh-file-row ssh-file-row-depth-${item.depth}`}
+              className={`ssh-file-row${selectedItemIds.includes(item.id) ? " selected" : ""}`}
               draggable={!disabled}
               key={item.id}
+              onClick={(event) => onSelectItem(item, event.ctrlKey)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                onToggleActionMenu(item, { x: event.clientX, y: event.clientY });
+              }}
               onDragStart={(event) => onDragStart(event, source, item.id)}
               role="row"
             >
               <div className="ssh-file-name-cell">
-                <span className="ssh-tree-guides" aria-hidden="true" />
-                <span className="ssh-tree-chevron" aria-hidden="true">
-                  {item.type === "folder" && item.hasChildren ? (
-                    item.expanded ? (
-                      <ChevronDown size={14} />
-                    ) : (
-                      <ChevronRight size={14} />
-                    )
-                  ) : null}
-                </span>
                 <span className="ssh-file-kind-icon" aria-hidden="true">
-                  {item.type === "folder" ? (
-                    <Folder size={16} />
-                  ) : (
-                    <FileText size={16} />
-                  )}
+                  {renderSftpItemIcon(item)}
                 </span>
-                <strong>{item.name}</strong>
+                <SftpFileName name={item.name} />
               </div>
               <span className="ssh-file-size-cell">{item.size}</span>
               <span className="ssh-file-modified-cell">{item.modified}</span>
-              <button
-                className="ssh-row-action-button"
-                type="button"
-                aria-label={`${item.name} actions`}
-                disabled={disabled}
-              >
-                <MoreHorizontal size={15} />
-              </button>
+              <span className="ssh-row-action-cell">
+                <button
+                  className="ssh-row-action-button"
+                  type="button"
+                  aria-label={`${item.name} actions`}
+                  disabled={disabled}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onToggleActionMenu(item);
+                  }}
+                >
+                  <MoreHorizontal size={15} />
+                </button>
+                {actionMenu?.source === source && actionMenu.item.id === item.id ? (
+                  <div
+                    className={`ssh-row-action-menu${actionMenu.x !== undefined ? " context" : ""}`}
+                    role="menu"
+                    style={
+                      actionMenu.x !== undefined && actionMenu.y !== undefined
+                        ? { left: actionMenu.x, top: actionMenu.y }
+                        : undefined
+                    }
+                    tabIndex={-1}
+                    onBlur={(event) => {
+                      if (
+                        !(event.relatedTarget instanceof Node) ||
+                        !event.currentTarget.contains(event.relatedTarget)
+                      ) {
+                        onCloseActionMenu();
+                      }
+                    }}
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onRenameItem(item);
+                      }}
+                    >
+                      Rename
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteItem(item);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                ) : null}
+              </span>
             </div>
           ))}
         </div>
@@ -1276,31 +2577,246 @@ function SftpPanel({
   );
 }
 
+function SshMonitorTab({
+  directoryActionLog,
+  terminalCommandLog,
+}: {
+  directoryActionLog: DirectoryActionLogEntry[];
+  terminalCommandLog: TerminalCommandLogEntry[];
+}): JSX.Element {
+  return (
+    <div className="ssh-monitor-tab">
+      <Panel title="Directory Action Log" className="ssh-monitor-panel recent-builds-panel">
+        <div className="recent-builds-table-scroll ssh-monitor-table-scroll">
+          <table className="recent-builds-table ssh-monitor-table directory-action-log-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Action</th>
+                <th>Location</th>
+                <th>Source</th>
+                <th>Item</th>
+                <th>Status</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody>
+              {directoryActionLog.length === 0 ? (
+                <tr>
+                  <td colSpan={7}>No directory actions yet.</td>
+                </tr>
+              ) : (
+                directoryActionLog.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>{entry.time}</td>
+                    <td>{entry.action}</td>
+                    <td>{entry.location}</td>
+                    <td>{entry.source}</td>
+                    <td>{entry.item}</td>
+                    <td>{entry.status}</td>
+                    <td>{entry.detail}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+      <Panel title="Terminal Command Log" className="ssh-monitor-panel recent-builds-panel">
+        <div className="recent-builds-table-scroll ssh-monitor-table-scroll">
+          <table className="recent-builds-table ssh-monitor-table terminal-command-log-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Command</th>
+                <th>Location</th>
+                <th>Status</th>
+                <th>Exit Code</th>
+              </tr>
+            </thead>
+            <tbody>
+              {terminalCommandLog.length === 0 ? (
+                <tr>
+                  <td colSpan={5}>No terminal commands yet.</td>
+                </tr>
+              ) : (
+                terminalCommandLog.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>{entry.time}</td>
+                    <td>{entry.command}</td>
+                    <td>{entry.location}</td>
+                    <td>{entry.status}</td>
+                    <td>{entry.exitCode}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function FilePreviewModal({
+  preview,
+  onClose,
+}: {
+  preview: FilePreviewState;
+  onClose: () => void;
+}): JSX.Element {
+  const result = preview?.result ?? null;
+  return (
+    <Modal
+      open={preview !== null}
+      title={preview?.item.name ?? "File Preview"}
+      subtitle={preview ? `${preview.source}: ${preview.item.path}` : undefined}
+      size="xl"
+      className="ssh-preview-modal log-zoom-modal"
+      contentClassName="ssh-preview-modal-content log-zoom-modal-content"
+      closeLabel="Close preview"
+      onClose={onClose}
+    >
+      {preview?.loading ? (
+        <div className="ssh-preview-state">Loading preview...</div>
+      ) : preview?.error ? (
+        <div className="ssh-preview-state">{preview.error}</div>
+      ) : result?.kind === "image" && result.content ? (
+        <div className="ssh-preview-image-wrap">
+          <img src={`data:${result.mimeType};base64,${result.content}`} alt={result.fileName} />
+        </div>
+      ) : result?.kind === "pdf" && result.content ? (
+        <iframe
+          className="ssh-preview-frame"
+          title={result.fileName}
+          src={`data:${result.mimeType};base64,${result.content}`}
+        />
+      ) : isTextPreview(result) ? (
+        <pre className="ssh-preview-text">{formatPreviewText(result)}</pre>
+      ) : (
+        <div className="ssh-preview-state">Preview not available</div>
+      )}
+    </Modal>
+  );
+}
+
 function SftpPanelActions({
   disabled,
   label,
+  onUpload,
+  onDownload,
+  onNewFolder,
+  onRefresh,
+  uploadDisabled,
+  downloadDisabled,
 }: {
   disabled: boolean;
   label: string;
+  onUpload: () => void;
+  onDownload: () => void;
+  onNewFolder: () => void;
+  onRefresh: () => void;
+  uploadDisabled: boolean;
+  downloadDisabled: boolean;
 }): JSX.Element {
   return (
     <span className="ssh-directory-actions" aria-label={`${label} actions`}>
-      <SftpActionButton label={`${label} upload`} disabled={disabled}>
-        <Upload size={15} />
-      </SftpActionButton>
-      <SftpActionButton label={`${label} download`} disabled={disabled}>
-        <Download size={15} />
-      </SftpActionButton>
-      <SftpActionButton label={`${label} new folder`} disabled={disabled}>
+      <SftpActionButton
+        label={`${label} new folder`}
+        disabled={disabled}
+        onClick={onNewFolder}
+      >
         <FolderPlus size={15} />
       </SftpActionButton>
-      <SftpActionButton label={`${label} refresh`} disabled={disabled}>
+      <SftpActionButton
+        label={`${label} refresh`}
+        disabled={disabled}
+        onClick={onRefresh}
+      >
         <RefreshCw size={15} />
       </SftpActionButton>
-      <SftpActionButton label={`${label} more options`} disabled={disabled}>
-        <MoreHorizontal size={15} />
-      </SftpActionButton>
     </span>
+  );
+}
+
+function SftpFileName({ name }: { name: string }): JSX.Element {
+  const textRef = useRef<HTMLElement | null>(null);
+  const [truncated, setTruncated] = useState(false);
+
+  function updateTruncation(): void {
+    const element = textRef.current;
+    setTruncated(Boolean(element && element.scrollWidth > element.clientWidth));
+  }
+
+  return (
+    <strong
+      ref={textRef}
+      title={truncated ? name : undefined}
+      onMouseEnter={updateTruncation}
+      onFocus={updateTruncation}
+      tabIndex={-1}
+    >
+      {name}
+    </strong>
+  );
+}
+
+function SftpNameDialog({
+  state,
+  onChange,
+  onClose,
+  onSave,
+}: {
+  state: NonNullable<SftpNameDialogState>;
+  onChange: (value: string) => void;
+  onClose: () => void;
+  onSave: () => void;
+}): JSX.Element {
+  const title = state.mode === "new-folder" ? "New Folder" : "Rename";
+  const label = state.mode === "new-folder" ? "Folder name" : "New name";
+  return (
+    <div className="dialog-backdrop" role="presentation" onClick={onClose}>
+      <section
+        className="add-project-dialog ssh-name-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ssh-name-dialog-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2 id="ssh-name-dialog-title">{title}</h2>
+        <div className="add-project-fields">
+          <label>
+            <span>{label}</span>
+            <input
+              autoFocus
+              value={state.value}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  onSave();
+                }
+                if (event.key === "Escape") {
+                  onClose();
+                }
+              }}
+            />
+          </label>
+        </div>
+        <div className="dialog-actions">
+          <button className="button secondary compact" type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="button primary compact"
+            type="button"
+            onClick={onSave}
+            disabled={!state.value.trim()}
+          >
+            {state.mode === "new-folder" ? "Create" : "Rename"}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1308,10 +2824,12 @@ function SftpActionButton({
   children,
   disabled,
   label,
+  onClick,
 }: {
   children: JSX.Element;
   disabled: boolean;
   label: string;
+  onClick?: () => void;
 }): JSX.Element {
   return (
     <button
@@ -1320,6 +2838,7 @@ function SftpActionButton({
       aria-label={label}
       title={label}
       disabled={disabled}
+      onClick={onClick}
     >
       {children}
     </button>
@@ -1351,83 +2870,128 @@ function SftpNavButton({
   );
 }
 
-function buildSftpTreeRows(
-  source: "local" | "remote",
-  items: SftpItem[],
-): SftpTreeRow[] {
-  return source === "local"
-    ? buildLocalTreeRows(items)
-    : buildRemoteTreeRows(items);
-}
-
-function buildLocalTreeRows(items: SftpItem[]): SftpTreeRow[] {
-  const src = findSftpItem(items, "src", INITIAL_LOCAL_ITEMS[0]);
-  const env = findSftpItem(items, ".env.local", INITIAL_LOCAL_ITEMS[1]);
-  const packageJson = findSftpItem(
-    items,
-    "package.json",
-    INITIAL_LOCAL_ITEMS[2],
-  );
-  const knownNames = new Set(["src", ".env.local", "package.json"]);
-
-  return [
-    { ...src, depth: 0, expanded: true, hasChildren: true },
-    ...LOCAL_TREE_CHILDREN.map((item) => ({ ...item, depth: 1 })),
-    { ...env, depth: 0 },
-    { ...packageJson, depth: 0 },
-    ...items
-      .filter((item) => !knownNames.has(item.name))
-      .map((item) => ({ ...item, depth: 0 })),
-  ];
-}
-
-function buildRemoteTreeRows(items: SftpItem[]): SftpTreeRow[] {
-  const app = findSftpItem(items, "app", INITIAL_REMOTE_ITEMS[0]);
-  const logs = findSftpItem(items, "logs", INITIAL_REMOTE_ITEMS[1]);
-  const env = findSftpItem(items, ".env", INITIAL_REMOTE_ITEMS[2]);
-  const readme = findSftpItem(items, "README.md", INITIAL_REMOTE_ITEMS[3]);
-  const knownNames = new Set(["app", "logs", ".env", "README.md"]);
-
-  return [
-    { ...app, depth: 0, expanded: true, hasChildren: true },
-    ...REMOTE_TREE_CHILDREN.map((item) => ({ ...item, depth: 1 })),
-    { ...logs, depth: 0, expanded: false, hasChildren: true },
-    { ...env, depth: 0 },
-    { ...readme, depth: 0 },
-    ...items
-      .filter((item) => !knownNames.has(item.name))
-      .map((item) => ({ ...item, depth: 0 })),
-  ];
-}
-
-function findSftpItem(
-  items: SftpItem[],
-  name: string,
-  fallback: SftpItem,
-): SftpItem {
-  return items.find((item) => item.name === name) ?? fallback;
-}
-
-function getDefaultDirectoryPath(source: "local" | "remote"): string {
-  return source === "local" ? "D:/Projects/ivs-dashboard" : "/var/www/app";
-}
-
-function getParentDirectoryPath(
-  path: string,
-  source: "local" | "remote",
+function joinDirectoryPath(
+  basePath: string,
+  itemName: string,
+  source: DirectorySource,
 ): string {
-  const normalized = path.trim().replace(/[\\/]+$/, "");
-  if (!normalized) {
-    return getDefaultDirectoryPath(source);
+  if (source === "remote") {
+    const normalizedBase = basePath.trim().replace(/\/+$/, "") || "/";
+    return normalizedBase === "/" ? `/${itemName}` : `${normalizedBase}/${itemName}`;
   }
 
-  const separator = normalized.includes("/") ? "/" : "\\";
-  const index = normalized.lastIndexOf(separator);
-  if (index <= 0) {
-    return normalized;
+  const normalizedBase = basePath.trim().replace(/[\\/]+$/, "");
+  if (!normalizedBase) {
+    return itemName;
+  }
+  const separator = normalizedBase.includes("/") ? "/" : "\\";
+  return `${normalizedBase}${separator}${itemName}`;
+}
+
+function toSftpItems(
+  entries: DirectoryEntry[],
+  _currentPath: string,
+  source: DirectorySource,
+): SftpItem[] {
+  return entries.map((entry) => ({
+    id: `${source}-${entry.path}`,
+    name: entry.name,
+    path: entry.path,
+    type: entry.type,
+    size: formatDirectoryEntrySize(entry.size),
+    modified: formatDirectoryEntryModified(entry.modifiedMs),
+  }));
+}
+
+function formatDirectoryEntrySize(size: number | null): string {
+  if (size === null) {
+    return "--";
+  }
+  return formatFileSize(size);
+}
+
+function formatDirectoryEntryModified(modifiedMs: number | null): string {
+  if (modifiedMs === null) {
+    return "--";
   }
 
-  return normalized.slice(0, index);
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(modifiedMs));
+}
+
+function isTextPreview(result: FilePreviewResult | null): result is FilePreviewResult {
+  return Boolean(
+    result?.content &&
+      result.encoding === "utf8" &&
+      ["text", "json", "xml"].includes(result.kind),
+  );
+}
+
+function formatPreviewText(result: FilePreviewResult): string {
+  if (result.kind !== "json" || !result.content) {
+    return result.content ?? "";
+  }
+
+  try {
+    return JSON.stringify(JSON.parse(result.content), null, 2);
+  } catch {
+    return result.content;
+  }
+}
+
+function formatMonitorTime(date: Date): string {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
+function formatRemoteDirectoryTitle(server: SshServerConfig | null): string {
+  if (!server?.address.trim()) {
+    return "Remote Directory";
+  }
+
+  const address = server.address.trim();
+  const host = address.includes(":")
+    ? address.slice(0, address.lastIndexOf(":"))
+    : address;
+  const username = server.username.trim();
+  return username ? `Remote: ${username}@${host}` : `Remote: ${host}`;
+}
+
+function formatRemoteDirectoryTitleForHost(
+  server: SshServerConfig | null,
+  host: string,
+): string {
+  const trimmedHost = host.trim();
+  if (!trimmedHost) {
+    return formatRemoteDirectoryTitle(server);
+  }
+  const username = server?.username.trim() ?? "";
+  return username ? `Remote: ${username}@${trimmedHost}` : `Remote: ${trimmedHost}`;
+}
+
+function isInteractivePasswordPrompt(partialLine: string): boolean {
+  const value = partialLine.toLowerCase();
+  if (!value) {
+    return false;
+  }
+  // Matches things like:
+  //   "user@host's password:"
+  //   "Password:"
+  //   "Enter passphrase for key '...':"
+  //   "[sudo] password for user:"
+  return (
+    /(^|[\s'"])password\s*:\s*$/.test(value) ||
+    /password\s+for\s+\S+\s*:\s*$/.test(value) ||
+    /enter\s+passphrase[^:]*:\s*$/.test(value) ||
+    /'s\s+password\s*:\s*$/.test(value)
+  );
 }
 
 function normalizeStoredServer(value: unknown): SshServerConfig | null {
@@ -1445,6 +3009,8 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
     address: typeof record.address === "string" ? record.address.trim() : "",
     username: typeof record.username === "string" ? record.username.trim() : "",
     password: typeof record.password === "string" ? record.password : "",
+    macs: typeof record.macs === "string" ? normalizeSshAlgorithmList(record.macs) : "",
+    ciphers: typeof record.ciphers === "string" ? normalizeSshAlgorithmList(record.ciphers) : "",
     autoLogin: Boolean(record.autoLogin),
     autoReconnect: Boolean(record.autoReconnect),
     maxReconnectAttempts: clampInteger(
@@ -1501,28 +3067,14 @@ function areSshServerConfigsEqual(
       server.address === other.address &&
       server.username === other.username &&
       server.password === other.password &&
+      server.macs === other.macs &&
+      server.ciphers === other.ciphers &&
       server.autoLogin === other.autoLogin &&
       server.autoReconnect === other.autoReconnect &&
       server.maxReconnectAttempts === other.maxReconnectAttempts &&
       server.reconnectDelayMs === other.reconnectDelayMs
     );
   });
-}
-
-function fileToSftpItem(file: File): SftpItem {
-  return {
-    id: `file-${Date.now()}-${file.name}`,
-    name: file.name,
-    type: "file",
-    size: formatFileSize(file.size),
-    modified: "Just now",
-  };
-}
-
-function mergeSftpItems(current: SftpItem[], incoming: SftpItem[]): SftpItem[] {
-  const existingNames = new Set(current.map((item) => item.name));
-  const additions = incoming.filter((item) => !existingNames.has(item.name));
-  return [...additions, ...current];
 }
 
 function formatFileSize(size: number): string {
@@ -1601,8 +3153,41 @@ function isBlankTerminalOutputLine(line: string): boolean {
   return stripAnsiControlSequences(line).trim().length === 0;
 }
 
-function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
+function SshTerminalOutput({
+  lines,
+  prompt,
+  command,
+  disabled,
+  running,
+  passwordMode,
+  suggestions,
+  highlightedSuggestionIndex,
+  scrollRequest,
+  focusRequest,
+  onCommandChange,
+  onCommandKeyDown,
+  onSuggestionHover,
+  onSuggestionSelect,
+}: {
+  lines: string[];
+  prompt: string;
+  command: string;
+  disabled: boolean;
+  running: boolean;
+  passwordMode: boolean;
+  suggestions: TerminalSuggestion[];
+  highlightedSuggestionIndex: number;
+  scrollRequest: number;
+  focusRequest: number;
+  onCommandChange: (value: string) => void;
+  onCommandKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
+  onSuggestionHover: (index: number) => void;
+  onSuggestionSelect: (suggestion: TerminalSuggestion) => void;
+}): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const shouldFollowOutputRef = useRef(true);
+  const previousScrollRequestRef = useRef(scrollRequest);
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     count: lines.length,
     getScrollElement: () => containerRef.current,
@@ -1611,11 +3196,58 @@ function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
   });
 
   useEffect(() => {
-    if (lines.length === 0) {
+    const container = containerRef.current;
+    if (!container) {
       return;
     }
-    virtualizer.scrollToIndex(lines.length - 1, { align: "end" });
-  }, [lines.length, virtualizer]);
+    const receivedExplicitScrollRequest = previousScrollRequestRef.current !== scrollRequest;
+    previousScrollRequestRef.current = scrollRequest;
+    if (receivedExplicitScrollRequest || shouldFollowOutputRef.current) {
+      container.scrollTop = container.scrollHeight;
+      shouldFollowOutputRef.current = true;
+    }
+  }, [lines.length, scrollRequest, virtualizer]);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, [focusRequest]);
+
+  function handleScroll(): void {
+    const container = containerRef.current;
+    if (!container) {
+      return;
+    }
+    shouldFollowOutputRef.current =
+      container.scrollHeight - container.scrollTop - container.clientHeight < 48;
+  }
+
+  function focusInput(): void {
+    inputRef.current?.focus();
+    shouldFollowOutputRef.current = true;
+  }
+
+  function hasActiveTextSelection(): boolean {
+    const selection = typeof window !== "undefined" ? window.getSelection() : null;
+    return Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
+  }
+
+  function focusInputFromTerminalClick(
+    event: ReactMouseEvent<HTMLDivElement>,
+  ): void {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest("input, button, textarea, select, a")
+    ) {
+      return;
+    }
+    // Allow drag-to-select inside the terminal; only refocus the input when
+    // the user actually releases without selecting text.
+    if (hasActiveTextSelection()) {
+      return;
+    }
+    focusInput();
+  }
 
   return (
     <div
@@ -1623,6 +3255,9 @@ function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
       data-testid="ssh-terminal"
       ref={containerRef}
       aria-live="polite"
+      onScroll={handleScroll}
+      onClick={focusInputFromTerminalClick}
+      style={{ userSelect: "text" }}
     >
       <div
         className="ssh-terminal-virtual-spacer"
@@ -1647,8 +3282,201 @@ function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
           );
         })}
       </div>
+      <div
+        className="ssh-terminal-active-line"
+        onClick={(event) => {
+          event.stopPropagation();
+          focusInputFromTerminalClick(event);
+        }}
+      >
+        <span className="ssh-terminal-active-prompt">{prompt}</span>
+        <input
+          ref={inputRef}
+          className="ssh-terminal-inline-input"
+          type={passwordMode ? "password" : "text"}
+          value={command}
+          onChange={(event) => onCommandChange(event.target.value)}
+          onKeyDown={onCommandKeyDown}
+          aria-label={passwordMode ? "SSH password input" : "SSH command"}
+          autoComplete="off"
+          autoCapitalize="off"
+          spellCheck={false}
+          disabled={disabled || running}
+          placeholder={
+            running
+              ? "running..."
+              : passwordMode
+                ? "password (hidden)"
+                : disabled
+                  ? "connect to run commands"
+                  : ""
+          }
+        />
+        {!passwordMode && suggestions.length > 0 && (
+          <div className="ssh-terminal-suggestions" role="listbox">
+            {suggestions.map((suggestion, index) => (
+              <button
+                className={`ssh-terminal-suggestion ${
+                  index === highlightedSuggestionIndex ? "is-active" : ""
+                }`}
+                key={`${suggestion.source}-${suggestion.value}`}
+                role="option"
+                aria-selected={index === highlightedSuggestionIndex}
+                type="button"
+                onMouseEnter={() => onSuggestionHover(index)}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => onSuggestionSelect(suggestion)}
+              >
+                <span>{suggestion.label}</span>
+                <small>{suggestion.source}</small>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
+}
+
+function addCommandHistoryEntry(history: string[], command: string): string[] {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return history;
+  }
+  const lastCommand = history[history.length - 1];
+  if (lastCommand === trimmed) {
+    return history;
+  }
+  return [...history, trimmed].slice(-100);
+}
+
+function buildTerminalSuggestions({
+  command,
+  history,
+  remoteItems,
+  remotePath,
+}: {
+  command: string;
+  history: string[];
+  remoteItems: SftpItem[];
+  remotePath: string;
+}): TerminalSuggestion[] {
+  const query = getCurrentCommandToken(command).toLowerCase();
+  const fullQuery = command.trimStart().toLowerCase();
+  if (!query && !fullQuery) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const suggestions: TerminalSuggestion[] = [];
+  const addSuggestion = (value: string, source: TerminalSuggestion["source"]): void => {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      return;
+    }
+    const label = source === "file" ? quoteShellPathIfNeeded(trimmed) : trimmed;
+    const lowerLabel = label.toLowerCase();
+    const isCommandLike = source === "command" || source === "history";
+    const matches = isCommandLike
+      ? lowerLabel.startsWith(fullQuery)
+      : lowerLabel.startsWith(query);
+    if (!matches) {
+      return;
+    }
+    seen.add(trimmed);
+    suggestions.push({ value: label, label, source });
+  };
+
+  [...history].reverse().forEach((entry) => addSuggestion(entry, "history"));
+  SSH_COMMAND_SUGGESTIONS.forEach((entry) => addSuggestion(entry, "command"));
+  if (remotePath.trim()) {
+    addSuggestion(remotePath, "path");
+  }
+  remoteItems.forEach((item) => addSuggestion(item.name, item.type === "folder" ? "path" : "file"));
+
+  return suggestions.slice(0, 16);
+}
+
+function getCurrentCommandToken(command: string): string {
+  const match = command.match(/(?:^|\s)(\S*)$/);
+  return match?.[1] ?? command;
+}
+
+function applyTerminalSuggestion(command: string, suggestion: string): string {
+  const token = getCurrentCommandToken(command);
+  if (!token) {
+    return suggestion;
+  }
+  const tokenStart = command.lastIndexOf(token);
+  if (tokenStart < 0) {
+    return suggestion;
+  }
+  return `${command.slice(0, tokenStart)}${suggestion}`;
+}
+
+function quoteShellPathIfNeeded(value: string): string {
+  if (!/\s/.test(value)) {
+    return value;
+  }
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function getDirectoryLocation(
+  source: DirectorySource,
+  localPath: string,
+  remotePath: string,
+): string {
+  return (source === "local" ? localPath : remotePath) || "--";
+}
+
+function renderSftpItemIcon(item: SftpItem): JSX.Element {
+  if (item.type === "folder") {
+    return <Folder size={16} />;
+  }
+  const extension = getFileExtension(item.name);
+  if (isImageExtension(extension)) {
+    return <Image size={16} />;
+  }
+  if (isDocumentFileExtension(extension)) {
+    return <FileText size={16} />;
+  }
+  return <FileIcon size={16} />;
+}
+
+function getFileExtension(name: string): string {
+  const dotIndex = name.lastIndexOf(".");
+  if (dotIndex < 0 || dotIndex === name.length - 1) {
+    return "";
+  }
+  return name.slice(dotIndex + 1).toLowerCase();
+}
+
+function isImageExtension(extension: string): boolean {
+  return ["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"].includes(extension);
+}
+
+function isDocumentFileExtension(extension: string): boolean {
+  return [
+    "conf",
+    "css",
+    "csv",
+    "html",
+    "ini",
+    "java",
+    "js",
+    "json",
+    "log",
+    "md",
+    "sh",
+    "sql",
+    "text",
+    "ts",
+    "tsx",
+    "txt",
+    "xml",
+    "yaml",
+    "yml",
+  ].includes(extension);
 }
 
 function formatSshPrompt(
