@@ -51,6 +51,7 @@ export type SshServerConfig = {
   id: string;
   name: string;
   address: string;
+  port: number;
   username: string;
   password: string;
   macs: string;
@@ -75,6 +76,9 @@ export const SSH_RECONNECT_ATTEMPTS_DEFAULT = 3;
 export const SSH_RECONNECT_DELAY_MIN_MS = 1000;
 export const SSH_RECONNECT_DELAY_MAX_MS = 60000;
 export const SSH_RECONNECT_DELAY_DEFAULT_MS = 3000;
+export const SSH_PORT_MIN = 1;
+export const SSH_PORT_MAX = 65535;
+export const SSH_PORT_DEFAULT = 22;
 
 type SftpItem = {
   id: string;
@@ -154,7 +158,8 @@ const DEFAULT_SSH_SERVERS: SshServerConfig[] = [
   {
     id: DEFAULT_SSH_SERVER_ID,
     name: "Local Dev",
-    address: "127.0.0.1:22",
+    address: "127.0.0.1",
+    port: SSH_PORT_DEFAULT,
     username: "",
     password: "",
     macs: "",
@@ -241,9 +246,14 @@ export function storeSelectedSshServerId(serverId: string): void {
 export function isValidSshServerCredential(server: SshServerConfig): boolean {
   return (
     server.address.trim().length > 0 &&
+    isValidSshPort(server.port) &&
     server.username.trim().length > 0 &&
     server.password.trim().length > 0
   );
+}
+
+export function getSshEndpoint(server: SshServerConfig): string {
+  return `${server.address.trim()}:${normalizeSshPort(server.port)}`;
 }
 
 export function hasValidSshCredential(
@@ -468,6 +478,7 @@ export function SshSettingsModal({
       id: `ssh-${Date.now()}`,
       name: "",
       address: "",
+      port: SSH_PORT_DEFAULT,
       username: "",
       password: "",
       macs: "",
@@ -537,6 +548,7 @@ export function SshSettingsModal({
       ...server,
       name: server.name.trim() || `Remote ${index + 1}`,
       address: server.address.trim(),
+      port: normalizeSshPort(server.port),
       username: server.username.trim(),
       macs: normalizeSshAlgorithmList(server.macs),
       ciphers: normalizeSshAlgorithmList(server.ciphers),
@@ -569,7 +581,7 @@ export function SshSettingsModal({
   }
 
   function updateSelectedNumber(
-    key: "maxReconnectAttempts" | "reconnectDelayMs",
+    key: "port" | "maxReconnectAttempts" | "reconnectDelayMs",
     value: string,
     fallback: number,
   ): void {
@@ -675,16 +687,48 @@ export function SshSettingsModal({
                   onChange={(event) => updateSelectedServer({ name: event.target.value })}
                 />
               </label>
-              <label className="ssh-settings-field">
-                <span>Address</span>
-                <input
-                  aria-label="Address"
-                  type="text"
-                  value={selectedServer.address}
-                  placeholder="host:22"
-                  onChange={(event) => updateSelectedServer({ address: event.target.value })}
-                />
-              </label>
+              <div className="ssh-settings-host-port-row">
+                <label className="ssh-settings-field">
+                  <span>Address</span>
+                  <input
+                    aria-label="Address"
+                    type="text"
+                    value={selectedServer.address}
+                    placeholder="127.0.0.1"
+                    onChange={(event) => updateSelectedServer({ address: event.target.value })}
+                  />
+                </label>
+                <label className="ssh-settings-field ssh-settings-port-field">
+                  <span>Port</span>
+                  <input
+                    aria-label="Port"
+                    className="ssh-numeric-input"
+                    type="number"
+                    min={SSH_PORT_MIN}
+                    max={SSH_PORT_MAX}
+                    step={1}
+                    value={selectedServer.port}
+                    onChange={(event) =>
+                      updateSelectedNumber(
+                        "port",
+                        event.target.value,
+                        SSH_PORT_DEFAULT,
+                      )
+                    }
+                    onBlur={(event) => {
+                      const parsed = Number.parseInt(event.target.value, 10);
+                      updateSelectedServer({
+                        port: clampInteger(
+                          parsed,
+                          SSH_PORT_MIN,
+                          SSH_PORT_MAX,
+                          SSH_PORT_DEFAULT,
+                        ),
+                      });
+                    }}
+                  />
+                </label>
+              </div>
               <label className="ssh-settings-field">
                 <span>Username</span>
                 <input
@@ -926,14 +970,9 @@ function getSshSettingsServerName(
 }
 
 function formatSshSettingsEndpoint(server: SshServerConfig): string {
-  const rawAddress = server.address.trim();
-  const address = rawAddress
-    ? rawAddress.includes(":")
-      ? rawAddress.slice(0, rawAddress.lastIndexOf(":"))
-      : rawAddress
-    : "No address";
-  const username = server.username.trim() || "No user";
-  return `${address} · ${username}`;
+  const endpoint = `${server.address.trim() || "No address"}:${normalizeSshPort(server.port)}`;
+  const endpointUsername = server.username.trim() || "No user";
+  return `${endpoint} - ${endpointUsername}`;
 }
 
 function getSshSettingsStatus(
@@ -1207,8 +1246,10 @@ export function SshTool({
 
     const target =
       selectedServer?.username && selectedServer?.address
-        ? `${selectedServer.username}@${selectedServer.address}`
-        : (selectedServer?.address ?? "server");
+        ? `${selectedServer.username}@${getSshEndpoint(selectedServer)}`
+        : selectedServer?.address
+          ? getSshEndpoint(selectedServer)
+          : "server";
 
     if (connectionStatus === "connecting") {
       appendLines([`Connecting to ${target}...`]);
@@ -2956,10 +2997,7 @@ function formatRemoteDirectoryTitle(server: SshServerConfig | null): string {
     return "Remote Directory";
   }
 
-  const address = server.address.trim();
-  const host = address.includes(":")
-    ? address.slice(0, address.lastIndexOf(":"))
-    : address;
+  const host = server.address.trim();
   const username = server.username.trim();
   return username ? `Remote: ${username}@${host}` : `Remote: ${host}`;
 }
@@ -2999,6 +3037,9 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
     return null;
   }
   const record = value as Partial<SshServerConfig>;
+  const parsedEndpoint = parseStoredSshEndpoint(
+    typeof record.address === "string" ? record.address : "",
+  );
   const id =
     typeof record.id === "string" && record.id.length > 0
       ? record.id
@@ -3006,7 +3047,8 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
   return {
     id,
     name: typeof record.name === "string" ? record.name : "Remote",
-    address: typeof record.address === "string" ? record.address.trim() : "",
+    address: parsedEndpoint.host,
+    port: normalizeSshPort(record.port ?? parsedEndpoint.port),
     username: typeof record.username === "string" ? record.username.trim() : "",
     password: typeof record.password === "string" ? record.password : "",
     macs: typeof record.macs === "string" ? normalizeSshAlgorithmList(record.macs) : "",
@@ -3028,6 +3070,37 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
   };
 }
 
+function parseStoredSshEndpoint(address: string): { host: string; port: number } {
+  const trimmed = address.trim();
+  if (!trimmed) {
+    return { host: "", port: SSH_PORT_DEFAULT };
+  }
+
+  const lastColonIndex = trimmed.lastIndexOf(":");
+  if (lastColonIndex <= 0 || lastColonIndex === trimmed.length - 1) {
+    return { host: trimmed, port: SSH_PORT_DEFAULT };
+  }
+
+  const host = trimmed.slice(0, lastColonIndex).trim();
+  const portText = trimmed.slice(lastColonIndex + 1).trim();
+  if (!host || !/^\d+$/.test(portText)) {
+    return { host: trimmed, port: SSH_PORT_DEFAULT };
+  }
+
+  return {
+    host,
+    port: normalizeSshPort(Number.parseInt(portText, 10)),
+  };
+}
+
+function normalizeSshPort(value: unknown): number {
+  return clampInteger(value, SSH_PORT_MIN, SSH_PORT_MAX, SSH_PORT_DEFAULT);
+}
+
+function isValidSshPort(value: unknown): boolean {
+  return normalizeSshPort(value) === value;
+}
+
 function clampInteger(
   value: unknown,
   min: number,
@@ -3037,6 +3110,8 @@ function clampInteger(
   const numeric =
     typeof value === "number" && Number.isFinite(value)
       ? Math.round(value)
+      : typeof value === "string" && value.trim()
+        ? Number.parseInt(value, 10)
       : Number.NaN;
   if (!Number.isFinite(numeric)) {
     return fallback;
@@ -3065,6 +3140,7 @@ function areSshServerConfigsEqual(
       server.id === other.id &&
       server.name === other.name &&
       server.address === other.address &&
+      server.port === other.port &&
       server.username === other.username &&
       server.password === other.password &&
       server.macs === other.macs &&
@@ -3484,9 +3560,7 @@ function formatSshPrompt(
   remoteCwd: string | null,
 ): string {
   const address = server?.address.trim() || "ssh";
-  const host = address.includes(":")
-    ? address.slice(0, address.lastIndexOf(":"))
-    : address;
+  const host = address;
   const userHost = server?.username.trim()
     ? `${server.username.trim()}@${host}`
     : host;

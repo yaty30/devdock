@@ -9843,9 +9843,23 @@ button.database-tree-item {
   justify-items: center;
   align-items: start;
   justify-content: center;
-  min-height: 100%;
-  padding: 12px 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 10px 0;
   border-bottom: 0;
+}
+
+.ssh-command-panel-collapsed .ssh-cli-panel.panel {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  background: var(--subtle-bg);
+  box-shadow: none;
+}
+
+.ssh-command-panel-collapsed .ssh-cli-panel.panel > :not(.panel-header) {
+  display: none;
 }
 
 .ssh-command-panel-collapsed .ssh-cli-panel .panel-title-group {
@@ -9854,6 +9868,8 @@ button.database-tree-item {
 
 .ssh-command-panel-collapsed .ssh-cli-panel .panel-action {
   width: 100%;
+  min-width: 0;
+  display: flex;
   justify-content: center;
 }
 
@@ -9865,6 +9881,8 @@ button.database-tree-item {
 
 .ssh-panel-collapse-button {
   width: 30px;
+  height: 30px;
+  min-width: 30px;
   min-height: 30px;
   color: var(--muted);
   background: transparent;
@@ -9887,12 +9905,6 @@ button.database-tree-item {
 
 .ssh-command-panel-collapsed .ssh-status {
   display: none;
-}
-
-.ssh-command-panel-collapsed .ssh-terminal,
-.ssh-command-panel-collapsed .ssh-command-row {
-  opacity: 0;
-  pointer-events: none;
 }
 
 .ssh-terminal {
@@ -10734,58 +10746,56 @@ button.database-tree-item {
 .ssh-settings-modal.modal-xl {
   width: min(1340px, calc(100vw - 24px));
   height: min(760px, calc(100dvh - 24px));
-  color: #eef3fb;
-  background:
-    radial-gradient(circle at 12% 0%, rgba(176, 87, 255, 0.13), transparent 34%),
-    linear-gradient(145deg, rgba(19, 27, 40, 0.98), rgba(10, 16, 26, 0.98));
-  border-color: rgba(136, 153, 177, 0.24);
-  border-radius: 12px;
-  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.48);
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
 }
 
 .ssh-settings-modal .modal-header {
-  min-height: 70px;
-  padding: 16px 24px 12px;
-  border-bottom: 0;
+  min-height: 52px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
 }
 
 .ssh-settings-modal .modal-header h2 {
-  color: #f7f9fe;
-  font-size: var(--font-2xl);
+  color: var(--text);
+  font-size: var(--font-xl);
   font-weight: 820;
 }
 
 .ssh-settings-modal .modal-header-actions .icon-button {
-  width: 42px;
-  height: 42px;
-  border-radius: 9px;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
 }
 
 .ssh-settings-modal .modal-header-actions .icon-button.primary {
   color: #ffffff;
-  background: linear-gradient(180deg, #b66cff, #9256dc);
-  border-color: rgba(214, 168, 255, 0.36);
-  box-shadow: 0 12px 26px rgba(176, 92, 255, 0.24);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .ssh-settings-modal .modal-header-actions .icon-button.secondary {
-  color: #aab5c8;
-  background: rgba(8, 13, 23, 0.58);
-  border-color: rgba(128, 145, 169, 0.18);
+  color: var(--muted);
+  background: var(--field-bg);
+  border-color: var(--border);
 }
 
 .ssh-settings-modal-content {
   display: flex;
   flex-direction: column;
   gap: 0;
-  padding: 0 12px 12px;
+  padding: 10px;
   overflow: hidden;
 }
 
 .ssh-settings-layout {
   display: grid;
-  grid-template-columns: minmax(300px, 414px) minmax(0, 1fr);
-  gap: 10px;
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+  gap: 8px;
   flex: 1 1 auto;
   min-height: 0;
 }
@@ -10794,26 +10804,26 @@ button.database-tree-item {
 .ssh-settings-editor {
   min-width: 0;
   min-height: 0;
-  background: linear-gradient(180deg, rgba(20, 29, 42, 0.72), rgba(13, 20, 31, 0.78));
-  border: 1px solid rgba(128, 145, 169, 0.18);
+  background: var(--field-bg);
+  border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  box-shadow: none;
 }
 
 .ssh-settings-sidebar {
   display: flex;
   flex-direction: column;
-  padding: 18px 12px 14px;
+  padding: 10px;
 }
 
 .ssh-settings-connection-list {
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 8px;
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 0 0 12px;
+  padding: 0 0 8px;
   scrollbar-gutter: stable;
 }
 
@@ -10821,38 +10831,34 @@ button.database-tree-item {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   width: 100%;
-  min-height: 80px;
-  padding: 14px 16px;
-  color: #e8edf8;
+  min-height: 56px;
+  padding: 9px 10px;
+  color: var(--text);
   text-align: left;
-  background: rgba(17, 25, 38, 0.74);
-  border: 1px solid rgba(119, 138, 164, 0.22);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 7px;
   cursor: pointer;
   transition:
     background 150ms ease,
     border-color 150ms ease,
-    box-shadow 150ms ease,
-    transform 150ms ease;
+    box-shadow 150ms ease;
 }
 
 .ssh-settings-connection-card:hover,
 .ssh-settings-connection-card:focus-visible {
-  background: rgba(25, 35, 52, 0.9);
-  border-color: rgba(185, 112, 255, 0.42);
+  background: var(--subtle-bg);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
   outline: none;
 }
 
 .ssh-settings-connection-card.selected {
-  background:
-    linear-gradient(90deg, rgba(169, 87, 255, 0.2), rgba(169, 87, 255, 0.07)),
-    rgba(23, 31, 47, 0.92);
-  border-color: #b45cff;
-  box-shadow:
-    0 0 0 1px rgba(205, 128, 255, 0.18),
-    0 0 28px rgba(174, 83, 255, 0.18);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .ssh-settings-connection-card.is-new .ssh-settings-connection-icon {
@@ -10862,9 +10868,9 @@ button.database-tree-item {
 .ssh-settings-connection-icon {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  color: #c477ff;
+  width: 32px;
+  height: 32px;
+  color: var(--accent);
 }
 
 .ssh-settings-connection-copy {
@@ -10877,7 +10883,7 @@ button.database-tree-item {
 .ssh-settings-editor-header h3 {
   min-width: 0;
   overflow: hidden;
-  color: #f5f7fc;
+  color: var(--text);
   font-size: var(--font-lg);
   font-weight: 820;
   text-overflow: ellipsis;
@@ -10887,27 +10893,27 @@ button.database-tree-item {
 .ssh-settings-connection-copy span {
   min-width: 0;
   overflow: hidden;
-  color: #9ea8ba;
+  color: var(--muted);
   font-size: var(--font-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ssh-settings-card-status {
-  width: 11px;
-  height: 11px;
-  background: #b868ff;
+  width: 9px;
+  height: 9px;
+  background: var(--success);
   border-radius: 999px;
-  box-shadow: 0 0 14px rgba(190, 104, 255, 0.9);
+  box-shadow: none;
 }
 
 .ssh-settings-card-menu {
   display: grid;
   place-items: center;
-  width: 24px;
-  height: 24px;
-  color: #9aa5b8;
-  border: 1px solid rgba(135, 151, 174, 0.22);
+  width: 22px;
+  height: 22px;
+  color: var(--muted);
+  border: 1px solid var(--border);
   border-radius: 999px;
 }
 
@@ -10915,24 +10921,24 @@ button.database-tree-item {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 8px;
   flex: 0 0 auto;
   width: 100%;
-  min-height: 62px;
-  color: #d074ff;
+  min-height: 38px;
+  color: var(--accent);
   font-size: var(--font-md);
   font-weight: 800;
-  background: rgba(154, 76, 232, 0.12);
-  border: 1px solid rgba(192, 108, 255, 0.24);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
   border-radius: 7px;
   cursor: pointer;
 }
 
 .ssh-settings-add-connection:hover,
 .ssh-settings-add-connection:focus-visible {
-  color: #f0d2ff;
-  background: rgba(169, 87, 255, 0.2);
-  border-color: rgba(202, 132, 255, 0.48);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
   outline: none;
 }
 
@@ -10940,17 +10946,17 @@ button.database-tree-item {
   display: flex;
   flex-direction: column;
   overflow: auto;
-  padding: 24px 24px 8px;
+  padding: 12px 14px 6px;
 }
 
 .ssh-settings-editor-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  min-height: 40px;
-  padding: 0 0 14px;
-  border-bottom: 1px solid rgba(128, 145, 169, 0.16);
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--border);
 }
 
 .ssh-settings-editor-header h3 {
@@ -10961,16 +10967,16 @@ button.database-tree-item {
 .ssh-settings-status-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex: 0 0 auto;
-  min-height: 30px;
-  padding: 0 13px;
-  color: #99a5b8;
+  min-height: 24px;
+  padding: 0 9px;
+  color: var(--muted);
   font-size: var(--font-sm);
   font-weight: 800;
-  background: rgba(130, 145, 168, 0.1);
-  border: 1px solid rgba(130, 145, 168, 0.2);
-  border-radius: 8px;
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
 }
 
 .ssh-settings-status-badge span {
@@ -10981,51 +10987,66 @@ button.database-tree-item {
 }
 
 .ssh-settings-status-badge.connected {
-  color: #20d47c;
-  background: rgba(32, 212, 124, 0.1);
-  border-color: rgba(32, 212, 124, 0.25);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--success) 32%, var(--border));
 }
 
 .ssh-settings-status-badge.connecting {
-  color: #ffd166;
-  background: rgba(255, 209, 102, 0.1);
-  border-color: rgba(255, 209, 102, 0.26);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 32%, var(--border));
 }
 
 .ssh-settings-section {
   display: grid;
-  gap: 10px;
-  padding: 16px 0;
-  border-bottom: 1px solid rgba(128, 145, 169, 0.14);
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
 }
 
 .ssh-settings-section.compact {
-  gap: 12px;
+  gap: 8px;
 }
 
 .ssh-settings-section h4 {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
-  margin: 0 0 2px;
-  color: #f3f5fb;
+  gap: 8px;
+  margin: 0;
+  color: var(--text);
   font-size: var(--font-md);
   font-weight: 820;
 }
 
 .ssh-settings-section h4 svg {
-  color: #c477ff;
+  color: var(--accent);
 }
 
 .ssh-settings-field,
 .ssh-settings-check-field {
   display: grid;
-  grid-template-columns: minmax(136px, 180px) minmax(0, 1fr);
+  grid-template-columns: minmax(120px, 150px) minmax(0, 1fr);
   align-items: center;
-  gap: 18px;
+  gap: 10px;
   min-width: 0;
-  color: #c6cfdd;
+  color: var(--muted);
   font-size: var(--font-md);
+}
+
+.ssh-settings-host-port-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 150px);
+  gap: 8px;
+  min-width: 0;
+}
+
+.ssh-settings-host-port-row .ssh-settings-field {
+  grid-template-columns: minmax(120px, 150px) minmax(0, 1fr);
+}
+
+.ssh-settings-host-port-row .ssh-settings-port-field {
+  grid-template-columns: auto minmax(0, 1fr);
 }
 
 .ssh-settings-field > span:first-child,
@@ -11040,25 +11061,25 @@ button.database-tree-item {
 .ssh-settings-field input[type="number"] {
   width: 100%;
   min-width: 0;
-  height: 38px;
-  padding: 0 12px;
-  color: #e9eef8;
+  height: 34px;
+  padding: 0 10px;
+  color: var(--text);
   font: inherit;
-  background: rgba(11, 16, 26, 0.48);
-  border: 1px solid rgba(128, 145, 169, 0.22);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 7px;
   outline: none;
 }
 
 .ssh-settings-field input:focus {
-  border-color: rgba(195, 105, 255, 0.82);
-  box-shadow: 0 0 0 2px rgba(180, 92, 255, 0.2);
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .ssh-settings-field input:disabled {
-  color: rgba(167, 178, 196, 0.58);
-  background: rgba(126, 140, 160, 0.11);
-  border-color: rgba(128, 145, 169, 0.14);
+  color: color-mix(in srgb, var(--muted) 66%, transparent);
+  background: var(--subtle-bg);
+  border-color: var(--border);
   cursor: not-allowed;
 }
 
@@ -11077,13 +11098,13 @@ button.database-tree-item {
 .ssh-password-toggle {
   position: relative;
   flex: 0 0 auto;
-  width: 48px;
-  height: 38px;
+  width: 40px;
+  height: 34px;
   padding: 0;
-  border: 1px solid rgba(128, 145, 169, 0.22);
+  border: 1px solid var(--border);
   border-radius: 7px;
-  color: #a9b4c6;
-  background: rgba(11, 16, 26, 0.48);
+  color: var(--muted);
+  background: var(--surface);
   box-sizing: border-box;
 }
 
@@ -11098,7 +11119,7 @@ button.database-tree-item {
 }
 
 .ssh-password-toggle:hover {
-  color: #d28bff;
+  color: var(--accent);
 }
 
 .ssh-numeric-input {
@@ -11112,25 +11133,25 @@ button.database-tree-item {
 .ssh-settings-checkbox-copy {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  color: #aeb8c9;
+  color: var(--text);
   line-height: 1.25;
 }
 
 .ssh-settings-checkbox-copy input {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   margin: 0;
-  accent-color: #b45cff;
+  accent-color: var(--accent);
 }
 
 .ssh-settings-helper {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  margin: -2px 0 0 198px;
-  color: #8f9aae;
+  gap: 6px;
+  margin: -1px 0 0 160px;
+  color: var(--muted);
   font-size: var(--font-sm);
   line-height: 1.35;
 }
@@ -11141,7 +11162,7 @@ button.database-tree-item {
   place-items: center;
   width: 17px;
   height: 17px;
-  color: #9aa7ba;
+  color: var(--muted);
   font-size: var(--font-xs);
   font-weight: 900;
   border: 1px solid currentColor;
@@ -11149,7 +11170,7 @@ button.database-tree-item {
 }
 
 .ssh-settings-helper-full {
-  margin: -2px 0 0 198px;
+  margin: -1px 0 0 160px;
 }
 
 .ssh-status {
@@ -11195,9 +11216,9 @@ button.database-tree-item {
 
 .ssh-settings-warning {
   flex: 0 0 auto;
-  min-height: 34px;
-  margin: 10px 10px 0;
-  padding: 7px 10px;
+  min-height: 30px;
+  margin: 8px 0 0;
+  padding: 6px 9px;
   color: var(--warning);
   font-size: var(--font-sm);
   font-weight: 760;
@@ -11211,53 +11232,53 @@ button.database-tree-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
   flex: 0 0 auto;
-  margin: 0 -12px -12px;
-  padding: 14px 24px 16px;
-  background: rgba(8, 13, 22, 0.36);
-  border-top: 1px solid rgba(128, 145, 169, 0.14);
+  margin: 8px -10px -10px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
 }
 
 .ssh-settings-footer-actions {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .ssh-settings-footer .button {
-  min-width: 110px;
-  min-height: 46px;
+  min-width: 88px;
+  min-height: 34px;
   border-radius: 7px;
 }
 
 .ssh-settings-footer .button.primary {
   color: #ffffff;
-  background: linear-gradient(180deg, #be72ff, #a85bf0);
-  border-color: rgba(218, 172, 255, 0.42);
-  box-shadow: 0 12px 28px rgba(177, 88, 255, 0.25);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
 }
 
 .ssh-settings-delete-button {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  color: #ff6b73;
-  background: rgba(255, 85, 93, 0.08);
-  border: 1px solid rgba(255, 85, 93, 0.28);
+  gap: 7px;
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 8%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--error) 28%, var(--border));
 }
 
 .ssh-settings-delete-button:hover,
 .ssh-settings-delete-button:focus-visible {
-  color: #ff9197;
-  background: rgba(255, 85, 93, 0.14);
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, var(--surface));
   outline: none;
 }
 
 .ssh-settings-delete-button:disabled {
-  color: rgba(255, 107, 115, 0.42);
-  background: rgba(255, 85, 93, 0.04);
-  border-color: rgba(255, 85, 93, 0.12);
+  color: color-mix(in srgb, var(--error) 46%, transparent);
+  background: var(--subtle-bg);
+  border-color: var(--border);
 }
 
 @media (max-width: 980px) {
@@ -11277,6 +11298,15 @@ button.database-tree-item {
   .ssh-settings-check-field {
     grid-template-columns: minmax(0, 1fr);
     gap: 7px;
+  }
+
+  .ssh-settings-host-port-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ssh-settings-host-port-row .ssh-settings-field,
+  .ssh-settings-port-field {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .ssh-settings-helper {

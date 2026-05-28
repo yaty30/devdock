@@ -103,6 +103,7 @@ export class SshService {
 
     return new Promise((resolve) => {
       let settled = false;
+      let ready = false;
 
       const finish = (result: SshConnectResult): void => {
         if (settled) {
@@ -113,6 +114,7 @@ export class SshService {
       };
 
       client.once("ready", () => {
+        ready = true;
         const sessionId = randomUUID();
         const session: SshSession = {
           id: sessionId,
@@ -139,7 +141,7 @@ export class SshService {
       });
 
       client.on("error", (error) => {
-        if (!settled) {
+        if (!settled && !ready) {
           finish({
             ok: false,
             sessionId: null,
@@ -631,24 +633,19 @@ function cleanShellOutput(output: string): string {
 
 function getRemoteWorkingDirectory(client: Client): Promise<string> {
   return new Promise((resolve, reject) => {
-    client.exec("pwd", (error, stream) => {
+    client.sftp((error, sftp) => {
       if (error) {
         reject(error);
         return;
       }
 
-      let output = "";
-      stream.on("data", (chunk: Buffer | string) => {
-        output += toText(chunk);
-      });
-      stream.stderr.on("data", () => undefined);
-      stream.once("error", reject);
-      stream.once("close", () => {
-        const cwd = normalizeLineEndings(output)
-          .split("\n")
-          .map((line) => line.trim())
-          .find(Boolean);
-        resolve(cwd ?? "");
+      sftp.realpath(".", (realpathError, absolutePath) => {
+        sftp.end();
+        if (realpathError) {
+          reject(realpathError);
+          return;
+        }
+        resolve(absolutePath || "");
       });
     });
   });

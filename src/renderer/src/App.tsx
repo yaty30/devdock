@@ -52,6 +52,7 @@ import {
 import {
   readStoredSelectedSshServerId,
   readStoredSshServers,
+  getSshEndpoint,
   hasValidSshCredential,
   isValidSshServerCredential,
   SshHeaderActions,
@@ -777,7 +778,7 @@ function App(): JSX.Element {
       .sshConnect({
         serverId: server.id,
         name: server.name,
-        address: server.address,
+        address: getSshEndpoint(server),
         username: server.username,
         password: server.password,
         macs: server.macs,
