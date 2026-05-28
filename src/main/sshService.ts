@@ -341,7 +341,7 @@ function cleanInteractiveShellOutput(output: string, command: string): string {
     .split("\n")
     .map((line) => line.trimEnd())
     .filter((line) => {
-      const trimmed = line.trim();
+      const trimmed = stripTerminalControlSequences(line).trim();
       if (!trimmed) {
         return false;
       }
@@ -355,6 +355,14 @@ function cleanInteractiveShellOutput(output: string, command: string): string {
     });
 
   return cleanShellOutput(lines.join("\n"));
+}
+
+function stripTerminalControlSequences(value: string): string {
+  return value
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[()][A-Za-z0-9]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }
 
 function looksLikePrompt(output: string): boolean {

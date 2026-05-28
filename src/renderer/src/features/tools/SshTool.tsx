@@ -8,16 +8,25 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
+  ArrowLeft,
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
   Download,
   Eye,
   EyeOff,
   FileText,
   Folder,
+  FolderPlus,
+  FolderUp,
+  Home,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
   PlugZap,
   Plus,
+  RefreshCw,
   Settings,
   TerminalSquare,
   Trash2,
@@ -67,6 +76,12 @@ type SftpItem = {
   type: "file" | "folder";
   size: string;
   modified: string;
+};
+
+type SftpTreeRow = SftpItem & {
+  depth: number;
+  expanded?: boolean;
+  hasChildren?: boolean;
 };
 
 type TransferDragPayload = {
@@ -129,6 +144,13 @@ const INITIAL_REMOTE_ITEMS: SftpItem[] = [
     modified: "May 27 10:04",
   },
   {
+    id: "remote-env",
+    name: ".env",
+    type: "file",
+    size: "1 KB",
+    modified: "May 27 09:58",
+  },
+  {
     id: "remote-readme",
     name: "README.md",
     type: "file",
@@ -136,6 +158,64 @@ const INITIAL_REMOTE_ITEMS: SftpItem[] = [
     modified: "May 26 15:22",
   },
 ];
+const LOCAL_TREE_CHILDREN: SftpItem[] = [
+  {
+    id: "local-src-components",
+    name: "components",
+    type: "folder",
+    size: "--",
+    modified: "Today 09:20",
+  },
+  {
+    id: "local-src-pages",
+    name: "pages",
+    type: "folder",
+    size: "--",
+    modified: "Today 08:58",
+  },
+  {
+    id: "local-src-assets",
+    name: "assets",
+    type: "folder",
+    size: "--",
+    modified: "Today 08:45",
+  },
+];
+const REMOTE_TREE_CHILDREN: SftpItem[] = [
+  {
+    id: "remote-app-http",
+    name: "Http",
+    type: "folder",
+    size: "--",
+    modified: "May 27 10:11",
+  },
+  {
+    id: "remote-app-models",
+    name: "Models",
+    type: "folder",
+    size: "--",
+    modified: "May 27 10:11",
+  },
+  {
+    id: "remote-app-providers",
+    name: "Providers",
+    type: "folder",
+    size: "--",
+    modified: "May 27 10:11",
+  },
+];
+const TERMINAL_DIRECTORY_NAMES = new Set([
+  "Desktop",
+  "Documents",
+  "Downloads",
+  "Music",
+  "Pictures",
+  "Public",
+  "snap",
+  "Templates",
+  "Videos",
+]);
+const SSH_TERMINAL_ROW_HEIGHT = 20;
 
 export function readStoredSshServers(): SshServerConfig[] {
   const stored = window.localStorage.getItem(SSH_SERVERS_STORAGE_KEY);
@@ -1015,7 +1095,7 @@ export function SshTool({
             onChange={(event) => setCommand(event.target.value)}
             placeholder={
               connected
-                ? "Enter SSH command"
+                ? "Type here"
                 : "Connect to a server to run commands"
             }
             aria-label="SSH command"
@@ -1035,11 +1115,9 @@ export function SshTool({
         <SftpPanel
           title="Local Directory"
           path={localPath}
-          transferLabel="Drop here to download"
           items={localItems}
           source="local"
           dragOver={dragOverPanel === "local"}
-          actionIcon={<Download size={15} />}
           disabled={disabled}
           onPathChange={setLocalPath}
           onDragStart={handleItemDragStart}
@@ -1048,13 +1126,11 @@ export function SshTool({
           onDragLeave={() => setDragOverPanel(null)}
         />
         <SftpPanel
-          title="Remote Directory"
+          title="Remote: admin@promaxgb10-64b5"
           path={remotePath}
-          transferLabel="Drop here to upload"
           items={remoteItems}
           source="remote"
           dragOver={dragOverPanel === "remote"}
-          actionIcon={<Upload size={15} />}
           disabled={disabled}
           onPathChange={setRemotePath}
           onDragStart={handleItemDragStart}
@@ -1070,11 +1146,9 @@ export function SshTool({
 function SftpPanel({
   title,
   path,
-  transferLabel,
   items,
   source,
   dragOver,
-  actionIcon,
   disabled,
   onPathChange,
   onDragStart,
@@ -1084,11 +1158,9 @@ function SftpPanel({
 }: {
   title: string;
   path: string;
-  transferLabel: string;
   items: SftpItem[];
   source: "local" | "remote";
   dragOver: boolean;
-  actionIcon: JSX.Element;
   disabled: boolean;
   onPathChange: (path: string) => void;
   onDragStart: (
@@ -1106,50 +1178,256 @@ function SftpPanel({
   ) => void;
   onDragLeave: () => void;
 }): JSX.Element {
+  const treeRows = buildSftpTreeRows(source, items);
+  const panelLabel = source === "local" ? "Local Directory" : "Remote Directory";
+
   return (
     <Panel
       title={title}
       className={`ssh-directory-panel${dragOver ? " drag-over" : ""}`}
-      action={
-        <span className="ssh-transfer-badge">
-          {actionIcon}
-          {transferLabel}
-        </span>
-      }
+      action={<SftpPanelActions disabled={disabled} label={panelLabel} />}
     >
-      <input
-        className="ssh-path-input"
-        value={path}
-        onChange={(event) => onPathChange(event.target.value)}
-        aria-label={`${title} path`}
-        disabled={disabled}
-      />
+      <div className="ssh-path-row" aria-label={`${title} navigation`}>
+        <SftpNavButton label={`${panelLabel} back`} disabled={disabled}>
+          <ArrowLeft size={15} />
+        </SftpNavButton>
+        <SftpNavButton label={`${panelLabel} forward`} disabled={disabled}>
+          <ArrowRight size={15} />
+        </SftpNavButton>
+        <SftpNavButton
+          label={`${panelLabel} parent directory`}
+          disabled={disabled}
+          onClick={() => onPathChange(getParentDirectoryPath(path, source))}
+        >
+          <FolderUp size={15} />
+        </SftpNavButton>
+        <SftpNavButton
+          label={`${panelLabel} home`}
+          disabled={disabled}
+          onClick={() => onPathChange(getDefaultDirectoryPath(source))}
+        >
+          <Home size={15} />
+        </SftpNavButton>
+        <input
+          className="ssh-path-input"
+          value={path}
+          onChange={(event) => onPathChange(event.target.value)}
+          aria-label={`${title} path`}
+          disabled={disabled}
+        />
+      </div>
       <div
-        className="ssh-file-list"
+        className="ssh-file-tree"
         onDragOver={(event) => onDragOver(event, source)}
         onDrop={(event) => onDrop(event, source)}
         onDragLeave={onDragLeave}
+        data-testid={`${source}-directory-tree`}
       >
-        {items.map((item) => (
-          <div
-            className="ssh-file-row"
-            draggable={!disabled}
-            key={item.id}
-            onDragStart={(event) => onDragStart(event, source, item.id)}
-          >
-            {item.type === "folder" ? (
-              <Folder size={16} />
-            ) : (
-              <FileText size={16} />
-            )}
-            <strong>{item.name}</strong>
-            <span>{item.size}</span>
-            <span>{item.modified}</span>
-          </div>
-        ))}
+        <div className="ssh-file-tree-head" role="row">
+          <span>Name</span>
+          <span>Size</span>
+          <span>Modified</span>
+          <span aria-hidden="true" />
+        </div>
+        <div className="ssh-file-tree-body">
+          {treeRows.map((item) => (
+            <div
+              className={`ssh-file-row ssh-file-row-depth-${item.depth}`}
+              draggable={!disabled}
+              key={item.id}
+              onDragStart={(event) => onDragStart(event, source, item.id)}
+              role="row"
+            >
+              <div className="ssh-file-name-cell">
+                <span className="ssh-tree-guides" aria-hidden="true" />
+                <span className="ssh-tree-chevron" aria-hidden="true">
+                  {item.type === "folder" && item.hasChildren ? (
+                    item.expanded ? (
+                      <ChevronDown size={14} />
+                    ) : (
+                      <ChevronRight size={14} />
+                    )
+                  ) : null}
+                </span>
+                <span className="ssh-file-kind-icon" aria-hidden="true">
+                  {item.type === "folder" ? (
+                    <Folder size={16} />
+                  ) : (
+                    <FileText size={16} />
+                  )}
+                </span>
+                <strong>{item.name}</strong>
+              </div>
+              <span className="ssh-file-size-cell">{item.size}</span>
+              <span className="ssh-file-modified-cell">{item.modified}</span>
+              <button
+                className="ssh-row-action-button"
+                type="button"
+                aria-label={`${item.name} actions`}
+                disabled={disabled}
+              >
+                <MoreHorizontal size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
       </div>
     </Panel>
   );
+}
+
+function SftpPanelActions({
+  disabled,
+  label,
+}: {
+  disabled: boolean;
+  label: string;
+}): JSX.Element {
+  return (
+    <span className="ssh-directory-actions" aria-label={`${label} actions`}>
+      <SftpActionButton label={`${label} upload`} disabled={disabled}>
+        <Upload size={15} />
+      </SftpActionButton>
+      <SftpActionButton label={`${label} download`} disabled={disabled}>
+        <Download size={15} />
+      </SftpActionButton>
+      <SftpActionButton label={`${label} new folder`} disabled={disabled}>
+        <FolderPlus size={15} />
+      </SftpActionButton>
+      <SftpActionButton label={`${label} refresh`} disabled={disabled}>
+        <RefreshCw size={15} />
+      </SftpActionButton>
+      <SftpActionButton label={`${label} more options`} disabled={disabled}>
+        <MoreHorizontal size={15} />
+      </SftpActionButton>
+    </span>
+  );
+}
+
+function SftpActionButton({
+  children,
+  disabled,
+  label,
+}: {
+  children: JSX.Element;
+  disabled: boolean;
+  label: string;
+}): JSX.Element {
+  return (
+    <button
+      className="ssh-directory-action-button"
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SftpNavButton({
+  children,
+  disabled,
+  label,
+  onClick,
+}: {
+  children: JSX.Element;
+  disabled: boolean;
+  label: string;
+  onClick?: () => void;
+}): JSX.Element {
+  return (
+    <button
+      className="ssh-path-nav-button"
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function buildSftpTreeRows(
+  source: "local" | "remote",
+  items: SftpItem[],
+): SftpTreeRow[] {
+  return source === "local"
+    ? buildLocalTreeRows(items)
+    : buildRemoteTreeRows(items);
+}
+
+function buildLocalTreeRows(items: SftpItem[]): SftpTreeRow[] {
+  const src = findSftpItem(items, "src", INITIAL_LOCAL_ITEMS[0]);
+  const env = findSftpItem(items, ".env.local", INITIAL_LOCAL_ITEMS[1]);
+  const packageJson = findSftpItem(
+    items,
+    "package.json",
+    INITIAL_LOCAL_ITEMS[2],
+  );
+  const knownNames = new Set(["src", ".env.local", "package.json"]);
+
+  return [
+    { ...src, depth: 0, expanded: true, hasChildren: true },
+    ...LOCAL_TREE_CHILDREN.map((item) => ({ ...item, depth: 1 })),
+    { ...env, depth: 0 },
+    { ...packageJson, depth: 0 },
+    ...items
+      .filter((item) => !knownNames.has(item.name))
+      .map((item) => ({ ...item, depth: 0 })),
+  ];
+}
+
+function buildRemoteTreeRows(items: SftpItem[]): SftpTreeRow[] {
+  const app = findSftpItem(items, "app", INITIAL_REMOTE_ITEMS[0]);
+  const logs = findSftpItem(items, "logs", INITIAL_REMOTE_ITEMS[1]);
+  const env = findSftpItem(items, ".env", INITIAL_REMOTE_ITEMS[2]);
+  const readme = findSftpItem(items, "README.md", INITIAL_REMOTE_ITEMS[3]);
+  const knownNames = new Set(["app", "logs", ".env", "README.md"]);
+
+  return [
+    { ...app, depth: 0, expanded: true, hasChildren: true },
+    ...REMOTE_TREE_CHILDREN.map((item) => ({ ...item, depth: 1 })),
+    { ...logs, depth: 0, expanded: false, hasChildren: true },
+    { ...env, depth: 0 },
+    { ...readme, depth: 0 },
+    ...items
+      .filter((item) => !knownNames.has(item.name))
+      .map((item) => ({ ...item, depth: 0 })),
+  ];
+}
+
+function findSftpItem(
+  items: SftpItem[],
+  name: string,
+  fallback: SftpItem,
+): SftpItem {
+  return items.find((item) => item.name === name) ?? fallback;
+}
+
+function getDefaultDirectoryPath(source: "local" | "remote"): string {
+  return source === "local" ? "D:/Projects/ivs-dashboard" : "/var/www/app";
+}
+
+function getParentDirectoryPath(
+  path: string,
+  source: "local" | "remote",
+): string {
+  const normalized = path.trim().replace(/[\\/]+$/, "");
+  if (!normalized) {
+    return getDefaultDirectoryPath(source);
+  }
+
+  const separator = normalized.includes("/") ? "/" : "\\";
+  const index = normalized.lastIndexOf(separator);
+  if (index <= 0) {
+    return normalized;
+  }
+
+  return normalized.slice(0, index);
 }
 
 function normalizeStoredServer(value: unknown): SshServerConfig | null {
@@ -1302,13 +1580,25 @@ function splitCommandOutput(output: string): string[] {
     return [];
   }
 
-  return output
+  const lines = output
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    .split("\n")
-    .filter(
-      (line, index, lines) => line.length > 0 || index < lines.length - 1,
-    );
+    .split("\n");
+  while (lines.length > 0 && isBlankTerminalOutputLine(lines[0])) {
+    lines.shift();
+  }
+  while (
+    lines.length > 0 &&
+    isBlankTerminalOutputLine(lines[lines.length - 1])
+  ) {
+    lines.pop();
+  }
+
+  return lines;
+}
+
+function isBlankTerminalOutputLine(line: string): boolean {
+  return stripAnsiControlSequences(line).trim().length === 0;
 }
 
 function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
@@ -1316,7 +1606,7 @@ function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     count: lines.length,
     getScrollElement: () => containerRef.current,
-    estimateSize: () => 22,
+    estimateSize: () => SSH_TERMINAL_ROW_HEIGHT,
     overscan: 16,
   });
 
@@ -1347,6 +1637,7 @@ function SshTerminalOutput({ lines }: { lines: string[] }): JSX.Element {
               key={virtualItem.key}
               ref={virtualizer.measureElement}
               style={{
+                minHeight: `${SSH_TERMINAL_ROW_HEIGHT}px`,
                 transform: `translateY(${virtualItem.start}px)`,
               }}
               dangerouslySetInnerHTML={{
@@ -1381,6 +1672,13 @@ function getTerminalLineClass(line: string): string {
     return "ssh-terminal-line-prompt";
   }
   if (
+    lower.startsWith("connecting ") ||
+    lower.includes("session idle") ||
+    lower.includes("select a server")
+  ) {
+    return "ssh-terminal-line-muted";
+  }
+  if (
     lower.includes("error") ||
     lower.includes("failed") ||
     lower.includes("denied")
@@ -1397,7 +1695,93 @@ function getTerminalLineClass(line: string): string {
 }
 
 function renderTerminalLineHtml(line: string): string {
-  return stripAnsiControlSequences(ansiToHtml(escapeHtml(line)));
+  if (line.includes("\u001b[")) {
+    return stripAnsiControlSequences(ansiToHtml(escapeHtml(line)));
+  }
+
+  return (
+    renderPromptLineHtml(line) ??
+    renderLongListingLineHtml(line) ??
+    renderDirectoryListingLineHtml(line) ??
+    escapeHtml(line)
+  );
+}
+
+function renderPromptLineHtml(line: string): string | null {
+  const match = /^([^\s@]+@[^\s]+)(.*?\s[>$])(\s?)(.*)$/.exec(line);
+  if (!match) {
+    return null;
+  }
+
+  const [, userHost, promptMarker, spacer, commandText] = match;
+  const commandHtml = commandText
+    ? `<span class="ssh-terminal-token-command">${escapeHtml(commandText)}</span>`
+    : "";
+
+  return `<span class="ssh-terminal-token-userhost">${escapeHtml(userHost)}</span><span class="ssh-terminal-token-prompt-marker">${escapeHtml(promptMarker)}</span>${escapeHtml(spacer)}${commandHtml}`;
+}
+
+function renderLongListingLineHtml(line: string): string | null {
+  const parts = line.match(/\s+|\S+/g) ?? [];
+  const tokens = parts.filter((part) => !/^\s+$/.test(part));
+  const permissionToken = tokens[0] ?? "";
+  if (!/^[bcdlps-][rwxstST-]{9}[.+@]?$/.test(permissionToken)) {
+    return null;
+  }
+
+  const nameClass = permissionToken.startsWith("d")
+    ? "ssh-terminal-token-directory"
+    : "ssh-terminal-token-file";
+  let tokenIndex = 0;
+
+  return parts
+    .map((part) => {
+      if (/^\s+$/.test(part)) {
+        return escapeHtml(part);
+      }
+
+      const className =
+        tokenIndex < 8 ? "ssh-terminal-token-meta" : nameClass;
+      tokenIndex += 1;
+      return `<span class="${className}">${escapeHtml(part)}</span>`;
+    })
+    .join("");
+}
+
+function renderDirectoryListingLineHtml(line: string): string | null {
+  if (!line.trim()) {
+    return null;
+  }
+
+  const startsWithTotal = /^total\s+\d+/i.test(line);
+  let changed = startsWithTotal;
+
+  const html = (line.match(/\s+|\S+/g) ?? [])
+    .map((part) => {
+      if (/^\s+$/.test(part)) {
+        return escapeHtml(part);
+      }
+
+      if (startsWithTotal) {
+        return `<span class="ssh-terminal-token-meta">${escapeHtml(part)}</span>`;
+      }
+
+      const cleanPart = part.replace(/[/:]+$/, "");
+      if (TERMINAL_DIRECTORY_NAMES.has(cleanPart) || part.endsWith("/")) {
+        changed = true;
+        return `<span class="ssh-terminal-token-directory">${escapeHtml(part)}</span>`;
+      }
+
+      if (/\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(cleanPart)) {
+        changed = true;
+        return `<span class="ssh-terminal-token-file">${escapeHtml(part)}</span>`;
+      }
+
+      return escapeHtml(part);
+    })
+    .join("");
+
+  return changed ? html : null;
 }
 
 function escapeHtml(value: string): string {
@@ -1410,11 +1794,15 @@ function escapeHtml(value: string): string {
 }
 
 function stripAnsi(value: string): string {
-  return value.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+  return stripAnsiControlSequences(value);
 }
 
 function stripAnsiControlSequences(value: string): string {
-  return value.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+  return value
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[()][A-Za-z0-9]/g, "")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "");
 }
 
 function ansiToHtml(value: string): string {
