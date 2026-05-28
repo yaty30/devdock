@@ -1031,7 +1031,10 @@ function isWindowsRemotePath(path: string): boolean {
   return /^[A-Za-z]:/.test(path.trim()) || path.includes("\\");
 }
 
-function resolveWindowsRemotePath(basePath: string, targetPath: string): string {
+function resolveWindowsRemotePath(
+  basePath: string,
+  targetPath: string,
+): string {
   const target = targetPath.trim();
   if (/^[A-Za-z]:/.test(target)) {
     return normalizeWindowsRemotePath(target);
@@ -1043,7 +1046,9 @@ function resolveWindowsRemotePath(basePath: string, targetPath: string): string 
     return normalizeWindowsRemotePath(`${drive}${target}`);
   }
 
-  return normalizeWindowsRemotePath(`${base.replace(/[\\/]+$/, "")}\\${target}`);
+  return normalizeWindowsRemotePath(
+    `${base.replace(/[\\/]+$/, "")}\\${target}`,
+  );
 }
 
 function normalizeWindowsRemotePath(path: string): string {

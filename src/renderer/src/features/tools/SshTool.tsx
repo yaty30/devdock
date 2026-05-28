@@ -1120,7 +1120,10 @@ export function SshTool({
   const passwordMode = terminalState === "passwordPrompt";
   const streamPartialPromptMode = getInteractivePromptMode(streamPartialLine);
   const activePrompt =
-    connected && promptResponseMode && streamPartialLine && streamPartialPromptMode
+    connected &&
+    promptResponseMode &&
+    streamPartialLine &&
+    streamPartialPromptMode
       ? streamPartialLine
       : promptResponseMode
         ? ""
@@ -1607,7 +1610,10 @@ export function SshTool({
     }
 
     const tokenRange = getCurrentCommandTokenRange(input);
-    const request = getRemoteCompletionRequest(tokenRange.token, promptLocation);
+    const request = getRemoteCompletionRequest(
+      tokenRange.token,
+      promptLocation,
+    );
     if (!request) {
       return null;
     }
@@ -1661,7 +1667,9 @@ export function SshTool({
   async function getRemoteCompletionItems(
     basePath: string,
   ): Promise<TerminalCompletionItem[]> {
-    const currentPath = normalizeRemotePath(promptLocation || remotePath || ".");
+    const currentPath = normalizeRemotePath(
+      promptLocation || remotePath || ".",
+    );
     const targetPath = normalizeRemotePath(basePath);
     if (currentPath === targetPath) {
       return remoteItems.map((item) => ({
@@ -3315,9 +3323,7 @@ function isInteractiveTextPrompt(partialLine: string): boolean {
   );
 }
 
-function getInteractivePromptMode(
-  partialLine: string,
-): TerminalState | null {
+function getInteractivePromptMode(partialLine: string): TerminalState | null {
   const cleanLine = stripAnsiControlSequences(partialLine);
   if (isInteractivePasswordPrompt(cleanLine)) {
     return "passwordPrompt";
