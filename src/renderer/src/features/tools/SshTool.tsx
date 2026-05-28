@@ -140,10 +140,17 @@ type TerminalCommandLogEntry = {
   exitCode: string;
 };
 
-type TerminalSuggestion = {
-  value: string;
-  label: string;
-  source: "command" | "path" | "file" | "history";
+type TerminalState = "idle" | "running" | "interactive" | "passwordPrompt";
+
+type TerminalCompletionItem = {
+  name: string;
+  type: "file" | "folder";
+};
+
+type TerminalTabCompletionState = {
+  command: string;
+  token: string;
+  candidates: string[];
 };
 
 type TransferDragPayload = {
@@ -182,30 +189,6 @@ const TERMINAL_DIRECTORY_NAMES = new Set([
   "Videos",
 ]);
 const SSH_TERMINAL_ROW_HEIGHT = 20;
-const SSH_COMMAND_SUGGESTIONS = [
-  "ls",
-  "ls -la",
-  "ls -ltr",
-  "pwd",
-  "cd",
-  "cat",
-  "clear",
-  "cp",
-  "df -h",
-  "du -sh",
-  "find",
-  "grep",
-  "head",
-  "less",
-  "mkdir",
-  "mv",
-  "pwd",
-  "rm",
-  "tail",
-  "touch",
-  "vim",
-];
-
 export function readStoredSshServers(): SshServerConfig[] {
   const stored = window.localStorage.getItem(SSH_SERVERS_STORAGE_KEY);
   if (!stored) {
@@ -613,7 +596,10 @@ export function SshSettingsModal({
       onClose={requestClose}
     >
       <div className="ssh-settings-layout">
-        <aside className="ssh-settings-sidebar" aria-label="Saved SSH connections">
+        <aside
+          className="ssh-settings-sidebar"
+          aria-label="Saved SSH connections"
+        >
           <div className="ssh-settings-connection-list">
             {draftServers.map((server, index) => {
               const displayName = getSshSettingsServerName(server, index);
@@ -633,7 +619,10 @@ export function SshSettingsModal({
                   aria-pressed={selected}
                   onClick={() => setSelectedDraftServerId(server.id)}
                 >
-                  <span className="ssh-settings-connection-icon" aria-hidden="true">
+                  <span
+                    className="ssh-settings-connection-icon"
+                    aria-hidden="true"
+                  >
                     <TerminalSquare size={22} />
                   </span>
                   <span className="ssh-settings-connection-copy">
@@ -641,7 +630,10 @@ export function SshSettingsModal({
                     <span>{formatSshSettingsEndpoint(server)}</span>
                   </span>
                   {serverStatus === "connected" ? (
-                    <span className="ssh-settings-card-status" aria-label={`${displayName} connected`} />
+                    <span
+                      className="ssh-settings-card-status"
+                      aria-label={`${displayName} connected`}
+                    />
                   ) : selected ? null : (
                     <span className="ssh-settings-card-menu" aria-hidden="true">
                       <MoreHorizontal size={16} />
@@ -662,7 +654,10 @@ export function SshSettingsModal({
         </aside>
 
         {selectedServer ? (
-          <section className="ssh-settings-editor" aria-label="SSH connection editor">
+          <section
+            className="ssh-settings-editor"
+            aria-label="SSH connection editor"
+          >
             <div className="ssh-settings-editor-header">
               <h3>{selectedDisplayName}</h3>
               <span className={`ssh-settings-status-badge ${selectedStatus}`}>
@@ -684,7 +679,9 @@ export function SshSettingsModal({
                   type="text"
                   value={selectedServer.name}
                   placeholder="Local Dev"
-                  onChange={(event) => updateSelectedServer({ name: event.target.value })}
+                  onChange={(event) =>
+                    updateSelectedServer({ name: event.target.value })
+                  }
                 />
               </label>
               <div className="ssh-settings-host-port-row">
@@ -695,7 +692,9 @@ export function SshSettingsModal({
                     type="text"
                     value={selectedServer.address}
                     placeholder="127.0.0.1"
-                    onChange={(event) => updateSelectedServer({ address: event.target.value })}
+                    onChange={(event) =>
+                      updateSelectedServer({ address: event.target.value })
+                    }
                   />
                 </label>
                 <label className="ssh-settings-field ssh-settings-port-field">
@@ -736,7 +735,9 @@ export function SshSettingsModal({
                   type="text"
                   value={selectedServer.username}
                   placeholder="admin"
-                  onChange={(event) => updateSelectedServer({ username: event.target.value })}
+                  onChange={(event) =>
+                    updateSelectedServer({ username: event.target.value })
+                  }
                 />
               </label>
               <label className="ssh-settings-field">
@@ -744,10 +745,16 @@ export function SshSettingsModal({
                 <span className="ssh-password-field">
                   <input
                     aria-label="Password"
-                    type={visiblePasswordIds.has(selectedServer.id) ? "text" : "password"}
+                    type={
+                      visiblePasswordIds.has(selectedServer.id)
+                        ? "text"
+                        : "password"
+                    }
                     value={selectedServer.password}
                     autoComplete="current-password"
-                    onChange={(event) => updateSelectedServer({ password: event.target.value })}
+                    onChange={(event) =>
+                      updateSelectedServer({ password: event.target.value })
+                    }
                   />
                   <button
                     className="icon-button secondary ssh-password-toggle"
@@ -786,7 +793,9 @@ export function SshSettingsModal({
                   type="text"
                   value={selectedServer.macs}
                   placeholder="hmac-sha2-256"
-                  onChange={(event) => updateSelectedServer({ macs: event.target.value })}
+                  onChange={(event) =>
+                    updateSelectedServer({ macs: event.target.value })
+                  }
                 />
               </label>
               <label className="ssh-settings-field">
@@ -796,11 +805,14 @@ export function SshSettingsModal({
                   type="text"
                   value={selectedServer.ciphers}
                   placeholder="aes128-ctr"
-                  onChange={(event) => updateSelectedServer({ ciphers: event.target.value })}
+                  onChange={(event) =>
+                    updateSelectedServer({ ciphers: event.target.value })
+                  }
                 />
               </label>
               <p className="ssh-settings-helper ssh-settings-helper-full">
-                Use comma or space separated values, matching OpenSSH options like MACs=hmac-sha2-256 and Ciphers=aes128-ctr.
+                Use comma or space separated values, matching OpenSSH options
+                like MACs=hmac-sha2-256 and Ciphers=aes128-ctr.
               </p>
             </div>
 
@@ -815,7 +827,9 @@ export function SshSettingsModal({
                   <input
                     type="checkbox"
                     checked={selectedServer.autoLogin}
-                    onChange={(event) => updateSelectedServer({ autoLogin: event.target.checked })}
+                    onChange={(event) =>
+                      updateSelectedServer({ autoLogin: event.target.checked })
+                    }
                   />
                   Enable auto-login
                 </span>
@@ -826,7 +840,11 @@ export function SshSettingsModal({
                   <input
                     type="checkbox"
                     checked={selectedServer.autoReconnect}
-                    onChange={(event) => updateSelectedServer({ autoReconnect: event.target.checked })}
+                    onChange={(event) =>
+                      updateSelectedServer({
+                        autoReconnect: event.target.checked,
+                      })
+                    }
                   />
                   Enable auto-reconnect
                 </span>
@@ -966,7 +984,9 @@ function getSshSettingsServerName(
   server: SshServerConfig,
   index: number,
 ): string {
-  return server.name.trim() || (index >= 0 ? `New Connection` : "New Connection");
+  return (
+    server.name.trim() || (index >= 0 ? `New Connection` : "New Connection")
+  );
 }
 
 function formatSshSettingsEndpoint(server: SshServerConfig): string {
@@ -986,7 +1006,10 @@ function getSshSettingsStatus(
   if (connectionStatus === "connected") {
     return "connected";
   }
-  if (connectionStatus === "connecting" || connectionStatus === "reconnecting") {
+  if (
+    connectionStatus === "connecting" ||
+    connectionStatus === "reconnecting"
+  ) {
     return "connecting";
   }
   return "disconnected";
@@ -1036,11 +1059,10 @@ export function SshTool({
   onCommandSubmit?: (command: string) => Promise<SshExecResult>;
 }): JSX.Element {
   const [command, setCommand] = useState("");
-  const [commandRunning, setCommandRunning] = useState(false);
+  const [terminalState, setTerminalStateState] =
+    useState<TerminalState>("idle");
   const [commandHistory, setCommandHistory] = useState<string[]>([]);
   const [historyCursor, setHistoryCursor] = useState<number | null>(null);
-  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
-  const [highlightedSuggestionIndex, setHighlightedSuggestionIndex] = useState(0);
   const [terminalScrollRequest, setTerminalScrollRequest] = useState(0);
   const [terminalFocusRequest, setTerminalFocusRequest] = useState(0);
   const [localPath, setLocalPath] = useState("");
@@ -1048,8 +1070,7 @@ export function SshTool({
   const [remotePath, setRemotePath] = useState("");
   const [remoteHomePath, setRemoteHomePath] = useState("");
   const [localItems, setLocalItems] = useState<SftpItem[]>([]);
-  const [remoteItems, setRemoteItems] =
-    useState<SftpItem[]>([]);
+  const [remoteItems, setRemoteItems] = useState<SftpItem[]>([]);
   const [selectedLocalIds, setSelectedLocalIds] = useState<string[]>([]);
   const [selectedRemoteIds, setSelectedRemoteIds] = useState<string[]>([]);
   const [actionMenu, setActionMenu] = useState<SftpActionMenuState>(null);
@@ -1058,8 +1079,12 @@ export function SshTool({
   const [filePreview, setFilePreview] = useState<FilePreviewState>(null);
   const [localBusyCount, setLocalBusyCount] = useState(0);
   const [remoteBusyCount, setRemoteBusyCount] = useState(0);
-  const [directoryActionLog, setDirectoryActionLog] = useState<DirectoryActionLogEntry[]>([]);
-  const [terminalCommandLog, setTerminalCommandLog] = useState<TerminalCommandLogEntry[]>([]);
+  const [directoryActionLog, setDirectoryActionLog] = useState<
+    DirectoryActionLogEntry[]
+  >([]);
+  const [terminalCommandLog, setTerminalCommandLog] = useState<
+    TerminalCommandLogEntry[]
+  >([]);
   const [localHistory, setLocalHistory] = useState<string[]>([]);
   const [localFuture, setLocalFuture] = useState<string[]>([]);
   const [remoteHistory, setRemoteHistory] = useState<string[]>([]);
@@ -1073,35 +1098,33 @@ export function SshTool({
     "Select a server and enter a command.",
   ]);
   const [streamPartialLine, setStreamPartialLine] = useState("");
-  const [passwordMode, setPasswordMode] = useState(false);
   const [activeRemoteHost, setActiveRemoteHost] = useState<string | null>(null);
   const streamPartialRef = useRef("");
   const activeRemoteHostRef = useRef<string | null>(null);
-  const passwordModeRef = useRef(false);
+  const terminalStateRef = useRef<TerminalState>("idle");
+  const lastTabCompletionRef = useRef<TerminalTabCompletionState | null>(null);
   const previousStatusRef = useRef<SshConnectionStatus>(connectionStatus);
   const previousServerIdRef = useRef<string | null>(selectedServer?.id ?? null);
 
   const connected = connectionStatus === "connected";
+  const commandRunning = terminalState === "running";
   const commandSubmitDisabled = disabled || commandRunning;
   const fallbackRemoteTitle = formatRemoteDirectoryTitle(selectedServer);
   const remoteTitle = activeRemoteHost
     ? formatRemoteDirectoryTitleForHost(selectedServer, activeRemoteHost)
     : fallbackRemoteTitle;
-  const promptLocation = remoteCwd?.trim() || remotePath || "";
+  const promptLocation = remoteCwd?.trim() || "";
   const fallbackPrompt = formatSshPrompt(selectedServer, promptLocation);
+  const promptResponseMode =
+    terminalState === "interactive" || terminalState === "passwordPrompt";
+  const passwordMode = terminalState === "passwordPrompt";
+  const streamPartialPromptMode = getInteractivePromptMode(streamPartialLine);
   const activePrompt =
-    connected && streamPartialLine ? streamPartialLine : fallbackPrompt;
-  const commandSuggestions = useMemo(
-    () =>
-      buildTerminalSuggestions({
-        command,
-        history: commandHistory,
-        remoteItems,
-        remotePath: promptLocation,
-      }),
-    [command, commandHistory, promptLocation, remoteItems],
-  );
-  const visibleSuggestions = suggestionsOpen ? commandSuggestions.slice(0, 8) : [];
+    connected && promptResponseMode && streamPartialLine && streamPartialPromptMode
+      ? streamPartialLine
+      : promptResponseMode
+        ? ""
+        : fallbackPrompt;
 
   useEffect(() => {
     let canceled = false;
@@ -1119,14 +1142,18 @@ export function SshTool({
           setLocalHomePath(result.path);
           setLocalPath(result.path);
           setLocalItems([]);
-          appendLines([`Local directory error: ${result.error ?? "Unable to list directory."}`]);
+          appendLines([
+            `Local directory error: ${result.error ?? "Unable to list directory."}`,
+          ]);
         }
       })
       .catch((error) => {
         if (!canceled) {
           appendLines([
             `Local directory error: ${
-              error instanceof Error ? error.message : "Unable to list directory."
+              error instanceof Error
+                ? error.message
+                : "Unable to list directory."
             }`,
           ]);
         }
@@ -1149,14 +1176,15 @@ export function SshTool({
 
     const startPath = remoteCwd?.trim() || null;
     void loadRemoteDirectory(startPath, { recordHistory: false });
-  }, [connected, sshSessionId, remoteCwd]);
+    // Keep terminal cwd changes independent from the Remote Directory panel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, sshSessionId]);
 
   useEffect(() => {
     // Reset stream state whenever the active session changes.
     streamPartialRef.current = "";
     setStreamPartialLine("");
-    setPasswordMode(false);
-    passwordModeRef.current = false;
+    setTerminalState("idle");
     if (!sshSessionId) {
       activeRemoteHostRef.current = null;
       setActiveRemoteHost(null);
@@ -1182,17 +1210,6 @@ export function SshTool({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sshSessionId]);
-
-  useEffect(() => {
-    if (commandSuggestions.length === 0) {
-      setSuggestionsOpen(false);
-      setHighlightedSuggestionIndex(0);
-      return;
-    }
-    setHighlightedSuggestionIndex((current) =>
-      Math.min(current, Math.max(0, commandSuggestions.length - 1)),
-    );
-  }, [commandSuggestions.length]);
 
   useEffect(() => {
     if (!actionMenu) {
@@ -1295,7 +1312,8 @@ export function SshTool({
   }
 
   function setPanelBusy(source: DirectorySource, busy: boolean): void {
-    const update = (current: number): number => Math.max(0, current + (busy ? 1 : -1));
+    const update = (current: number): number =>
+      Math.max(0, current + (busy ? 1 : -1));
     if (source === "local") {
       setLocalBusyCount(update);
     } else {
@@ -1306,27 +1324,31 @@ export function SshTool({
   function appendDirectoryActionLog(
     entry: Omit<DirectoryActionLogEntry, "id" | "time">,
   ): void {
-    setDirectoryActionLog((current) => [
-      {
-        ...entry,
-        id: `dir-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        time: formatMonitorTime(new Date()),
-      },
-      ...current,
-    ].slice(0, 100));
+    setDirectoryActionLog((current) =>
+      [
+        {
+          ...entry,
+          id: `dir-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          time: formatMonitorTime(new Date()),
+        },
+        ...current,
+      ].slice(0, 100),
+    );
   }
 
   function appendTerminalCommandLog(
     entry: Omit<TerminalCommandLogEntry, "id" | "time">,
   ): void {
-    setTerminalCommandLog((current) => [
-      {
-        ...entry,
-        id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        time: formatMonitorTime(new Date()),
-      },
-      ...current,
-    ].slice(0, 100));
+    setTerminalCommandLog((current) =>
+      [
+        {
+          ...entry,
+          id: `cmd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          time: formatMonitorTime(new Date()),
+        },
+        ...current,
+      ].slice(0, 100),
+    );
   }
 
   function requestTerminalInputFocus(): void {
@@ -1337,13 +1359,16 @@ export function SshTool({
     setTerminalScrollRequest((current) => current + 1);
   }
 
+  function setTerminalState(state: TerminalState): void {
+    terminalStateRef.current = state;
+    setTerminalStateState(state);
+  }
+
   function handleShellStreamData(data: string): void {
     if (!data) {
       return;
     }
-    const normalized = data
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n");
+    const normalized = data.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
     const combined = streamPartialRef.current + normalized;
     const parts = combined.split("\n");
     const remainder = parts.pop() ?? "";
@@ -1354,9 +1379,8 @@ export function SshTool({
       );
       setTerminalLines((current) => [...current, ...finishedLines]);
       // Newline arrived; password mode resets.
-      if (passwordModeRef.current) {
-        passwordModeRef.current = false;
-        setPasswordMode(false);
+      if (terminalStateRef.current === "passwordPrompt") {
+        setTerminalState("idle");
       }
       requestTerminalScrollToLatest();
     }
@@ -1364,20 +1388,19 @@ export function SshTool({
     const partialClean = stripAnsiControlSequences(remainder);
     setStreamPartialLine(partialClean);
 
-    if (isInteractivePasswordPrompt(partialClean)) {
-      if (!passwordModeRef.current) {
-        passwordModeRef.current = true;
-        setPasswordMode(true);
-      }
+    const promptMode = getInteractivePromptMode(partialClean);
+    if (promptMode && terminalStateRef.current !== promptMode) {
+      setTerminalState(promptMode);
     }
 
     detectActiveHostFromPrompt(partialClean);
   }
 
   function detectActiveHostFromPrompt(partialLine: string): void {
-    const match = /\[?([A-Za-z0-9._-]+)@([A-Za-z0-9._-]+)(?:[\s:][^\n]*)?[\]$#%>]\s*$/.exec(
-      partialLine,
-    );
+    const match =
+      /\[?([A-Za-z0-9._-]+)@([A-Za-z0-9._-]+)(?:[\s:][^\n]*)?[\]$#%>]\s*$/.exec(
+        partialLine,
+      );
     if (!match) {
       return;
     }
@@ -1398,68 +1421,58 @@ export function SshTool({
       return;
     }
     const rawValue = command;
-    const trimmed = passwordMode ? rawValue : rawValue.trim();
+    const trimmed = promptResponseMode ? rawValue : rawValue.trim();
 
-    // Connected: send raw input directly to the PTY (handles passwords, sudo,
-    // nested ssh, and any interactive prompt). Do not echo locally; the remote
-    // shell will echo what it wants.
-    if (connected && sshSessionId && window.ivsDashboard.sshWrite) {
+    // Interactive prompts need raw PTY input so answers do not become shell
+    // commands or command-history entries. Password mode uses the same path with
+    // hidden local input.
+    if (
+      connected &&
+      sshSessionId &&
+      promptResponseMode &&
+      window.ivsDashboard.sshWrite
+    ) {
       setCommand("");
       setHistoryCursor(null);
-      setSuggestionsOpen(false);
-
-      if (passwordMode) {
-        // Send the password followed by newline. Do not log, do not push to history.
-        await window.ivsDashboard
-          .sshWrite(sshSessionId, `${rawValue}\n`)
-          .catch(() => undefined);
-        passwordModeRef.current = false;
-        setPasswordMode(false);
-        requestTerminalInputFocus();
-        return;
-      }
-
-      // Local "clear" convenience: do not send to PTY, just clear scrollback.
-      if (trimmed === "clear") {
-        setTerminalLines([]);
-        setCommandHistory((current) => addCommandHistoryEntry(current, trimmed));
-        requestTerminalScrollToLatest();
-        requestTerminalInputFocus();
-        return;
-      }
-
-      if (trimmed.length > 0) {
-        setCommandHistory((current) => addCommandHistoryEntry(current, trimmed));
-        appendTerminalCommandLog({
-          command: trimmed,
-          location: promptLocation || "--",
-          status: "success",
-          exitCode: "--",
-        });
-      }
+      lastTabCompletionRef.current = null;
 
       await window.ivsDashboard
-        .sshWrite(sshSessionId, `${rawValue}\n`)
-        .catch(() => undefined);
+        .sshWrite(sshSessionId, `${rawValue}\r`)
+        .then((result) => {
+          if (!result.ok) {
+            appendLines([
+              `SSH input error: ${result.error ?? "Unable to send input."}`,
+            ]);
+          }
+        })
+        .catch((error) => {
+          appendLines([
+            `SSH input error: ${
+              error instanceof Error ? error.message : "Unable to send input."
+            }`,
+          ]);
+        });
+      setTerminalState("idle");
       requestTerminalInputFocus();
       return;
     }
 
-    // Not connected (or no stream backend): preserve the legacy synthetic prompt.
+    // Normal commands go through the backend command path so output is captured
+    // and rendered as terminal lines instead of being merged into the live prompt.
     const commandLocation = promptLocation;
     const prompt = formatSshPrompt(selectedServer, commandLocation);
     if (!trimmed) {
       appendLines([prompt]);
       setCommand("");
       setHistoryCursor(null);
-      setSuggestionsOpen(false);
+      lastTabCompletionRef.current = null;
       requestTerminalScrollToLatest();
       requestTerminalInputFocus();
       return;
     }
     setCommand("");
     setHistoryCursor(null);
-    setSuggestionsOpen(false);
+    lastTabCompletionRef.current = null;
 
     if (trimmed === "clear") {
       setTerminalLines([]);
@@ -1485,16 +1498,26 @@ export function SshTool({
       return;
     }
 
-    setCommandRunning(true);
+    setTerminalState("running");
     try {
       const result = await onCommandSubmit(trimmed);
+      const resultLines = formatSshExecResult(result);
       appendTerminalCommandLog({
         command: trimmed,
         location: commandLocation || "--",
-        status: result.error || (result.exitCode !== null && result.exitCode !== 0) ? "failed" : "success",
+        status:
+          result.error || (result.exitCode !== null && result.exitCode !== 0)
+            ? "failed"
+            : "success",
         exitCode: result.exitCode === null ? "--" : String(result.exitCode),
       });
-      appendLines(formatSshExecResult(result));
+      appendLines(resultLines);
+      const promptMode = getInteractivePromptModeFromLines(resultLines);
+      if (promptMode) {
+        setTerminalState(promptMode);
+      } else {
+        setTerminalState("idle");
+      }
     } catch (error) {
       appendTerminalCommandLog({
         command: trimmed,
@@ -1509,62 +1532,192 @@ export function SshTool({
             : "SSH backend is not available."
         }`,
       ]);
+      setTerminalState("idle");
     } finally {
-      setCommandRunning(false);
       requestTerminalInputFocus();
     }
   }
 
   function handleCommandChange(value: string): void {
+    if (terminalStateRef.current === "running") {
+      return;
+    }
     setCommand(value);
     setHistoryCursor(null);
-    setSuggestionsOpen(value.trim().length > 0);
-    setHighlightedSuggestionIndex(0);
+    lastTabCompletionRef.current = null;
   }
 
-  function acceptSuggestion(suggestion: TerminalSuggestion): void {
-    setCommand(
-      suggestion.source === "command" || suggestion.source === "history"
-        ? suggestion.value
-        : applyTerminalSuggestion(command, suggestion.value),
-    );
-    setSuggestionsOpen(false);
-    setHighlightedSuggestionIndex(0);
-  }
+  async function handleTabCompletion(): Promise<void> {
+    if (terminalStateRef.current === "interactive") {
+      await sendTabToPty();
+      return;
+    }
+    if (terminalStateRef.current !== "idle") {
+      return;
+    }
 
-  function handleCommandKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
-    if (event.key === "Escape") {
-      if (suggestionsOpen) {
-        event.preventDefault();
-        setSuggestionsOpen(false);
+    const sourceCommand = command;
+    const result = await resolveTerminalTabCompletion(sourceCommand);
+    if (!result) {
+      if (sourceCommand.trim().length === 0) {
+        await sendTabToPty();
       }
       return;
     }
 
-    if (event.key === "Tab") {
-      if (visibleSuggestions.length > 0) {
-        event.preventDefault();
-        acceptSuggestion(visibleSuggestions[highlightedSuggestionIndex] ?? visibleSuggestions[0]);
+    const completedCommand = result.completedCommand;
+    if (completedCommand && completedCommand !== sourceCommand) {
+      setCommand((current) =>
+        current === sourceCommand ? completedCommand : current,
+      );
+      lastTabCompletionRef.current = null;
+      return;
+    }
+
+    if (result.candidates.length > 1) {
+      const previous = lastTabCompletionRef.current;
+      const sameTabRequest =
+        previous?.command === sourceCommand &&
+        previous.token === result.token &&
+        areStringArraysEqual(previous.candidates, result.candidates);
+
+      if (sameTabRequest) {
+        appendLines(formatTerminalCompletionCandidates(result.candidates));
+        requestTerminalScrollToLatest();
       }
+
+      lastTabCompletionRef.current = {
+        command: sourceCommand,
+        token: result.token,
+        candidates: result.candidates,
+      };
+      return;
+    }
+
+    lastTabCompletionRef.current = null;
+  }
+
+  async function resolveTerminalTabCompletion(input: string): Promise<{
+    token: string;
+    candidates: string[];
+    completedCommand: string | null;
+  } | null> {
+    if (!connected || !sshSessionId) {
+      return null;
+    }
+
+    const tokenRange = getCurrentCommandTokenRange(input);
+    const request = getRemoteCompletionRequest(tokenRange.token, promptLocation);
+    if (!request) {
+      return null;
+    }
+
+    const items = await getRemoteCompletionItems(request.basePath);
+    const matches = findTerminalCompletionMatches(items, request.partial);
+    if (matches.length === 0) {
+      return null;
+    }
+
+    const candidates = matches.map(formatTerminalCompletionCandidate);
+    if (matches.length === 1) {
+      const match = matches[0];
+      const completedToken = `${request.tokenPrefix}${escapeShellCompletionSegment(
+        match.name,
+      )}${match.type === "folder" ? "/" : ""}`;
+      return {
+        token: tokenRange.token,
+        candidates,
+        completedCommand: replaceCommandToken(
+          input,
+          tokenRange,
+          completedToken,
+        ),
+      };
+    }
+
+    const sharedPrefix = getSharedPrefix(matches.map((match) => match.name));
+    if (sharedPrefix.length > request.partial.length) {
+      const completedToken = `${request.tokenPrefix}${escapeShellCompletionSegment(
+        sharedPrefix,
+      )}`;
+      return {
+        token: tokenRange.token,
+        candidates,
+        completedCommand: replaceCommandToken(
+          input,
+          tokenRange,
+          completedToken,
+        ),
+      };
+    }
+
+    return {
+      token: tokenRange.token,
+      candidates,
+      completedCommand: null,
+    };
+  }
+
+  async function getRemoteCompletionItems(
+    basePath: string,
+  ): Promise<TerminalCompletionItem[]> {
+    const currentPath = normalizeRemotePath(promptLocation || remotePath || ".");
+    const targetPath = normalizeRemotePath(basePath);
+    if (currentPath === targetPath) {
+      return remoteItems.map((item) => ({
+        name: item.name,
+        type: item.type,
+      }));
+    }
+
+    const result = await window.ivsDashboard.sshListDirectory(
+      sshSessionId as string,
+      targetPath,
+    );
+    if (!result.ok) {
+      return [];
+    }
+    return result.items
+      .filter((item) => item.type === "file" || item.type === "folder")
+      .map((item) => ({
+        name: item.name,
+        type: item.type,
+      }));
+  }
+
+  async function sendTabToPty(): Promise<void> {
+    if (!connected || !sshSessionId || !window.ivsDashboard.sshWrite) {
+      return;
+    }
+    await window.ivsDashboard.sshWrite(sshSessionId, "\t").catch(() => {
+      // Terminal Tab is best-effort; failed completion should not submit input.
+    });
+  }
+
+  function handleCommandKeyDown(
+    event: ReactKeyboardEvent<HTMLInputElement>,
+  ): void {
+    if (isTerminalInterruptKey(event)) {
+      event.preventDefault();
+      void interruptActiveTerminalProcess();
+      return;
+    }
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      void handleTabCompletion();
       return;
     }
 
     if (event.key === "Enter") {
       event.preventDefault();
-      if (suggestionsOpen && visibleSuggestions.length > 0) {
-        acceptSuggestion(visibleSuggestions[highlightedSuggestionIndex] ?? visibleSuggestions[0]);
-        return;
-      }
       void runCommand();
       return;
     }
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      if (suggestionsOpen && visibleSuggestions.length > 0) {
-        setHighlightedSuggestionIndex((current) =>
-          current <= 0 ? visibleSuggestions.length - 1 : current - 1,
-        );
+      if (terminalStateRef.current !== "idle") {
         return;
       }
       navigateCommandHistory("previous");
@@ -1573,14 +1726,53 @@ export function SshTool({
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      if (suggestionsOpen && visibleSuggestions.length > 0) {
-        setHighlightedSuggestionIndex((current) =>
-          current >= visibleSuggestions.length - 1 ? 0 : current + 1,
-        );
+      if (terminalStateRef.current !== "idle") {
         return;
       }
       navigateCommandHistory("next");
     }
+  }
+
+  async function interruptActiveTerminalProcess(): Promise<void> {
+    if (
+      !connected ||
+      !sshSessionId ||
+      !window.ivsDashboard.sshWrite ||
+      !["running", "interactive"].includes(terminalStateRef.current)
+    ) {
+      return;
+    }
+
+    appendLines(["^C"]);
+    setCommand("");
+    setHistoryCursor(null);
+    lastTabCompletionRef.current = null;
+    requestTerminalScrollToLatest();
+
+    const interruptedState = terminalStateRef.current;
+    await window.ivsDashboard
+      .sshWrite(sshSessionId, "\u0003")
+      .then((result) => {
+        if (!result.ok) {
+          appendLines([
+            `SSH interrupt error: ${result.error ?? "Unable to send interrupt."}`,
+          ]);
+          setTerminalState("idle");
+        } else if (interruptedState === "interactive") {
+          setTerminalState("idle");
+        }
+      })
+      .catch((error) => {
+        appendLines([
+          `SSH interrupt error: ${
+            error instanceof Error ? error.message : "Unable to send interrupt."
+          }`,
+        ]);
+        setTerminalState("idle");
+      })
+      .finally(() => {
+        requestTerminalInputFocus();
+      });
   }
 
   function navigateCommandHistory(direction: "previous" | "next"): void {
@@ -1588,17 +1780,18 @@ export function SshTool({
       return;
     }
     setHistoryCursor((current) => {
-      const nextIndex = direction === "previous"
-        ? current === null
-          ? commandHistory.length - 1
-          : Math.max(0, current - 1)
-        : current === null
-          ? null
-          : current >= commandHistory.length - 1
+      const nextIndex =
+        direction === "previous"
+          ? current === null
+            ? commandHistory.length - 1
+            : Math.max(0, current - 1)
+          : current === null
             ? null
-            : current + 1;
+            : current >= commandHistory.length - 1
+              ? null
+              : current + 1;
       setCommand(nextIndex === null ? "" : (commandHistory[nextIndex] ?? ""));
-      setSuggestionsOpen(false);
+      lastTabCompletionRef.current = null;
       return nextIndex;
     });
   }
@@ -1654,7 +1847,9 @@ export function SshTool({
       return;
     }
     if (target !== "remote" || !connected || !sshSessionId) {
-      appendTransferLine("Drop skipped: connect SSH and drop files on the remote panel.");
+      appendTransferLine(
+        "Drop skipped: connect SSH and drop files on the remote panel.",
+      );
       return;
     }
     void uploadDroppedFiles(droppedFiles);
@@ -1669,7 +1864,9 @@ export function SshTool({
       for (const file of files) {
         const filePath = (file as File & { path?: string }).path;
         if (!filePath) {
-          appendTransferLine(`Upload skipped for ${file.name}: file path is unavailable.`);
+          appendTransferLine(
+            `Upload skipped for ${file.name}: file path is unavailable.`,
+          );
           appendDirectoryActionLog({
             action: "Upload",
             location: remotePath || "--",
@@ -1792,11 +1989,17 @@ export function SshTool({
     try {
       const result = await window.ivsDashboard.listLocalDirectory(path);
       if (!result.ok) {
-        appendLines([`Local directory error: ${result.error ?? "Unable to list directory."}`]);
+        appendLines([
+          `Local directory error: ${result.error ?? "Unable to list directory."}`,
+        ]);
         return;
       }
 
-      if (options.recordHistory !== false && currentPath && currentPath !== result.path) {
+      if (
+        options.recordHistory !== false &&
+        currentPath &&
+        currentPath !== result.path
+      ) {
         setLocalHistory((history) => [...history, currentPath]);
         setLocalFuture([]);
       }
@@ -1823,13 +2026,22 @@ export function SshTool({
     setPanelBusy("remote", true);
     const currentPath = remotePath;
     try {
-      const result = await window.ivsDashboard.sshListDirectory(sshSessionId, path);
+      const result = await window.ivsDashboard.sshListDirectory(
+        sshSessionId,
+        path,
+      );
       if (!result.ok) {
-        appendLines([`Remote directory error: ${result.error ?? "Unable to list directory."}`]);
+        appendLines([
+          `Remote directory error: ${result.error ?? "Unable to list directory."}`,
+        ]);
         return;
       }
 
-      if (options.recordHistory !== false && currentPath && currentPath !== result.path) {
+      if (
+        options.recordHistory !== false &&
+        currentPath &&
+        currentPath !== result.path
+      ) {
         setRemoteHistory((history) => [...history, currentPath]);
         setRemoteFuture([]);
       }
@@ -1940,7 +2152,8 @@ export function SshTool({
       return;
     }
 
-    const setSelected = source === "local" ? setSelectedLocalIds : setSelectedRemoteIds;
+    const setSelected =
+      source === "local" ? setSelectedLocalIds : setSelectedRemoteIds;
     setSelected((current) => {
       if (!multiSelect) {
         return [item.id];
@@ -1952,7 +2165,10 @@ export function SshTool({
     void openFilePreview(source, item);
   }
 
-  async function openFilePreview(source: DirectorySource, item: SftpItem): Promise<void> {
+  async function openFilePreview(
+    source: DirectorySource,
+    item: SftpItem,
+  ): Promise<void> {
     if (item.type !== "file") {
       return;
     }
@@ -1972,7 +2188,10 @@ export function SshTool({
       const result =
         source === "local"
           ? await window.ivsDashboard.previewLocalFile(item.path)
-          : await window.ivsDashboard.sshPreviewFile(sshSessionId as string, item.path);
+          : await window.ivsDashboard.sshPreviewFile(
+              sshSessionId as string,
+              item.path,
+            );
       setFilePreview({
         source,
         item,
@@ -1986,7 +2205,8 @@ export function SshTool({
         item,
         loading: false,
         result: null,
-        error: error instanceof Error ? error.message : "Unable to preview file.",
+        error:
+          error instanceof Error ? error.message : "Unable to preview file.",
       });
     }
   }
@@ -2106,7 +2326,10 @@ export function SshTool({
       action: nameDialog.mode === "new-folder" ? "New Folder" : "Rename",
       location: getDirectoryLocation(nameDialog.source, localPath, remotePath),
       source: nameDialog.source,
-      item: nameDialog.mode === "new-folder" ? value : (nameDialog.item?.name ?? value),
+      item:
+        nameDialog.mode === "new-folder"
+          ? value
+          : (nameDialog.item?.name ?? value),
       status: result.ok ? "success" : "failed",
       detail: result.ok
         ? nameDialog.mode === "new-folder"
@@ -2136,7 +2359,11 @@ export function SshTool({
     if (!connected || !sshSessionId) {
       return { ok: false, error: "Not connected." };
     }
-    return window.ivsDashboard.sshCreateDirectory(sshSessionId, remotePath, name);
+    return window.ivsDashboard.sshCreateDirectory(
+      sshSessionId,
+      remotePath,
+      name,
+    );
   }
 
   async function renameItemForSource(
@@ -2175,7 +2402,9 @@ export function SshTool({
     setPanelBusy(source, false);
 
     if (!result.ok) {
-      appendLines([`Delete failed for ${item.name}: ${result.error ?? "Unknown error."}`]);
+      appendLines([
+        `Delete failed for ${item.name}: ${result.error ?? "Unknown error."}`,
+      ]);
       return;
     }
     setDeleteTarget(null);
@@ -2217,147 +2446,161 @@ export function SshTool({
         />
       ) : (
         <>
-      <Panel
-        title="CLI"
-        className="ssh-cli-panel"
-        action={
-          <span className="ssh-panel-actions">
-            <span
-              className={`ssh-status ssh-status-${connectionStatus}`}
-              data-status={connectionStatus}
-            >
-              <span className="ssh-status-dot" aria-hidden="true" />
-              {formatConnectionStatusLabel(
-                connectionStatus,
-                reconnectAttempt,
-                reconnectMaxAttempts,
-              )}
-            </span>
-            <button
-              className="icon-button secondary ssh-panel-collapse-button"
-              type="button"
-              aria-label={
-                commandPanelCollapsed ? "Expand command panel" : "Collapse command panel"
-              }
-              title={
-                commandPanelCollapsed ? "Expand command panel" : "Collapse command panel"
-              }
-              onClick={() => setCommandPanelCollapsed((current) => !current)}
-            >
-              {commandPanelCollapsed ? (
-                <PanelLeftOpen size={16} />
-              ) : (
-                <PanelLeftClose size={16} />
-              )}
-            </button>
-          </span>
-        }
-      >
-        <SshTerminalOutput
-          lines={terminalLines}
-          prompt={activePrompt}
-          command={command}
-          disabled={disabled}
-          running={commandRunning}
-          passwordMode={passwordMode}
-          suggestions={visibleSuggestions}
-          highlightedSuggestionIndex={highlightedSuggestionIndex}
-          scrollRequest={terminalScrollRequest}
-          focusRequest={terminalFocusRequest}
-          onCommandChange={handleCommandChange}
-          onCommandKeyDown={handleCommandKeyDown}
-          onSuggestionHover={setHighlightedSuggestionIndex}
-          onSuggestionSelect={acceptSuggestion}
-        />
-      </Panel>
+          <Panel
+            title="CLI"
+            className="ssh-cli-panel"
+            action={
+              <span className="ssh-panel-actions">
+                <span
+                  className={`ssh-status ssh-status-${connectionStatus}`}
+                  data-status={connectionStatus}
+                >
+                  <span className="ssh-status-dot" aria-hidden="true" />
+                  {formatConnectionStatusLabel(
+                    connectionStatus,
+                    reconnectAttempt,
+                    reconnectMaxAttempts,
+                  )}
+                </span>
+                <button
+                  className="icon-button secondary ssh-panel-collapse-button"
+                  type="button"
+                  aria-label={
+                    commandPanelCollapsed
+                      ? "Expand command panel"
+                      : "Collapse command panel"
+                  }
+                  title={
+                    commandPanelCollapsed
+                      ? "Expand command panel"
+                      : "Collapse command panel"
+                  }
+                  onClick={() =>
+                    setCommandPanelCollapsed((current) => !current)
+                  }
+                >
+                  {commandPanelCollapsed ? (
+                    <PanelLeftOpen size={16} />
+                  ) : (
+                    <PanelLeftClose size={16} />
+                  )}
+                </button>
+              </span>
+            }
+          >
+            <SshTerminalOutput
+              lines={terminalLines}
+              prompt={activePrompt}
+              command={command}
+              disabled={disabled}
+              running={commandRunning}
+              passwordMode={passwordMode}
+              promptResponseMode={promptResponseMode}
+              scrollRequest={terminalScrollRequest}
+              focusRequest={terminalFocusRequest}
+              onCommandChange={handleCommandChange}
+              onCommandKeyDown={handleCommandKeyDown}
+              onInterrupt={() => void interruptActiveTerminalProcess()}
+            />
+          </Panel>
 
-      <div className="ssh-directory-column">
-        <SftpPanel
-          title="Local Directory"
-          path={localPath}
-          items={localItems}
-          source="local"
-          dragOver={dragOverPanel === "local"}
-          disabled={disabled}
-          loading={localBusyCount > 0}
-          selectedItemIds={selectedLocalIds}
-          onPathChange={setLocalPath}
-          canGoBack={localHistory.length > 0}
-          canGoForward={localFuture.length > 0}
-          onBack={() => navigateBack("local")}
-          onForward={() => navigateForward("local")}
-          onHome={() => navigateHomeDirectory("local")}
-          onRefresh={() => refreshDirectory("local")}
-          onUpload={() => void uploadSelectedItems()}
-          onDownload={() => void downloadSelectedItems()}
-          onNewFolder={() => openNewFolderDialog("local")}
-          uploadDisabled={!connected || selectedLocalIds.length === 0}
-          downloadDisabled={!connected || selectedRemoteIds.length === 0}
-          onSubmitPath={(path) => navigateDirectory("local", path)}
-          onSelectItem={(item, multiSelect) => toggleItemSelection("local", item, multiSelect)}
-          actionMenu={actionMenu}
-          onToggleActionMenu={(item, position) =>
-            setActionMenu((current) =>
-              current?.source === "local" && current.item.id === item.id && !position
-                ? null
-                : { source: "local", item, ...position },
-            )
-          }
-          onCloseActionMenu={() => setActionMenu(null)}
-          onRenameItem={(item) => openRenameDialog("local", item)}
-          onDeleteItem={(item) => openDeleteDialog("local", item)}
-          onDragStart={handleItemDragStart}
-          onDragOver={handleDirectoryDragOver}
-          onDrop={handleDirectoryDrop}
-          onDragLeave={() => setDragOverPanel(null)}
-        />
-        <SftpPanel
-          title={remoteTitle}
-          path={remotePath}
-          items={remoteItems}
-          source="remote"
-          dragOver={dragOverPanel === "remote"}
-          disabled={disabled || !connected}
-          loading={remoteBusyCount > 0}
-          selectedItemIds={selectedRemoteIds}
-          onPathChange={setRemotePath}
-          canGoBack={remoteHistory.length > 0}
-          canGoForward={remoteFuture.length > 0}
-          onBack={() => navigateBack("remote")}
-          onForward={() => navigateForward("remote")}
-          onHome={() => navigateHomeDirectory("remote")}
-          onRefresh={() => refreshDirectory("remote")}
-          onUpload={() => void uploadSelectedItems()}
-          onDownload={() => void downloadSelectedItems()}
-          onNewFolder={() => openNewFolderDialog("remote")}
-          uploadDisabled={!connected || selectedLocalIds.length === 0}
-          downloadDisabled={!connected || selectedRemoteIds.length === 0}
-          onSubmitPath={(path) => navigateDirectory("remote", path)}
-          onSelectItem={(item, multiSelect) => toggleItemSelection("remote", item, multiSelect)}
-          actionMenu={actionMenu}
-          onToggleActionMenu={(item, position) =>
-            setActionMenu((current) =>
-              current?.source === "remote" && current.item.id === item.id && !position
-                ? null
-                : { source: "remote", item, ...position },
-            )
-          }
-          onCloseActionMenu={() => setActionMenu(null)}
-          onRenameItem={(item) => openRenameDialog("remote", item)}
-          onDeleteItem={(item) => openDeleteDialog("remote", item)}
-          onDragStart={handleItemDragStart}
-          onDragOver={handleDirectoryDragOver}
-          onDrop={handleDirectoryDrop}
-          onDragLeave={() => setDragOverPanel(null)}
-        />
-      </div>
+          <div className="ssh-directory-column">
+            <SftpPanel
+              title="Local Directory"
+              path={localPath}
+              items={localItems}
+              source="local"
+              dragOver={dragOverPanel === "local"}
+              disabled={disabled}
+              loading={localBusyCount > 0}
+              selectedItemIds={selectedLocalIds}
+              onPathChange={setLocalPath}
+              canGoBack={localHistory.length > 0}
+              canGoForward={localFuture.length > 0}
+              onBack={() => navigateBack("local")}
+              onForward={() => navigateForward("local")}
+              onHome={() => navigateHomeDirectory("local")}
+              onRefresh={() => refreshDirectory("local")}
+              onUpload={() => void uploadSelectedItems()}
+              onDownload={() => void downloadSelectedItems()}
+              onNewFolder={() => openNewFolderDialog("local")}
+              uploadDisabled={!connected || selectedLocalIds.length === 0}
+              downloadDisabled={!connected || selectedRemoteIds.length === 0}
+              onSubmitPath={(path) => navigateDirectory("local", path)}
+              onSelectItem={(item, multiSelect) =>
+                toggleItemSelection("local", item, multiSelect)
+              }
+              actionMenu={actionMenu}
+              onToggleActionMenu={(item, position) =>
+                setActionMenu((current) =>
+                  current?.source === "local" &&
+                  current.item.id === item.id &&
+                  !position
+                    ? null
+                    : { source: "local", item, ...position },
+                )
+              }
+              onCloseActionMenu={() => setActionMenu(null)}
+              onRenameItem={(item) => openRenameDialog("local", item)}
+              onDeleteItem={(item) => openDeleteDialog("local", item)}
+              onDragStart={handleItemDragStart}
+              onDragOver={handleDirectoryDragOver}
+              onDrop={handleDirectoryDrop}
+              onDragLeave={() => setDragOverPanel(null)}
+            />
+            <SftpPanel
+              title={remoteTitle}
+              path={remotePath}
+              items={remoteItems}
+              source="remote"
+              dragOver={dragOverPanel === "remote"}
+              disabled={disabled || !connected}
+              loading={remoteBusyCount > 0}
+              selectedItemIds={selectedRemoteIds}
+              onPathChange={setRemotePath}
+              canGoBack={remoteHistory.length > 0}
+              canGoForward={remoteFuture.length > 0}
+              onBack={() => navigateBack("remote")}
+              onForward={() => navigateForward("remote")}
+              onHome={() => navigateHomeDirectory("remote")}
+              onRefresh={() => refreshDirectory("remote")}
+              onUpload={() => void uploadSelectedItems()}
+              onDownload={() => void downloadSelectedItems()}
+              onNewFolder={() => openNewFolderDialog("remote")}
+              uploadDisabled={!connected || selectedLocalIds.length === 0}
+              downloadDisabled={!connected || selectedRemoteIds.length === 0}
+              onSubmitPath={(path) => navigateDirectory("remote", path)}
+              onSelectItem={(item, multiSelect) =>
+                toggleItemSelection("remote", item, multiSelect)
+              }
+              actionMenu={actionMenu}
+              onToggleActionMenu={(item, position) =>
+                setActionMenu((current) =>
+                  current?.source === "remote" &&
+                  current.item.id === item.id &&
+                  !position
+                    ? null
+                    : { source: "remote", item, ...position },
+                )
+              }
+              onCloseActionMenu={() => setActionMenu(null)}
+              onRenameItem={(item) => openRenameDialog("remote", item)}
+              onDeleteItem={(item) => openDeleteDialog("remote", item)}
+              onDragStart={handleItemDragStart}
+              onDragOver={handleDirectoryDragOver}
+              onDrop={handleDirectoryDrop}
+              onDragLeave={() => setDragOverPanel(null)}
+            />
+          </div>
         </>
       )}
       {nameDialog ? (
         <SftpNameDialog
           state={nameDialog}
           onChange={(value) =>
-            setNameDialog((current) => (current ? { ...current, value } : current))
+            setNameDialog((current) =>
+              current ? { ...current, value } : current,
+            )
           }
           onClose={() => setNameDialog(null)}
           onSave={() => void saveNameDialog()}
@@ -2438,7 +2681,10 @@ function SftpPanel({
   onSubmitPath: (path: string) => void;
   onSelectItem: (item: SftpItem, multiSelect: boolean) => void;
   actionMenu: SftpActionMenuState;
-  onToggleActionMenu: (item: SftpItem, position?: { x: number; y: number }) => void;
+  onToggleActionMenu: (
+    item: SftpItem,
+    position?: { x: number; y: number },
+  ) => void;
   onCloseActionMenu: () => void;
   onRenameItem: (item: SftpItem) => void;
   onDeleteItem: (item: SftpItem) => void;
@@ -2457,7 +2703,8 @@ function SftpPanel({
   ) => void;
   onDragLeave: () => void;
 }): JSX.Element {
-  const panelLabel = source === "local" ? "Local Directory" : "Remote Directory";
+  const panelLabel =
+    source === "local" ? "Local Directory" : "Remote Directory";
 
   return (
     <Panel
@@ -2542,7 +2789,10 @@ function SftpPanel({
               onClick={(event) => onSelectItem(item, event.ctrlKey)}
               onContextMenu={(event) => {
                 event.preventDefault();
-                onToggleActionMenu(item, { x: event.clientX, y: event.clientY });
+                onToggleActionMenu(item, {
+                  x: event.clientX,
+                  y: event.clientY,
+                });
               }}
               onDragStart={(event) => onDragStart(event, source, item.id)}
               role="row"
@@ -2568,7 +2818,8 @@ function SftpPanel({
                 >
                   <MoreHorizontal size={15} />
                 </button>
-                {actionMenu?.source === source && actionMenu.item.id === item.id ? (
+                {actionMenu?.source === source &&
+                actionMenu.item.id === item.id ? (
                   <div
                     className={`ssh-row-action-menu${actionMenu.x !== undefined ? " context" : ""}`}
                     role="menu"
@@ -2627,7 +2878,10 @@ function SshMonitorTab({
 }): JSX.Element {
   return (
     <div className="ssh-monitor-tab">
-      <Panel title="Directory Action Log" className="ssh-monitor-panel recent-builds-panel">
+      <Panel
+        title="Directory Action Log"
+        className="ssh-monitor-panel recent-builds-panel"
+      >
         <div className="recent-builds-table-scroll ssh-monitor-table-scroll">
           <table className="recent-builds-table ssh-monitor-table directory-action-log-table">
             <thead>
@@ -2663,7 +2917,10 @@ function SshMonitorTab({
           </table>
         </div>
       </Panel>
-      <Panel title="Terminal Command Log" className="ssh-monitor-panel recent-builds-panel">
+      <Panel
+        title="Terminal Command Log"
+        className="ssh-monitor-panel recent-builds-panel"
+      >
         <div className="recent-builds-table-scroll ssh-monitor-table-scroll">
           <table className="recent-builds-table ssh-monitor-table terminal-command-log-table">
             <thead>
@@ -2724,7 +2981,10 @@ function FilePreviewModal({
         <div className="ssh-preview-state">{preview.error}</div>
       ) : result?.kind === "image" && result.content ? (
         <div className="ssh-preview-image-wrap">
-          <img src={`data:${result.mimeType};base64,${result.content}`} alt={result.fileName} />
+          <img
+            src={`data:${result.mimeType};base64,${result.content}`}
+            alt={result.fileName}
+          />
         </div>
       ) : result?.kind === "pdf" && result.content ? (
         <iframe
@@ -2844,7 +3104,11 @@ function SftpNameDialog({
           </label>
         </div>
         <div className="dialog-actions">
-          <button className="button secondary compact" type="button" onClick={onClose}>
+          <button
+            className="button secondary compact"
+            type="button"
+            onClick={onClose}
+          >
             Cancel
           </button>
           <button
@@ -2918,7 +3182,9 @@ function joinDirectoryPath(
 ): string {
   if (source === "remote") {
     const normalizedBase = basePath.trim().replace(/\/+$/, "") || "/";
-    return normalizedBase === "/" ? `/${itemName}` : `${normalizedBase}/${itemName}`;
+    return normalizedBase === "/"
+      ? `/${itemName}`
+      : `${normalizedBase}/${itemName}`;
   }
 
   const normalizedBase = basePath.trim().replace(/[\\/]+$/, "");
@@ -2964,11 +3230,13 @@ function formatDirectoryEntryModified(modifiedMs: number | null): string {
   }).format(new Date(modifiedMs));
 }
 
-function isTextPreview(result: FilePreviewResult | null): result is FilePreviewResult {
+function isTextPreview(
+  result: FilePreviewResult | null,
+): result is FilePreviewResult {
   return Boolean(
     result?.content &&
-      result.encoding === "utf8" &&
-      ["text", "json", "xml"].includes(result.kind),
+    result.encoding === "utf8" &&
+    ["text", "json", "xml"].includes(result.kind),
   );
 }
 
@@ -3011,7 +3279,9 @@ function formatRemoteDirectoryTitleForHost(
     return formatRemoteDirectoryTitle(server);
   }
   const username = server?.username.trim() ?? "";
-  return username ? `Remote: ${username}@${trimmedHost}` : `Remote: ${trimmedHost}`;
+  return username
+    ? `Remote: ${username}@${trimmedHost}`
+    : `Remote: ${trimmedHost}`;
 }
 
 function isInteractivePasswordPrompt(partialLine: string): boolean {
@@ -3030,6 +3300,45 @@ function isInteractivePasswordPrompt(partialLine: string): boolean {
     /enter\s+passphrase[^:]*:\s*$/.test(value) ||
     /'s\s+password\s*:\s*$/.test(value)
   );
+}
+
+function isInteractiveTextPrompt(partialLine: string): boolean {
+  const value = partialLine.toLowerCase().trim();
+  if (!value) {
+    return false;
+  }
+
+  return (
+    /\((?:yes\/no|y\/n)(?:\/\[fingerprint\])?\)\??\s*$/.test(value) ||
+    /\[(?:yes\/no|y\/n)(?:\/fingerprint)?\]\??\s*$/.test(value) ||
+    /(?:^|\s)(?:yes\/no|y\/n)(?:\/\[fingerprint\])?\??\s*$/.test(value)
+  );
+}
+
+function getInteractivePromptMode(
+  partialLine: string,
+): TerminalState | null {
+  const cleanLine = stripAnsiControlSequences(partialLine);
+  if (isInteractivePasswordPrompt(cleanLine)) {
+    return "passwordPrompt";
+  }
+  if (isInteractiveTextPrompt(cleanLine)) {
+    return "interactive";
+  }
+  return null;
+}
+
+function getInteractivePromptModeFromLines(
+  lines: string[],
+): TerminalState | null {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index]?.trimEnd() ?? "";
+    if (!line.trim()) {
+      continue;
+    }
+    return getInteractivePromptMode(line);
+  }
+  return null;
 }
 
 function normalizeStoredServer(value: unknown): SshServerConfig | null {
@@ -3051,8 +3360,14 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
     port: normalizeSshPort(record.port ?? parsedEndpoint.port),
     username: typeof record.username === "string" ? record.username.trim() : "",
     password: typeof record.password === "string" ? record.password : "",
-    macs: typeof record.macs === "string" ? normalizeSshAlgorithmList(record.macs) : "",
-    ciphers: typeof record.ciphers === "string" ? normalizeSshAlgorithmList(record.ciphers) : "",
+    macs:
+      typeof record.macs === "string"
+        ? normalizeSshAlgorithmList(record.macs)
+        : "",
+    ciphers:
+      typeof record.ciphers === "string"
+        ? normalizeSshAlgorithmList(record.ciphers)
+        : "",
     autoLogin: Boolean(record.autoLogin),
     autoReconnect: Boolean(record.autoReconnect),
     maxReconnectAttempts: clampInteger(
@@ -3070,7 +3385,10 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
   };
 }
 
-function parseStoredSshEndpoint(address: string): { host: string; port: number } {
+function parseStoredSshEndpoint(address: string): {
+  host: string;
+  port: number;
+} {
   const trimmed = address.trim();
   if (!trimmed) {
     return { host: "", port: SSH_PORT_DEFAULT };
@@ -3112,7 +3430,7 @@ function clampInteger(
       ? Math.round(value)
       : typeof value === "string" && value.trim()
         ? Number.parseInt(value, 10)
-      : Number.NaN;
+        : Number.NaN;
   if (!Number.isFinite(numeric)) {
     return fallback;
   }
@@ -3208,10 +3526,7 @@ function splitCommandOutput(output: string): string[] {
     return [];
   }
 
-  const lines = output
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n");
+  const lines = output.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   while (lines.length > 0 && isBlankTerminalOutputLine(lines[0])) {
     lines.shift();
   }
@@ -3236,14 +3551,12 @@ function SshTerminalOutput({
   disabled,
   running,
   passwordMode,
-  suggestions,
-  highlightedSuggestionIndex,
+  promptResponseMode,
   scrollRequest,
   focusRequest,
   onCommandChange,
   onCommandKeyDown,
-  onSuggestionHover,
-  onSuggestionSelect,
+  onInterrupt,
 }: {
   lines: string[];
   prompt: string;
@@ -3251,14 +3564,12 @@ function SshTerminalOutput({
   disabled: boolean;
   running: boolean;
   passwordMode: boolean;
-  suggestions: TerminalSuggestion[];
-  highlightedSuggestionIndex: number;
+  promptResponseMode: boolean;
   scrollRequest: number;
   focusRequest: number;
   onCommandChange: (value: string) => void;
   onCommandKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
-  onSuggestionHover: (index: number) => void;
-  onSuggestionSelect: (suggestion: TerminalSuggestion) => void;
+  onInterrupt: () => void;
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -3276,7 +3587,8 @@ function SshTerminalOutput({
     if (!container) {
       return;
     }
-    const receivedExplicitScrollRequest = previousScrollRequestRef.current !== scrollRequest;
+    const receivedExplicitScrollRequest =
+      previousScrollRequestRef.current !== scrollRequest;
     previousScrollRequestRef.current = scrollRequest;
     if (receivedExplicitScrollRequest || shouldFollowOutputRef.current) {
       container.scrollTop = container.scrollHeight;
@@ -3285,8 +3597,12 @@ function SshTerminalOutput({
   }, [lines.length, scrollRequest, virtualizer]);
 
   useEffect(() => {
+    if (running) {
+      containerRef.current?.focus();
+      return;
+    }
     inputRef.current?.focus();
-  }, [focusRequest]);
+  }, [focusRequest, running]);
 
   function handleScroll(): void {
     const container = containerRef.current;
@@ -3294,17 +3610,26 @@ function SshTerminalOutput({
       return;
     }
     shouldFollowOutputRef.current =
-      container.scrollHeight - container.scrollTop - container.clientHeight < 48;
+      container.scrollHeight - container.scrollTop - container.clientHeight <
+      48;
   }
 
   function focusInput(): void {
+    if (running) {
+      containerRef.current?.focus();
+      shouldFollowOutputRef.current = true;
+      return;
+    }
     inputRef.current?.focus();
     shouldFollowOutputRef.current = true;
   }
 
   function hasActiveTextSelection(): boolean {
-    const selection = typeof window !== "undefined" ? window.getSelection() : null;
-    return Boolean(selection && !selection.isCollapsed && selection.toString().length > 0);
+    const selection =
+      typeof window !== "undefined" ? window.getSelection() : null;
+    return Boolean(
+      selection && !selection.isCollapsed && selection.toString().length > 0,
+    );
   }
 
   function focusInputFromTerminalClick(
@@ -3325,6 +3650,16 @@ function SshTerminalOutput({
     focusInput();
   }
 
+  function handleTerminalKeyDown(
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ): void {
+    if (!running || !isTerminalInterruptKey(event)) {
+      return;
+    }
+    event.preventDefault();
+    onInterrupt();
+  }
+
   return (
     <div
       className="ssh-terminal"
@@ -3333,6 +3668,8 @@ function SshTerminalOutput({
       aria-live="polite"
       onScroll={handleScroll}
       onClick={focusInputFromTerminalClick}
+      onKeyDown={handleTerminalKeyDown}
+      tabIndex={0}
       style={{ userSelect: "text" }}
     >
       <div
@@ -3358,60 +3695,53 @@ function SshTerminalOutput({
           );
         })}
       </div>
-      <div
-        className="ssh-terminal-active-line"
-        onClick={(event) => {
-          event.stopPropagation();
-          focusInputFromTerminalClick(event);
-        }}
-      >
-        <span className="ssh-terminal-active-prompt">{prompt}</span>
-        <input
-          ref={inputRef}
-          className="ssh-terminal-inline-input"
-          type={passwordMode ? "password" : "text"}
-          value={command}
-          onChange={(event) => onCommandChange(event.target.value)}
-          onKeyDown={onCommandKeyDown}
-          aria-label={passwordMode ? "SSH password input" : "SSH command"}
-          autoComplete="off"
-          autoCapitalize="off"
-          spellCheck={false}
-          disabled={disabled || running}
-          placeholder={
-            running
-              ? "running..."
-              : passwordMode
+      {!running ? (
+        <div
+          className="ssh-terminal-active-line"
+          onClick={(event) => {
+            event.stopPropagation();
+            focusInputFromTerminalClick(event);
+          }}
+        >
+          <span className="ssh-terminal-active-prompt">{prompt}</span>
+          <input
+            ref={inputRef}
+            className="ssh-terminal-inline-input"
+            type={passwordMode ? "password" : "text"}
+            value={command}
+            onChange={(event) => onCommandChange(event.target.value)}
+            onKeyDown={onCommandKeyDown}
+            aria-label={
+              passwordMode
+                ? "SSH password input"
+                : promptResponseMode
+                  ? "SSH prompt response"
+                  : "SSH command"
+            }
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            disabled={disabled}
+            placeholder={
+              passwordMode
                 ? "password (hidden)"
-                : disabled
-                  ? "connect to run commands"
-                  : ""
-          }
-        />
-        {!passwordMode && suggestions.length > 0 && (
-          <div className="ssh-terminal-suggestions" role="listbox">
-            {suggestions.map((suggestion, index) => (
-              <button
-                className={`ssh-terminal-suggestion ${
-                  index === highlightedSuggestionIndex ? "is-active" : ""
-                }`}
-                key={`${suggestion.source}-${suggestion.value}`}
-                role="option"
-                aria-selected={index === highlightedSuggestionIndex}
-                type="button"
-                onMouseEnter={() => onSuggestionHover(index)}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => onSuggestionSelect(suggestion)}
-              >
-                <span>{suggestion.label}</span>
-                <small>{suggestion.source}</small>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+                : promptResponseMode
+                  ? "response"
+                  : disabled
+                    ? "connect to run commands"
+                    : ""
+            }
+          />
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function isTerminalInterruptKey(
+  event: ReactKeyboardEvent<HTMLElement>,
+): boolean {
+  return event.ctrlKey && event.key.toLowerCase() === "c";
 }
 
 function addCommandHistoryEntry(history: string[], command: string): string[] {
@@ -3426,75 +3756,151 @@ function addCommandHistoryEntry(history: string[], command: string): string[] {
   return [...history, trimmed].slice(-100);
 }
 
-function buildTerminalSuggestions({
-  command,
-  history,
-  remoteItems,
-  remotePath,
-}: {
-  command: string;
-  history: string[];
-  remoteItems: SftpItem[];
-  remotePath: string;
-}): TerminalSuggestion[] {
-  const query = getCurrentCommandToken(command).toLowerCase();
-  const fullQuery = command.trimStart().toLowerCase();
-  if (!query && !fullQuery) {
-    return [];
+function getCurrentCommandTokenRange(command: string): {
+  token: string;
+  start: number;
+  end: number;
+} {
+  const match = /(?:^|\s)(\S*)$/.exec(command);
+  const token = match?.[1] ?? command;
+  const end = command.length;
+  const start = token ? command.lastIndexOf(token) : end;
+  return { token, start, end };
+}
+
+function replaceCommandToken(
+  command: string,
+  range: { start: number; end: number },
+  token: string,
+): string {
+  return `${command.slice(0, range.start)}${token}${command.slice(range.end)}`;
+}
+
+function getRemoteCompletionRequest(
+  token: string,
+  currentPath: string,
+): { basePath: string; tokenPrefix: string; partial: string } | null {
+  const slashIndex = token.lastIndexOf("/");
+  if (slashIndex < 0) {
+    return {
+      basePath: normalizeRemotePath(currentPath || "."),
+      tokenPrefix: "",
+      partial: token,
+    };
   }
 
-  const seen = new Set<string>();
-  const suggestions: TerminalSuggestion[] = [];
-  const addSuggestion = (value: string, source: TerminalSuggestion["source"]): void => {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      return;
-    }
-    const label = source === "file" ? quoteShellPathIfNeeded(trimmed) : trimmed;
-    const lowerLabel = label.toLowerCase();
-    const isCommandLike = source === "command" || source === "history";
-    const matches = isCommandLike
-      ? lowerLabel.startsWith(fullQuery)
-      : lowerLabel.startsWith(query);
-    if (!matches) {
-      return;
-    }
-    seen.add(trimmed);
-    suggestions.push({ value: label, label, source });
+  const tokenPrefix = token.slice(0, slashIndex + 1);
+  const directoryToken = token.slice(0, slashIndex) || "/";
+  return {
+    basePath: resolveRemotePath(currentPath || ".", directoryToken),
+    tokenPrefix,
+    partial: token.slice(slashIndex + 1),
   };
-
-  [...history].reverse().forEach((entry) => addSuggestion(entry, "history"));
-  SSH_COMMAND_SUGGESTIONS.forEach((entry) => addSuggestion(entry, "command"));
-  if (remotePath.trim()) {
-    addSuggestion(remotePath, "path");
-  }
-  remoteItems.forEach((item) => addSuggestion(item.name, item.type === "folder" ? "path" : "file"));
-
-  return suggestions.slice(0, 16);
 }
 
-function getCurrentCommandToken(command: string): string {
-  const match = command.match(/(?:^|\s)(\S*)$/);
-  return match?.[1] ?? command;
+function findTerminalCompletionMatches(
+  items: TerminalCompletionItem[],
+  partial: string,
+): TerminalCompletionItem[] {
+  const exactMatches = items.filter((item) => item.name.startsWith(partial));
+  const matches =
+    exactMatches.length > 0
+      ? exactMatches
+      : items.filter((item) =>
+          item.name.toLowerCase().startsWith(partial.toLowerCase()),
+        );
+  return [...matches].sort((left, right) =>
+    formatTerminalCompletionCandidate(left).localeCompare(
+      formatTerminalCompletionCandidate(right),
+      undefined,
+      { numeric: true, sensitivity: "base" },
+    ),
+  );
 }
 
-function applyTerminalSuggestion(command: string, suggestion: string): string {
-  const token = getCurrentCommandToken(command);
-  if (!token) {
-    return suggestion;
-  }
-  const tokenStart = command.lastIndexOf(token);
-  if (tokenStart < 0) {
-    return suggestion;
-  }
-  return `${command.slice(0, tokenStart)}${suggestion}`;
+function formatTerminalCompletionCandidate(
+  item: TerminalCompletionItem,
+): string {
+  return `${item.name}${item.type === "folder" ? "/" : ""}`;
 }
 
-function quoteShellPathIfNeeded(value: string): string {
-  if (!/\s/.test(value)) {
-    return value;
+function formatTerminalCompletionCandidates(candidates: string[]): string[] {
+  return chunkTerminalCompletionCandidates(candidates, 4).map((row) =>
+    row.join("    "),
+  );
+}
+
+function chunkTerminalCompletionCandidates(
+  candidates: string[],
+  columns: number,
+): string[][] {
+  const rows: string[][] = [];
+  for (let index = 0; index < candidates.length; index += columns) {
+    rows.push(candidates.slice(index, index + columns));
   }
-  return `'${value.replace(/'/g, `'\\''`)}'`;
+  return rows;
+}
+
+function getSharedPrefix(values: string[]): string {
+  if (values.length === 0) {
+    return "";
+  }
+
+  let prefix = values[0] ?? "";
+  for (const value of values.slice(1)) {
+    while (prefix && !value.startsWith(prefix)) {
+      prefix = prefix.slice(0, -1);
+    }
+    if (!prefix) {
+      break;
+    }
+  }
+  return prefix;
+}
+
+function escapeShellCompletionSegment(value: string): string {
+  return value.replace(/([\\\s"'`$!&;()<>|*?\[\]{}])/g, "\\$1");
+}
+
+function resolveRemotePath(currentPath: string, requestedPath: string): string {
+  if (requestedPath.startsWith("/")) {
+    return normalizeRemotePath(requestedPath);
+  }
+  const base = normalizeRemotePath(currentPath || ".");
+  return normalizeRemotePath(`${base.replace(/\/+$/, "")}/${requestedPath}`);
+}
+
+function normalizeRemotePath(path: string): string {
+  const trimmed = path.trim() || ".";
+  const absolute = trimmed.startsWith("/");
+  const parts = trimmed.split("/");
+  const stack: string[] = [];
+
+  for (const part of parts) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      if (stack.length > 0) {
+        stack.pop();
+      }
+      continue;
+    }
+    stack.push(part);
+  }
+
+  const normalized = stack.join("/");
+  if (absolute) {
+    return `/${normalized}`.replace(/\/+$/, "") || "/";
+  }
+  return normalized || ".";
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
 }
 
 function getDirectoryLocation(
@@ -3528,7 +3934,9 @@ function getFileExtension(name: string): string {
 }
 
 function isImageExtension(extension: string): boolean {
-  return ["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"].includes(extension);
+  return ["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"].includes(
+    extension,
+  );
 }
 
 function isDocumentFileExtension(extension: string): boolean {
@@ -3564,8 +3972,25 @@ function formatSshPrompt(
   const userHost = server?.username.trim()
     ? `${server.username.trim()}@${host}`
     : host;
-  const cwd = remoteCwd?.trim() || "";
+  const cwd = normalizePromptRemotePath(remoteCwd);
   return cwd ? `${userHost} ${cwd} >` : `${userHost} >`;
+}
+
+function normalizePromptRemotePath(path: string | null): string {
+  const trimmed = path?.trim() ?? "";
+  if (!trimmed) {
+    return "";
+  }
+
+  let normalized = trimmed.replace(/\\+/g, "/");
+  if (/^[A-Za-z]:(?:\/|$)/.test(normalized)) {
+    normalized = `/${normalized}`;
+  }
+  normalized = normalized.replace(/\/+/g, "/");
+  if (/^\/[A-Za-z]:\/$/.test(normalized)) {
+    return normalized;
+  }
+  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }
 
 function getTerminalLineClass(line: string): string {
@@ -3642,8 +4067,7 @@ function renderLongListingLineHtml(line: string): string | null {
         return escapeHtml(part);
       }
 
-      const className =
-        tokenIndex < 8 ? "ssh-terminal-token-meta" : nameClass;
+      const className = tokenIndex < 8 ? "ssh-terminal-token-meta" : nameClass;
       tokenIndex += 1;
       return `<span class="${className}">${escapeHtml(part)}</span>`;
     })

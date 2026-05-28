@@ -9741,7 +9741,7 @@ button.database-tree-item {
   width: min(560px, calc(100% - 32px));
   padding: 18px;
   color: var(--text);
-  background: var(--panel-bg);
+  background: var(--subtle-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow-lg);
@@ -10061,61 +10061,6 @@ button.database-tree-item {
 .ssh-terminal-inline-input:disabled {
   color: var(--ssh-terminal-muted);
   cursor: not-allowed;
-}
-
-.ssh-terminal-suggestions {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  display: grid;
-  width: min(460px, 100%);
-  max-height: 220px;
-  padding: 4px;
-  overflow: auto;
-  background: var(--ssh-terminal-shell);
-  border: 1px solid var(--ssh-terminal-border);
-  border-radius: 7px;
-  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.18);
-}
-
-.ssh-terminal-suggestion {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 30px;
-  padding: 5px 8px;
-  color: var(--ssh-terminal-text);
-  font: inherit;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.ssh-terminal-suggestion span {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ssh-terminal-command);
-  font-weight: 760;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ssh-terminal-suggestion small {
-  color: var(--ssh-terminal-muted);
-  font-size: var(--font-xs);
-  text-transform: uppercase;
-}
-
-.ssh-terminal-suggestion.is-active,
-.ssh-terminal-suggestion:hover,
-.ssh-terminal-suggestion:focus-visible {
-  color: var(--ssh-terminal-text);
-  background: color-mix(in srgb, var(--ssh-terminal-command) 14%, transparent);
-  outline: none;
 }
 
 .ssh-terminal-line .ansi-black,

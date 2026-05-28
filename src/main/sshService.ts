@@ -55,7 +55,10 @@ export class SshService {
   write(sessionId: string, data: string): Promise<SshWriteResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      return Promise.resolve({ ok: false, error: "SSH session is not active." });
+      return Promise.resolve({
+        ok: false,
+        error: "SSH session is not active.",
+      });
     }
     return this.ensureShell(session)
       .then(() => {
@@ -66,7 +69,9 @@ export class SshService {
           return { ok: false, error: formatError(error) } as SshWriteResult;
         }
       })
-      .catch((error) => ({ ok: false, error: formatError(error) } as SshWriteResult));
+      .catch(
+        (error) => ({ ok: false, error: formatError(error) }) as SshWriteResult,
+      );
   }
 
   connect(request: SshConnectRequest): Promise<SshConnectResult> {
@@ -230,8 +235,8 @@ export class SshService {
         path: targetPath,
         items: sortDirectoryItems(
           list
-            .filter((entry) =>
-              entry.attrs.isDirectory() || entry.attrs.isFile(),
+            .filter(
+              (entry) => entry.attrs.isDirectory() || entry.attrs.isFile(),
             )
             .map((entry) => ({
               name: entry.filename,
@@ -247,7 +252,8 @@ export class SshService {
         ok: false,
         path: targetPath,
         items: [],
-        error: error instanceof Error ? error.message : "Unable to list directory.",
+        error:
+          error instanceof Error ? error.message : "Unable to list directory.",
       };
     }
   }
@@ -279,7 +285,11 @@ export class SshService {
     }
     return this.withSftp(sessionId, (sftp) =>
       sftpAction((resolve) =>
-        sftp.rename(path, joinRemotePath(posix.dirname(path), safeName), resolve),
+        sftp.rename(
+          path,
+          joinRemotePath(posix.dirname(path), safeName),
+          resolve,
+        ),
       ),
     );
   }
@@ -350,7 +360,11 @@ export class SshService {
           error: "Preview is limited to files 5 MB or smaller.",
         };
       }
-      const metadata = resolvePreviewMetadata(fileName, initialMetadata, buffer);
+      const metadata = resolvePreviewMetadata(
+        fileName,
+        initialMetadata,
+        buffer,
+      );
       if (metadata.kind === "unsupported") {
         return { ok: true, fileName, ...metadata };
       }
@@ -399,7 +413,12 @@ export class SshService {
 
             session.pending = true;
             session.shellPending = pending;
-            session.shell?.write(`${command}\n`);
+            // Use CR (\r) as the Enter key. Real terminals send CR for Enter; the
+            // remote PTY line discipline then translates it. Sending LF alone
+            // breaks shells like Windows cmd.exe (when nested through ssh) that
+            // do not treat \n as a line submission, causing subsequent commands
+            // to be concatenated (e.g. "dir" + "pwd" -> "dirpwd").
+            session.shell?.write(`${command}\r`);
           }),
       )
       .catch((error) => ({
@@ -509,21 +528,24 @@ export class SshService {
         kind: "unsupported",
         fileName: "",
         mimeType: "application/octet-stream",
-        error: error instanceof Error ? error.message : "Unable to preview file.",
+        error:
+          error instanceof Error ? error.message : "Unable to preview file.",
       };
     }
   }
 
   private handleShellData(session: SshSession, text: string): void {
+    if (session.shellPending) {
+      this.handleCommandData(session, text);
+      return;
+    }
+
     if (this.shellDataSink) {
       try {
         this.shellDataSink(session.id, text);
       } catch {
         // ignore sink errors
       }
-    }
-    if (session.shellPending) {
-      this.handleCommandData(session, text);
     }
   }
 
@@ -606,7 +628,9 @@ function parseAlgorithmList(value?: string): string[] {
     .filter(Boolean);
 }
 
-function parseSshAddress(address: string): { host: string; port: number } | null {
+function parseSshAddress(
+  address: string,
+): { host: string; port: number } | null {
   const trimmed = address.trim();
   if (!trimmed) {
     return null;
@@ -684,7 +708,9 @@ function sftpAction(
   return new Promise((resolve) => {
     run((error?: Error | null) => {
       if (error) {
-        resolve(formatDirectoryActionError(error, "SSH file operation failed."));
+        resolve(
+          formatDirectoryActionError(error, "SSH file operation failed."),
+        );
         return;
       }
       resolve({ ok: true });
@@ -705,7 +731,12 @@ function sanitizeRemoteActionName(name: string): string {
 }
 
 function getLocalPathBaseName(path: string): string {
-  return path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "upload";
+  return (
+    path
+      .replace(/[\\/]+$/, "")
+      .split(/[\\/]/)
+      .pop() ?? "upload"
+  );
 }
 
 function formatDirectoryActionError(
@@ -718,11 +749,16 @@ function formatDirectoryActionError(
   };
 }
 
-function getPreviewMetadata(
-  fileName: string,
-): { kind: FilePreviewResult["kind"]; mimeType: string } {
+function getPreviewMetadata(fileName: string): {
+  kind: FilePreviewResult["kind"];
+  mimeType: string;
+} {
   const extension = posix.extname(fileName).toLowerCase();
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extension)) {
+  if (
+    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(
+      extension,
+    )
+  ) {
     return { kind: "image", mimeType: getImageMimeType(extension) };
   }
   if (extension === ".pdf") {
@@ -734,7 +770,11 @@ function getPreviewMetadata(
   if ([".xml", ".xsd", ".xsl"].includes(extension)) {
     return { kind: "xml", mimeType: "application/xml" };
   }
-  if ([".txt", ".log", ".md", ".csv", ".ini", ".env", ".yaml", ".yml"].includes(extension)) {
+  if (
+    [".txt", ".log", ".md", ".csv", ".ini", ".env", ".yaml", ".yml"].includes(
+      extension,
+    )
+  ) {
     return { kind: "text", mimeType: "text/plain" };
   }
   const mimeType = getKnownMimeType(extension);
@@ -755,7 +795,10 @@ function resolvePreviewMetadata(
   if (isPreviewableTextMimeType(metadata.mimeType) || looksLikeText(buffer)) {
     return {
       kind: "text",
-      mimeType: metadata.mimeType === "application/octet-stream" ? "text/plain" : metadata.mimeType,
+      mimeType:
+        metadata.mimeType === "application/octet-stream"
+          ? "text/plain"
+          : metadata.mimeType,
     };
   }
   return metadata;
@@ -812,18 +855,21 @@ function getKnownMimeType(extension: string): string {
 }
 
 function isPreviewableTextMimeType(mimeType: string): boolean {
-  return mimeType.startsWith("text/") || [
-    "application/json",
-    "application/xml",
-    "application/javascript",
-    "application/typescript",
-    "application/x-yaml",
-    "application/yaml",
-    "application/toml",
-    "application/sql",
-    "application/x-sh",
-    "application/x-shellscript",
-  ].includes(mimeType);
+  return (
+    mimeType.startsWith("text/") ||
+    [
+      "application/json",
+      "application/xml",
+      "application/javascript",
+      "application/typescript",
+      "application/x-yaml",
+      "application/yaml",
+      "application/toml",
+      "application/sql",
+      "application/x-sh",
+      "application/x-shellscript",
+    ].includes(mimeType)
+  );
 }
 
 function looksLikeText(buffer: Buffer): boolean {
@@ -851,10 +897,13 @@ function looksLikeUtf16Text(sample: Buffer): boolean {
   if (evenNulls / pairs < 0.3 && oddNulls / pairs < 0.3) {
     return false;
   }
-  const decoded = evenNulls > oddNulls
-    ? swapUtf16ByteOrder(sample).toString("utf16le")
-    : sample.toString("utf16le");
-  return !decoded.includes("\uFFFD") && !containsBinaryControlCharacters(decoded);
+  const decoded =
+    evenNulls > oddNulls
+      ? swapUtf16ByteOrder(sample).toString("utf16le")
+      : sample.toString("utf16le");
+  return (
+    !decoded.includes("\uFFFD") && !containsBinaryControlCharacters(decoded)
+  );
 }
 
 function countNullBytes(sample: Buffer, offset: number): number {
@@ -964,13 +1013,62 @@ function updateShellCwdFromCommand(
     return;
   }
 
+  const base = session.cwd || session.homeCwd || "/";
+  if (isWindowsRemotePath(target) || isWindowsRemotePath(base)) {
+    session.cwd = resolveWindowsRemotePath(base, target);
+    return;
+  }
+
   if (target.startsWith("/")) {
     session.cwd = posix.normalize(target);
     return;
   }
 
-  const base = session.cwd || session.homeCwd || "/";
   session.cwd = posix.normalize(posix.join(base, target));
+}
+
+function isWindowsRemotePath(path: string): boolean {
+  return /^[A-Za-z]:/.test(path.trim()) || path.includes("\\");
+}
+
+function resolveWindowsRemotePath(basePath: string, targetPath: string): string {
+  const target = targetPath.trim();
+  if (/^[A-Za-z]:/.test(target)) {
+    return normalizeWindowsRemotePath(target);
+  }
+
+  const base = normalizeWindowsRemotePath(basePath || "C:\\");
+  const drive = /^([A-Za-z]:)/.exec(base)?.[1] ?? "C:";
+  if (/^[\\/]/.test(target)) {
+    return normalizeWindowsRemotePath(`${drive}${target}`);
+  }
+
+  return normalizeWindowsRemotePath(`${base.replace(/[\\/]+$/, "")}\\${target}`);
+}
+
+function normalizeWindowsRemotePath(path: string): string {
+  const normalizedSlashes = path.trim().replace(/\/+/g, "\\");
+  const match = /^([A-Za-z]:)(.*)$/.exec(normalizedSlashes);
+  if (!match) {
+    return normalizedSlashes;
+  }
+
+  const drive = match[1];
+  const tail = match[2].replace(/^[\\/]+/, "");
+  const parts = tail.split(/[\\/]+/);
+  const stack: string[] = [];
+  for (const part of parts) {
+    if (!part || part === ".") {
+      continue;
+    }
+    if (part === "..") {
+      stack.pop();
+      continue;
+    }
+    stack.push(part);
+  }
+
+  return stack.length > 0 ? `${drive}\\${stack.join("\\")}` : `${drive}\\`;
 }
 
 function parseCdTarget(command: string): string | null {
@@ -981,7 +1079,7 @@ function parseCdTarget(command: string): string | null {
 
   const rawTarget = match[1]?.trim() ?? "";
   if (
-    (rawTarget.startsWith("\"") && rawTarget.endsWith("\"")) ||
+    (rawTarget.startsWith('"') && rawTarget.endsWith('"')) ||
     (rawTarget.startsWith("'") && rawTarget.endsWith("'"))
   ) {
     return rawTarget.slice(1, -1);
