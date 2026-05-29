@@ -27,6 +27,7 @@ import { randomUUID } from "node:crypto";
 import { DashboardBackend } from "./dashboardBackend";
 import { ChatService } from "./chatService";
 import { SshService } from "./sshService";
+import { XtermService, type XtermCreateRequest } from "./xtermService";
 import os from "os";
 import type {
   BuildQueryOptions,
@@ -78,6 +79,7 @@ let chatConfig: ChatServiceConfig | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 const sshService = new SshService();
+const xtermService = new XtermService();
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
 const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
 const API_TESTER_REQUEST_CHANNEL = "apiTester:sendRequest";
@@ -251,6 +253,30 @@ function registerIpc(): void {
       withLoggedErrors("ssh:previewFile", () =>
         sshService.previewFile(sessionId, remotePath),
       ),
+  );
+  ipcMain.handle(
+    "xterm:createSession",
+    (_event, request: XtermCreateRequest | undefined) =>
+      withLoggedErrors("xterm:createSession", () =>
+        xtermService.createSession(request ?? {}),
+      ),
+  );
+  ipcMain.handle(
+    "xterm:input",
+    (_event, sessionId: string, data: string) =>
+      withLoggedErrors("xterm:input", () =>
+        xtermService.write(sessionId, data),
+      ),
+  );
+  ipcMain.handle(
+    "xterm:resize",
+    (_event, sessionId: string, cols: number, rows: number) =>
+      withLoggedErrors("xterm:resize", () =>
+        xtermService.resize(sessionId, cols, rows),
+      ),
+  );
+  ipcMain.handle("xterm:killSession", (_event, sessionId: string) =>
+    withLoggedErrors("xterm:killSession", () => xtermService.kill(sessionId)),
   );
   ipcMain.handle(
     API_TESTER_REQUEST_CHANNEL,
@@ -1983,6 +2009,21 @@ const createWindow = (): void => {
     win.webContents.send("ssh:shell-data", { sessionId, data });
   });
 
+  xtermService.setDataSink((sessionId, data) => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    win.webContents.send("xterm:data", { sessionId, data });
+  });
+  xtermService.setExitSink((sessionId, exit) => {
+    const win = mainWindow;
+    if (!win || win.isDestroyed()) {
+      return;
+    }
+    win.webContents.send("xterm:exit", { sessionId, ...exit });
+  });
+
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
     event.preventDefault();
@@ -2033,6 +2074,7 @@ const createWindow = (): void => {
   });
 
   mainWindow.once("ready-to-show", () => {
+    mainWindow?.maximize();
     mainWindow!.show();
   });
   mainWindow.webContents.once("did-finish-load", () => {
@@ -2116,6 +2158,7 @@ app.on("before-quit", (event) => {
   backend?.shutdown();
   chatService?.stop();
   sshService.disconnectAll();
+  xtermService.killAll();
 });
 
 app.on("window-all-closed", () => {

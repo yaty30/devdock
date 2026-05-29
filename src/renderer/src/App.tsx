@@ -53,6 +53,8 @@ import {
   readStoredSelectedSshServerId,
   readStoredSshServers,
   getSshEndpoint,
+  getSshHost,
+  getSshUsername,
   hasValidSshCredential,
   isValidSshServerCredential,
   SshHeaderActions,
@@ -62,6 +64,7 @@ import {
   storeSelectedSshServerId,
   storeSshServers,
   type SshConnectionStatus,
+  type SshActiveHostContext,
   type SshServerConfig,
   type SshToolTab,
 } from "./features/tools/SshTool";
@@ -146,6 +149,90 @@ const ACCENT_OPTIONS: ReadonlyArray<{ value: AccentColor; label: string }> = [
   { value: "black", label: "Black" },
 ];
 
+function findSshProfileForTerminalHost(
+  context: SshActiveHostContext,
+  servers: SshServerConfig[],
+  selectedServer: SshServerConfig | null,
+  allowSelectedFallback: boolean,
+): SshServerConfig | null {
+  const host = normalizeTerminalHost(context.host);
+  const username = context.username.trim().toLowerCase();
+  const exact = servers.find((server) => {
+    const serverHost = normalizeTerminalHost(getSshHost(server));
+    const serverUser = getSshUsername(server).toLowerCase();
+    return serverHost === host && (!username || serverUser === username);
+  });
+  if (exact) {
+    return exact;
+  }
+  if (allowSelectedFallback && selectedServer) {
+    const selectedUser = getSshUsername(selectedServer).toLowerCase();
+    if (!username || selectedUser === username) {
+      return selectedServer;
+    }
+  }
+  return null;
+}
+
+function normalizeTerminalHost(value: string): string {
+  const trimmed = value
+    .trim()
+    .toLowerCase()
+    .replace(/^\[/, "")
+    .replace(/\]$/, "");
+  const colonIndex = trimmed.lastIndexOf(":");
+  if (colonIndex > 0 && /^\d+$/.test(trimmed.slice(colonIndex + 1))) {
+    return trimmed.slice(0, colonIndex);
+  }
+  return trimmed;
+}
+
+function getTerminalHostProfileKey(context: SshActiveHostContext): string {
+  return `${context.username.trim().toLowerCase()}@${normalizeTerminalHost(
+    context.host,
+  )}`;
+}
+
+function getTerminalHostDirectorySessionId(
+  context: SshActiveHostContext,
+  jumpProfile: SshServerConfig,
+): string {
+  return `${jumpProfile.id}->${getTerminalHostProfileKey(context)}`;
+}
+
+function isSameTerminalHostAndProfile(
+  context: SshActiveHostContext,
+  profile: SshServerConfig,
+): boolean {
+  const contextHost = normalizeTerminalHost(context.host);
+  const profileHost = normalizeTerminalHost(getSshHost(profile));
+  const contextUser = context.username.trim().toLowerCase();
+  const profileUser = getSshUsername(profile).toLowerCase();
+  return (
+    contextHost === profileHost && (!contextUser || contextUser === profileUser)
+  );
+}
+
+function resolveTerminalDirectoryCwd(
+  terminalCwd: string | undefined,
+  backendCwd: string | null | undefined,
+): string | null {
+  const promptCwd = terminalCwd?.trim() ?? "";
+  const resolvedBackendCwd = backendCwd?.trim() || null;
+  if (!promptCwd || promptCwd === "~") {
+    return resolvedBackendCwd;
+  }
+  if (promptCwd.startsWith("~/")) {
+    return resolvedBackendCwd
+      ? `${resolvedBackendCwd.replace(/\/+$/, "")}/${promptCwd.slice(2)}`
+      : null;
+  }
+  if (promptCwd.startsWith("/")) {
+    return promptCwd;
+  }
+  return resolvedBackendCwd ?? promptCwd;
+}
+
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
   const [notesView, setNotesView] = useState<NotesView>("grid");
@@ -172,6 +259,10 @@ function App(): JSX.Element {
   const [sshConnectionStatus, setSshConnectionStatus] =
     useState<SshConnectionStatus>("idle");
   const [sshReconnectAttempt, setSshReconnectAttempt] = useState(0);
+  const [sshTerminalConnectionEnabled, setSshTerminalConnectionEnabled] =
+    useState(false);
+  const [sshTerminalConnectionSignal, setSshTerminalConnectionSignal] =
+    useState(0);
   const [sshActiveSessionId, setSshActiveSessionId] = useState<string | null>(
     null,
   );
@@ -265,6 +356,8 @@ function App(): JSX.Element {
   const sshActiveSessionIdRef = useRef<string | null>(null);
   const sshAutoLoginAttemptedRef = useRef<string | null>(null);
   const sshCredentialPromptedRef = useRef(false);
+  const sshDirectorySyncRequestRef = useRef(0);
+  const sshTerminalHostProfileMapRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     selectedDatabaseConnectionIdRef.current = selectedDatabaseConnectionId;
@@ -726,6 +819,7 @@ function App(): JSX.Element {
     );
     if (!selectedStillExists) {
       clearSshReconnectTimer();
+      setSshTerminalConnectionActive(false);
       void disconnectActiveSshSession();
       sshManualDisconnectRef.current = false;
       setSshConnectionStatus("idle");
@@ -745,6 +839,11 @@ function App(): JSX.Element {
       window.clearTimeout(sshReconnectTimerRef.current);
       sshReconnectTimerRef.current = null;
     }
+  }
+
+  function setSshTerminalConnectionActive(active: boolean): void {
+    setSshTerminalConnectionEnabled(active);
+    setSshTerminalConnectionSignal((current) => current + 1);
   }
 
   async function disconnectActiveSshSession(): Promise<void> {
@@ -779,7 +878,7 @@ function App(): JSX.Element {
         serverId: server.id,
         name: server.name,
         address: getSshEndpoint(server),
-        username: server.username,
+        username: getSshUsername(server),
         password: server.password,
         macs: server.macs,
         ciphers: server.ciphers,
@@ -795,11 +894,11 @@ function App(): JSX.Element {
 
     if (sshActiveServerIdRef.current !== server.id) {
       if (result.sessionId) {
-        await window.ivsDashboard.sshDisconnect(result.sessionId).catch(
-          (error) => {
+        await window.ivsDashboard
+          .sshDisconnect(result.sessionId)
+          .catch((error) => {
             console.error("[ssh:disconnect-stale]", error);
-          },
-        );
+          });
       }
       return;
     }
@@ -820,6 +919,151 @@ function App(): JSX.Element {
     }
 
     setSshConnectionStatus("failed");
+  }
+
+  async function syncDirectoryToTerminalHost(
+    context: SshActiveHostContext,
+  ): Promise<void> {
+    const hostProfileKey = getTerminalHostProfileKey(context);
+    const mappedProfileId =
+      sshTerminalHostProfileMapRef.current.get(hostProfileKey);
+    const mappedProfile = mappedProfileId
+      ? (sshServers.find((server) => server.id === mappedProfileId) ?? null)
+      : null;
+    const profile =
+      mappedProfile ??
+      findSshProfileForTerminalHost(
+        context,
+        sshServers,
+        selectedSshServer,
+        sshActiveSessionIdRef.current === null,
+      );
+    const jumpProfile =
+      !profile &&
+      selectedSshServer &&
+      isValidSshServerCredential(selectedSshServer) &&
+      !isSameTerminalHostAndProfile(context, selectedSshServer)
+        ? selectedSshServer
+        : null;
+    if ((!profile || !isValidSshServerCredential(profile)) && !jumpProfile) {
+      await disconnectActiveSshSession();
+      setSshRemoteCwd(context.cwd ?? null);
+      return;
+    }
+    const targetProfile = profile ?? jumpProfile;
+    if (!targetProfile) {
+      await disconnectActiveSshSession();
+      setSshRemoteCwd(context.cwd ?? null);
+      return;
+    }
+    const directorySessionServerId = profile
+      ? targetProfile.id
+      : getTerminalHostDirectorySessionId(context, targetProfile);
+
+    if (
+      sshActiveServerIdRef.current === directorySessionServerId &&
+      sshActiveSessionIdRef.current
+    ) {
+      if (profile) {
+        sshTerminalHostProfileMapRef.current.set(hostProfileKey, profile.id);
+      }
+      setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, sshRemoteCwd));
+      setSshConnectionStatus("connected");
+      return;
+    }
+
+    const requestId = sshDirectorySyncRequestRef.current + 1;
+    sshDirectorySyncRequestRef.current = requestId;
+    sshActiveServerIdRef.current = directorySessionServerId;
+    await disconnectActiveSshSession();
+
+    const result = await window.ivsDashboard
+      .sshConnect({
+        serverId: directorySessionServerId,
+        name: profile
+          ? profile.name
+          : `${targetProfile.name} -> ${context.host}`,
+        address: profile
+          ? getSshEndpoint(targetProfile)
+          : `${context.host.trim()}:22`,
+        username: profile
+          ? getSshUsername(targetProfile)
+          : context.username.trim() || getSshUsername(targetProfile),
+        password: targetProfile.password,
+        macs: targetProfile.macs,
+        ciphers: targetProfile.ciphers,
+        jump: profile
+          ? undefined
+          : {
+              address: getSshEndpoint(targetProfile),
+              username: getSshUsername(targetProfile),
+              password: targetProfile.password,
+              macs: targetProfile.macs,
+              ciphers: targetProfile.ciphers,
+            },
+      })
+      .catch((error) => ({
+        ok: false,
+        sessionId: null,
+        error:
+          error instanceof Error
+            ? error.message
+            : "SSH backend is not available.",
+      }));
+
+    if (sshDirectorySyncRequestRef.current !== requestId) {
+      if (result.sessionId) {
+        await window.ivsDashboard
+          .sshDisconnect(result.sessionId)
+          .catch((error) =>
+            console.error("[ssh:disconnect-stale-directory]", error),
+          );
+      }
+      return;
+    }
+
+    if (result.ok && result.sessionId) {
+      if (profile) {
+        sshTerminalHostProfileMapRef.current.set(hostProfileKey, profile.id);
+      }
+      sshActiveSessionIdRef.current = result.sessionId;
+      setSshActiveSessionId(result.sessionId);
+      setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, result.cwd));
+      setSshConnectionStatus("connected");
+      setSshReconnectAttempt(0);
+      return;
+    }
+
+    setSshActiveSessionId(null);
+    setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, null));
+  }
+
+  function handleSshTerminalConnectionStatusChange(
+    status: SshConnectionStatus,
+  ): void {
+    clearSshReconnectTimer();
+    if (status === "connecting") {
+      sshManualDisconnectRef.current = false;
+      setSshReconnectAttempt(0);
+      setSshConnectionStatus("connecting");
+      return;
+    }
+    if (status === "connected") {
+      setSshConnectionStatus("connected");
+      return;
+    }
+    if (status === "failed" || status === "disconnected") {
+      setSshTerminalConnectionActive(false);
+      void disconnectActiveSshSession();
+      setSshReconnectAttempt(0);
+      setSshRemoteCwd(null);
+      setSshConnectionStatus(status);
+    }
+  }
+
+  function handleSshTerminalHostChange(context: SshActiveHostContext): void {
+    setSshConnectionStatus("connected");
+    void syncDirectoryToTerminalHost(context);
   }
 
   function shouldRetrySshConnection(
@@ -855,13 +1099,18 @@ function App(): JSX.Element {
 
   function handleSshConnect(server: SshServerConfig): void {
     sshManualDisconnectRef.current = false;
+    setSshTerminalConnectionActive(true);
     setSshReconnectAttempt(0);
-    void connectSshServer(server, "connecting", 0);
+    sshActiveServerIdRef.current = server.id;
+    void disconnectActiveSshSession();
+    setSshRemoteCwd(null);
+    setSshConnectionStatus("connecting");
   }
 
   function handleSshDisconnect(): void {
     sshManualDisconnectRef.current = true;
     clearSshReconnectTimer();
+    setSshTerminalConnectionActive(false);
     void disconnectActiveSshSession();
     setSshReconnectAttempt(0);
     setSshRemoteCwd(null);
@@ -894,9 +1143,6 @@ function App(): JSX.Element {
 
     try {
       const result = await window.ivsDashboard.sshExec(sessionId, command);
-      if (result.cwd) {
-        setSshRemoteCwd(result.cwd);
-      }
       return result;
     } catch (error) {
       return {
@@ -911,36 +1157,14 @@ function App(): JSX.Element {
     }
   }
 
-  // Auto-login when SSH tool becomes active or selected server changes.
+  // XtermTerminal now owns the visible SSH login flow. This effect only resets
+  // the old guard when leaving the SSH tool so profile changes can start fresh.
   useEffect(() => {
     const onSshTool = activeSection === "tools" && activeTool === "ssh";
     if (!onSshTool) {
       sshAutoLoginAttemptedRef.current = null;
-      return;
     }
-    if (!selectedSshServer || !selectedSshServer.autoLogin) {
-      return;
-    }
-    if (!isValidSshServerCredential(selectedSshServer)) {
-      return;
-    }
-    if (
-      !["idle", "disconnected", "failed"].includes(sshConnectionStatus)
-    ) {
-      return;
-    }
-    if (sshAutoLoginAttemptedRef.current === selectedSshServer.id) {
-      return;
-    }
-    sshAutoLoginAttemptedRef.current = selectedSshServer.id;
-    handleSshConnect(selectedSshServer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    activeSection,
-    activeTool,
-    selectedSshServer,
-    sshConnectionStatus,
-  ]);
+  }, [activeSection, activeTool]);
 
   // Cancel pending SSH activity when selected server changes.
   useEffect(() => {
@@ -949,6 +1173,7 @@ function App(): JSX.Element {
       sshActiveServerIdRef.current !== selectedSshServerId
     ) {
       clearSshReconnectTimer();
+      setSshTerminalConnectionActive(false);
       void disconnectActiveSshSession();
       sshManualDisconnectRef.current = false;
       setSshConnectionStatus("idle");
@@ -1850,7 +2075,10 @@ function App(): JSX.Element {
             ) : activeSection === "tools" && activeTool === "notebook" ? (
               <SingleToolHeaderTabs label="Notes" />
             ) : activeSection === "tools" && activeTool === "ssh" ? (
-              <SshHeaderTabs activeTab={activeSshTab} onTabChange={setActiveSshTab} />
+              <SshHeaderTabs
+                activeTab={activeSshTab}
+                onTabChange={setActiveSshTab}
+              />
             ) : null}
           </AppHeader>
 
@@ -1888,10 +2116,16 @@ function App(): JSX.Element {
                 reconnectMaxAttempts={
                   selectedSshServer?.maxReconnectAttempts ?? 0
                 }
+                terminalConnectionEnabled={sshTerminalConnectionEnabled}
+                terminalConnectionSignal={sshTerminalConnectionSignal}
                 sshSessionId={sshActiveSessionId}
                 remoteCwd={sshRemoteCwd}
                 onConfigure={() => setSshSettingsOpen(true)}
                 onCommandSubmit={handleSshCommandSubmit}
+                onTerminalConnectionStatusChange={
+                  handleSshTerminalConnectionStatusChange
+                }
+                onTerminalHostChange={handleSshTerminalHostChange}
               />
             ) : (
               <CryptographicTool
@@ -2158,7 +2392,10 @@ function App(): JSX.Element {
           ) : activeSection === "tools" && activeTool === "notebook" ? (
             <SingleToolHeaderTabs label="Notes" />
           ) : activeSection === "tools" && activeTool === "ssh" ? (
-            <SshHeaderTabs activeTab={activeSshTab} onTabChange={setActiveSshTab} />
+            <SshHeaderTabs
+              activeTab={activeSshTab}
+              onTabChange={setActiveSshTab}
+            />
           ) : null}
         </AppHeader>
 
@@ -2222,10 +2459,16 @@ function App(): JSX.Element {
               reconnectMaxAttempts={
                 selectedSshServer?.maxReconnectAttempts ?? 0
               }
+              terminalConnectionEnabled={sshTerminalConnectionEnabled}
+              terminalConnectionSignal={sshTerminalConnectionSignal}
               sshSessionId={sshActiveSessionId}
               remoteCwd={sshRemoteCwd}
               onConfigure={() => setSshSettingsOpen(true)}
               onCommandSubmit={handleSshCommandSubmit}
+              onTerminalConnectionStatusChange={
+                handleSshTerminalConnectionStatusChange
+              }
+              onTerminalHostChange={handleSshTerminalHostChange}
             />
           ) : (
             <CryptographicTool

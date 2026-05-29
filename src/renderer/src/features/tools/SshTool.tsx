@@ -3,13 +3,16 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ArrowLeft,
+  ArrowLeftRight,
   ArrowRight,
   Download,
   Eye,
@@ -28,6 +31,7 @@ import {
   Plus,
   RefreshCw,
   Settings,
+  ShieldCheck,
   TerminalSquare,
   Trash2,
   Upload,
@@ -40,12 +44,23 @@ import { Panel } from "../../components/common/Panel";
 import { ConfirmDialog } from "../../components/dialogs/ConfirmDialog";
 import { Modal } from "../../components/dialogs/Modal";
 import { FontSizeDropdown } from "../../components/layout/HeaderActions";
+import { clamp } from "../../utils/math";
+import {
+  XtermTerminal,
+  type XtermActiveHost,
+  type XtermAutoSshConfig,
+  type XtermConnectionStatus,
+} from "./XtermTerminal";
 import type { FontSizeMode } from "../../types";
 import type {
   DirectoryEntry,
   FilePreviewResult,
   SshExecResult,
 } from "../../../../shared/dashboardTypes";
+import {
+  formatSshEndpoint,
+  parseSshEndpointInput,
+} from "../../../../shared/sshHost";
 
 export type SshServerConfig = {
   id: string;
@@ -140,6 +155,30 @@ type TerminalCommandLogEntry = {
   exitCode: string;
 };
 
+type SshMonitorColumnKey =
+  | "time"
+  | "action"
+  | "location"
+  | "source"
+  | "item"
+  | "status"
+  | "detail";
+
+type SshMonitorColumn = {
+  key: SshMonitorColumnKey;
+  label: string;
+  defaultWidth: number;
+  minWidth: number;
+  render: (entry: DirectoryActionLogEntry) => string;
+};
+
+type SshMonitorColumnDragState = {
+  key: SshMonitorColumnKey;
+  startX: number;
+  startWidth: number;
+  nextWidth: number;
+};
+
 type TerminalState = "idle" | "running" | "interactive" | "passwordPrompt";
 
 type TerminalCompletionItem = {
@@ -157,6 +196,8 @@ type TransferDragPayload = {
   source: DirectorySource;
   itemId: string;
 };
+
+export type SshActiveHostContext = XtermActiveHost;
 
 const SSH_SERVERS_STORAGE_KEY = "ivs-ssh-tool-servers";
 const SSH_SELECTED_SERVER_STORAGE_KEY = "ivs-ssh-tool-selected-server";
@@ -177,6 +218,8 @@ const DEFAULT_SSH_SERVERS: SshServerConfig[] = [
     reconnectDelayMs: SSH_RECONNECT_DELAY_DEFAULT_MS,
   },
 ];
+const SSH_STABLE_MAC_PRESET = "hmac-sha2-256,hmac-sha2-512,hmac-sha1";
+const SSH_STABLE_CIPHER_PRESET = "aes128-ctr,aes192-ctr,aes256-ctr";
 const TERMINAL_DIRECTORY_NAMES = new Set([
   "Desktop",
   "Documents",
@@ -227,16 +270,41 @@ export function storeSelectedSshServerId(serverId: string): void {
 }
 
 export function isValidSshServerCredential(server: SshServerConfig): boolean {
+  const endpoint = getNormalizedSshServerEndpoint(server);
   return (
-    server.address.trim().length > 0 &&
-    isValidSshPort(server.port) &&
-    server.username.trim().length > 0 &&
+    endpoint.ok &&
+    isValidSshPort(getSshPort(server)) &&
+    getSshUsername(server).length > 0 &&
     server.password.trim().length > 0
   );
 }
 
 export function getSshEndpoint(server: SshServerConfig): string {
-  return `${server.address.trim()}:${normalizeSshPort(server.port)}`;
+  const endpoint = getNormalizedSshServerEndpoint(server);
+  if (!endpoint.ok) {
+    return formatSshEndpoint(
+      server.address.trim(),
+      normalizeSshPort(server.port),
+    );
+  }
+  return formatSshEndpoint(endpoint.host, endpoint.port);
+}
+
+export function getSshHost(server: SshServerConfig): string {
+  const endpoint = getNormalizedSshServerEndpoint(server);
+  return endpoint.ok ? endpoint.host : server.address.trim();
+}
+
+export function getSshPort(server: SshServerConfig): number {
+  const endpoint = getNormalizedSshServerEndpoint(server);
+  return endpoint.ok ? endpoint.port : normalizeSshPort(server.port);
+}
+
+export function getSshUsername(server: SshServerConfig): string {
+  const endpoint = getNormalizedSshServerEndpoint(server);
+  return (
+    server.username.trim() || (endpoint.ok ? (endpoint.username ?? "") : "")
+  );
 }
 
 export function hasValidSshCredential(
@@ -527,27 +595,9 @@ export function SshSettingsModal({
   }
 
   function saveSettings(): void {
-    const normalized = draftServers.map((server, index) => ({
-      ...server,
-      name: server.name.trim() || `Remote ${index + 1}`,
-      address: server.address.trim(),
-      port: normalizeSshPort(server.port),
-      username: server.username.trim(),
-      macs: normalizeSshAlgorithmList(server.macs),
-      ciphers: normalizeSshAlgorithmList(server.ciphers),
-      maxReconnectAttempts: clampInteger(
-        server.maxReconnectAttempts,
-        SSH_RECONNECT_ATTEMPTS_MIN,
-        SSH_RECONNECT_ATTEMPTS_MAX,
-        SSH_RECONNECT_ATTEMPTS_DEFAULT,
-      ),
-      reconnectDelayMs: clampInteger(
-        server.reconnectDelayMs,
-        SSH_RECONNECT_DELAY_MIN_MS,
-        SSH_RECONNECT_DELAY_MAX_MS,
-        SSH_RECONNECT_DELAY_DEFAULT_MS,
-      ),
-    }));
+    const normalized = draftServers.map((server, index) =>
+      normalizeSshServerConfig(server, index),
+    );
     if (!hasValidSshCredential(normalized)) {
       return;
     }
@@ -561,6 +611,13 @@ export function SshSettingsModal({
       return;
     }
     updateServer(selectedServer.id, updates);
+  }
+
+  function applyStableAlgorithmPreset(): void {
+    updateSelectedServer({
+      macs: SSH_STABLE_MAC_PRESET,
+      ciphers: SSH_STABLE_CIPHER_PRESET,
+    });
   }
 
   function updateSelectedNumber(
@@ -814,6 +871,14 @@ export function SshSettingsModal({
                 Use comma or space separated values, matching OpenSSH options
                 like MACs=hmac-sha2-256 and Ciphers=aes128-ctr.
               </p>
+              <button
+                className="button secondary compact ssh-settings-algorithm-preset"
+                type="button"
+                onClick={applyStableAlgorithmPreset}
+              >
+                <ShieldCheck size={15} />
+                Use stable SHA2/CTR preset
+              </button>
             </div>
 
             <div className="ssh-settings-section compact">
@@ -989,9 +1054,48 @@ function getSshSettingsServerName(
   );
 }
 
+function getNormalizedSshServerEndpoint(server: SshServerConfig) {
+  return parseSshEndpointInput(server.address, normalizeSshPort(server.port));
+}
+
+function normalizeSshServerConfig(
+  server: SshServerConfig,
+  index: number,
+): SshServerConfig {
+  const parsedEndpoint = getNormalizedSshServerEndpoint(server);
+  return {
+    ...server,
+    name: server.name.trim() || `Remote ${index + 1}`,
+    address: parsedEndpoint.ok ? parsedEndpoint.host : server.address.trim(),
+    port: parsedEndpoint.ok
+      ? parsedEndpoint.port
+      : normalizeSshPort(server.port),
+    username:
+      server.username.trim() ||
+      (parsedEndpoint.ok ? (parsedEndpoint.username ?? "") : ""),
+    macs: normalizeSshAlgorithmList(server.macs),
+    ciphers: normalizeSshAlgorithmList(server.ciphers),
+    maxReconnectAttempts: clampInteger(
+      server.maxReconnectAttempts,
+      SSH_RECONNECT_ATTEMPTS_MIN,
+      SSH_RECONNECT_ATTEMPTS_MAX,
+      SSH_RECONNECT_ATTEMPTS_DEFAULT,
+    ),
+    reconnectDelayMs: clampInteger(
+      server.reconnectDelayMs,
+      SSH_RECONNECT_DELAY_MIN_MS,
+      SSH_RECONNECT_DELAY_MAX_MS,
+      SSH_RECONNECT_DELAY_DEFAULT_MS,
+    ),
+  };
+}
+
 function formatSshSettingsEndpoint(server: SshServerConfig): string {
-  const endpoint = `${server.address.trim() || "No address"}:${normalizeSshPort(server.port)}`;
-  const endpointUsername = server.username.trim() || "No user";
+  const parsedEndpoint = getNormalizedSshServerEndpoint(server);
+  const endpoint = parsedEndpoint.ok
+    ? formatSshEndpoint(parsedEndpoint.host, parsedEndpoint.port)
+    : `${server.address.trim() || "No address"}:${normalizeSshPort(server.port)}`;
+  const endpointUsername = getSshUsername(server) || "No user";
   return `${endpoint} - ${endpointUsername}`;
 }
 
@@ -1042,10 +1146,14 @@ export function SshTool({
   connectionStatus = "idle",
   reconnectAttempt = 0,
   reconnectMaxAttempts = 0,
+  terminalConnectionEnabled = false,
+  terminalConnectionSignal = 0,
   sshSessionId = null,
   remoteCwd = null,
   onConfigure,
   onCommandSubmit,
+  onTerminalConnectionStatusChange,
+  onTerminalHostChange,
 }: {
   selectedServer: SshServerConfig | null;
   activeTab?: SshToolTab;
@@ -1053,10 +1161,14 @@ export function SshTool({
   connectionStatus?: SshConnectionStatus;
   reconnectAttempt?: number;
   reconnectMaxAttempts?: number;
+  terminalConnectionEnabled?: boolean;
+  terminalConnectionSignal?: number;
   sshSessionId?: string | null;
   remoteCwd?: string | null;
   onConfigure?: () => void;
   onCommandSubmit?: (command: string) => Promise<SshExecResult>;
+  onTerminalConnectionStatusChange?: (status: XtermConnectionStatus) => void;
+  onTerminalHostChange?: (context: SshActiveHostContext) => void;
 }): JSX.Element {
   const [command, setCommand] = useState("");
   const [terminalState, setTerminalStateState] =
@@ -1099,6 +1211,9 @@ export function SshTool({
   ]);
   const [streamPartialLine, setStreamPartialLine] = useState("");
   const [activeRemoteHost, setActiveRemoteHost] = useState<string | null>(null);
+  const [activeRemoteUsername, setActiveRemoteUsername] = useState<
+    string | null
+  >(null);
   const streamPartialRef = useRef("");
   const activeRemoteHostRef = useRef<string | null>(null);
   const terminalStateRef = useRef<TerminalState>("idle");
@@ -1107,11 +1222,13 @@ export function SshTool({
   const previousServerIdRef = useRef<string | null>(selectedServer?.id ?? null);
 
   const connected = connectionStatus === "connected";
+  const remoteDirectoryLoading =
+    remoteBusyCount > 0 || (connected && !sshSessionId);
   const commandRunning = terminalState === "running";
   const commandSubmitDisabled = disabled || commandRunning;
   const fallbackRemoteTitle = formatRemoteDirectoryTitle(selectedServer);
   const remoteTitle = activeRemoteHost
-    ? formatRemoteDirectoryTitleForHost(selectedServer, activeRemoteHost)
+    ? formatRemoteDirectoryTitleForHost(activeRemoteUsername, activeRemoteHost)
     : fallbackRemoteTitle;
   const promptLocation = remoteCwd?.trim() || "";
   const fallbackPrompt = formatSshPrompt(selectedServer, promptLocation);
@@ -1128,6 +1245,27 @@ export function SshTool({
       : promptResponseMode
         ? ""
         : fallbackPrompt;
+  const xtermAutoSsh =
+    selectedServer && isValidSshServerCredential(selectedServer)
+      ? ({
+          key: `${selectedServer.id}:${getSshHost(selectedServer)}:${getSshPort(selectedServer)}:${getSshUsername(selectedServer)}:${selectedServer.autoLogin}`,
+          name: selectedServer.name,
+          host: getSshHost(selectedServer),
+          port: getSshPort(selectedServer),
+          username: getSshUsername(selectedServer),
+          password: selectedServer.password,
+          autoLogin: selectedServer.autoLogin,
+          macs: selectedServer.macs,
+          ciphers: selectedServer.ciphers,
+        } satisfies XtermAutoSshConfig)
+      : null;
+
+  function handleXtermActiveHost(context: XtermActiveHost): void {
+    activeRemoteHostRef.current = context.host;
+    setActiveRemoteHost(context.host);
+    setActiveRemoteUsername(context.username);
+    onTerminalHostChange?.(context);
+  }
 
   useEffect(() => {
     let canceled = false;
@@ -1168,7 +1306,7 @@ export function SshTool({
   }, []);
 
   useEffect(() => {
-    if (!connected || !sshSessionId) {
+    if (!connected) {
       setRemotePath(remoteCwd ?? "");
       setRemoteHomePath(remoteCwd ?? "");
       setRemoteItems([]);
@@ -1177,11 +1315,16 @@ export function SshTool({
       return;
     }
 
+    if (!sshSessionId) {
+      setRemotePath(remoteCwd ?? "");
+      setRemoteHomePath(remoteCwd ?? "");
+      return;
+    }
+
     const startPath = remoteCwd?.trim() || null;
     void loadRemoteDirectory(startPath, { recordHistory: false });
-    // Keep terminal cwd changes independent from the Remote Directory panel.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected, sshSessionId]);
+  }, [activeRemoteHost, connected, remoteCwd, sshSessionId]);
 
   useEffect(() => {
     // Reset stream state whenever the active session changes.
@@ -1191,6 +1334,7 @@ export function SshTool({
     if (!sshSessionId) {
       activeRemoteHostRef.current = null;
       setActiveRemoteHost(null);
+      setActiveRemoteUsername(null);
     }
   }, [sshSessionId]);
 
@@ -1466,6 +1610,19 @@ export function SshTool({
     const prompt = formatSshPrompt(selectedServer, commandLocation);
     if (!trimmed) {
       appendLines([prompt]);
+      setCommand("");
+      setHistoryCursor(null);
+      lastTabCompletionRef.current = null;
+      requestTerminalScrollToLatest();
+      requestTerminalInputFocus();
+      return;
+    }
+
+    if (!connected && !isAllowedInitialSshCommand(trimmed)) {
+      appendLines([
+        prompt,
+        "Only ssh commands are allowed before a remote SSH session is active.",
+      ]);
       setCommand("");
       setHistoryCursor(null);
       lastTabCompletionRef.current = null;
@@ -2452,156 +2609,137 @@ export function SshTool({
           directoryActionLog={directoryActionLog}
           terminalCommandLog={terminalCommandLog}
         />
-      ) : (
-        <>
-          <Panel
-            title="CLI"
-            className="ssh-cli-panel"
-            action={
-              <span className="ssh-panel-actions">
-                <span
-                  className={`ssh-status ssh-status-${connectionStatus}`}
-                  data-status={connectionStatus}
-                >
-                  <span className="ssh-status-dot" aria-hidden="true" />
-                  {formatConnectionStatusLabel(
-                    connectionStatus,
-                    reconnectAttempt,
-                    reconnectMaxAttempts,
-                  )}
-                </span>
-                <button
-                  className="icon-button secondary ssh-panel-collapse-button"
-                  type="button"
-                  aria-label={
-                    commandPanelCollapsed
-                      ? "Expand command panel"
-                      : "Collapse command panel"
-                  }
-                  title={
-                    commandPanelCollapsed
-                      ? "Expand command panel"
-                      : "Collapse command panel"
-                  }
-                  onClick={() =>
-                    setCommandPanelCollapsed((current) => !current)
-                  }
-                >
-                  {commandPanelCollapsed ? (
-                    <PanelLeftOpen size={16} />
-                  ) : (
-                    <PanelLeftClose size={16} />
-                  )}
-                </button>
-              </span>
-            }
-          >
-            <SshTerminalOutput
-              lines={terminalLines}
-              prompt={activePrompt}
-              command={command}
-              disabled={disabled}
-              running={commandRunning}
-              passwordMode={passwordMode}
-              promptResponseMode={promptResponseMode}
-              scrollRequest={terminalScrollRequest}
-              focusRequest={terminalFocusRequest}
-              onCommandChange={handleCommandChange}
-              onCommandKeyDown={handleCommandKeyDown}
-              onInterrupt={() => void interruptActiveTerminalProcess()}
-            />
-          </Panel>
+      ) : null}
+      <>
+        <XtermTerminal
+          title="CLI"
+          className={`ssh-cli-panel${activeTab === "monitor" ? " ssh-main-tab-hidden" : ""}`}
+          disabled={disabled}
+          connectEnabled={terminalConnectionEnabled}
+          lifecycleSignal={terminalConnectionSignal}
+          autoSsh={xtermAutoSsh}
+          refitSignal={`${commandPanelCollapsed}:${activeTab}`}
+          resizeSuspended={commandPanelCollapsed || activeTab === "monitor"}
+          onConnectionStatusChange={onTerminalConnectionStatusChange}
+          onActiveHostChange={handleXtermActiveHost}
+          extraActions={
+            <button
+              className="icon-button secondary ssh-panel-collapse-button"
+              type="button"
+              aria-label={
+                commandPanelCollapsed
+                  ? "Expand command panel"
+                  : "Collapse command panel"
+              }
+              title={
+                commandPanelCollapsed
+                  ? "Expand command panel"
+                  : "Collapse command panel"
+              }
+              onClick={() => setCommandPanelCollapsed((current) => !current)}
+            >
+              {commandPanelCollapsed ? (
+                <PanelLeftOpen size={16} />
+              ) : (
+                <PanelLeftClose size={16} />
+              )}
+            </button>
+          }
+        />
 
-          <div className="ssh-directory-column">
-            <SftpPanel
-              title="Local Directory"
-              path={localPath}
-              items={localItems}
-              source="local"
-              dragOver={dragOverPanel === "local"}
-              disabled={disabled}
-              loading={localBusyCount > 0}
-              selectedItemIds={selectedLocalIds}
-              onPathChange={setLocalPath}
-              canGoBack={localHistory.length > 0}
-              canGoForward={localFuture.length > 0}
-              onBack={() => navigateBack("local")}
-              onForward={() => navigateForward("local")}
-              onHome={() => navigateHomeDirectory("local")}
-              onRefresh={() => refreshDirectory("local")}
-              onUpload={() => void uploadSelectedItems()}
-              onDownload={() => void downloadSelectedItems()}
-              onNewFolder={() => openNewFolderDialog("local")}
-              uploadDisabled={!connected || selectedLocalIds.length === 0}
-              downloadDisabled={!connected || selectedRemoteIds.length === 0}
-              onSubmitPath={(path) => navigateDirectory("local", path)}
-              onSelectItem={(item, multiSelect) =>
-                toggleItemSelection("local", item, multiSelect)
-              }
-              actionMenu={actionMenu}
-              onToggleActionMenu={(item, position) =>
-                setActionMenu((current) =>
-                  current?.source === "local" &&
-                  current.item.id === item.id &&
-                  !position
-                    ? null
-                    : { source: "local", item, ...position },
-                )
-              }
-              onCloseActionMenu={() => setActionMenu(null)}
-              onRenameItem={(item) => openRenameDialog("local", item)}
-              onDeleteItem={(item) => openDeleteDialog("local", item)}
-              onDragStart={handleItemDragStart}
-              onDragOver={handleDirectoryDragOver}
-              onDrop={handleDirectoryDrop}
-              onDragLeave={() => setDragOverPanel(null)}
-            />
-            <SftpPanel
-              title={remoteTitle}
-              path={remotePath}
-              items={remoteItems}
-              source="remote"
-              dragOver={dragOverPanel === "remote"}
-              disabled={disabled || !connected}
-              loading={remoteBusyCount > 0}
-              selectedItemIds={selectedRemoteIds}
-              onPathChange={setRemotePath}
-              canGoBack={remoteHistory.length > 0}
-              canGoForward={remoteFuture.length > 0}
-              onBack={() => navigateBack("remote")}
-              onForward={() => navigateForward("remote")}
-              onHome={() => navigateHomeDirectory("remote")}
-              onRefresh={() => refreshDirectory("remote")}
-              onUpload={() => void uploadSelectedItems()}
-              onDownload={() => void downloadSelectedItems()}
-              onNewFolder={() => openNewFolderDialog("remote")}
-              uploadDisabled={!connected || selectedLocalIds.length === 0}
-              downloadDisabled={!connected || selectedRemoteIds.length === 0}
-              onSubmitPath={(path) => navigateDirectory("remote", path)}
-              onSelectItem={(item, multiSelect) =>
-                toggleItemSelection("remote", item, multiSelect)
-              }
-              actionMenu={actionMenu}
-              onToggleActionMenu={(item, position) =>
-                setActionMenu((current) =>
-                  current?.source === "remote" &&
-                  current.item.id === item.id &&
-                  !position
-                    ? null
-                    : { source: "remote", item, ...position },
-                )
-              }
-              onCloseActionMenu={() => setActionMenu(null)}
-              onRenameItem={(item) => openRenameDialog("remote", item)}
-              onDeleteItem={(item) => openDeleteDialog("remote", item)}
-              onDragStart={handleItemDragStart}
-              onDragOver={handleDirectoryDragOver}
-              onDrop={handleDirectoryDrop}
-              onDragLeave={() => setDragOverPanel(null)}
-            />
-          </div>
-        </>
-      )}
+        <div
+          className={`ssh-directory-column${
+            activeTab === "monitor" ? " ssh-main-tab-hidden" : ""
+          }`}
+        >
+          <SftpPanel
+            title="Local Directory"
+            path={localPath}
+            items={localItems}
+            source="local"
+            dragOver={dragOverPanel === "local"}
+            disabled={disabled}
+            loading={localBusyCount > 0}
+            selectedItemIds={selectedLocalIds}
+            onPathChange={setLocalPath}
+            canGoBack={localHistory.length > 0}
+            canGoForward={localFuture.length > 0}
+            onBack={() => navigateBack("local")}
+            onForward={() => navigateForward("local")}
+            onHome={() => navigateHomeDirectory("local")}
+            onRefresh={() => refreshDirectory("local")}
+            onUpload={() => void uploadSelectedItems()}
+            onDownload={() => void downloadSelectedItems()}
+            onNewFolder={() => openNewFolderDialog("local")}
+            uploadDisabled={!connected || selectedLocalIds.length === 0}
+            downloadDisabled={!connected || selectedRemoteIds.length === 0}
+            onSubmitPath={(path) => navigateDirectory("local", path)}
+            onSelectItem={(item, multiSelect) =>
+              toggleItemSelection("local", item, multiSelect)
+            }
+            actionMenu={actionMenu}
+            onToggleActionMenu={(item, position) =>
+              setActionMenu((current) =>
+                current?.source === "local" &&
+                current.item.id === item.id &&
+                !position
+                  ? null
+                  : { source: "local", item, ...position },
+              )
+            }
+            onCloseActionMenu={() => setActionMenu(null)}
+            onRenameItem={(item) => openRenameDialog("local", item)}
+            onDeleteItem={(item) => openDeleteDialog("local", item)}
+            onDragStart={handleItemDragStart}
+            onDragOver={handleDirectoryDragOver}
+            onDrop={handleDirectoryDrop}
+            onDragLeave={() => setDragOverPanel(null)}
+          />
+          <SftpPanel
+            title={remoteTitle}
+            path={remotePath}
+            items={remoteItems}
+            source="remote"
+            dragOver={dragOverPanel === "remote"}
+            disabled={disabled || !connected}
+            loading={remoteDirectoryLoading}
+            selectedItemIds={selectedRemoteIds}
+            onPathChange={setRemotePath}
+            canGoBack={remoteHistory.length > 0}
+            canGoForward={remoteFuture.length > 0}
+            onBack={() => navigateBack("remote")}
+            onForward={() => navigateForward("remote")}
+            onHome={() => navigateHomeDirectory("remote")}
+            onRefresh={() => refreshDirectory("remote")}
+            onUpload={() => void uploadSelectedItems()}
+            onDownload={() => void downloadSelectedItems()}
+            onNewFolder={() => openNewFolderDialog("remote")}
+            uploadDisabled={!connected || selectedLocalIds.length === 0}
+            downloadDisabled={!connected || selectedRemoteIds.length === 0}
+            onSubmitPath={(path) => navigateDirectory("remote", path)}
+            onSelectItem={(item, multiSelect) =>
+              toggleItemSelection("remote", item, multiSelect)
+            }
+            actionMenu={actionMenu}
+            onToggleActionMenu={(item, position) =>
+              setActionMenu((current) =>
+                current?.source === "remote" &&
+                current.item.id === item.id &&
+                !position
+                  ? null
+                  : { source: "remote", item, ...position },
+              )
+            }
+            onCloseActionMenu={() => setActionMenu(null)}
+            onRenameItem={(item) => openRenameDialog("remote", item)}
+            onDeleteItem={(item) => openDeleteDialog("remote", item)}
+            onDragStart={handleItemDragStart}
+            onDragOver={handleDirectoryDragOver}
+            onDrop={handleDirectoryDrop}
+            onDragLeave={() => setDragOverPanel(null)}
+          />
+        </div>
+      </>
       {nameDialog ? (
         <SftpNameDialog
           state={nameDialog}
@@ -2884,6 +3022,161 @@ function SshMonitorTab({
   directoryActionLog: DirectoryActionLogEntry[];
   terminalCommandLog: TerminalCommandLogEntry[];
 }): JSX.Element {
+  const resizeFrameRef = useRef<number | null>(null);
+  const columnDragRef = useRef<SshMonitorColumnDragState | null>(null);
+  const [columnWidths, setColumnWidths] = useState<
+    Partial<Record<SshMonitorColumnKey, number>>
+  >({});
+
+  const columns = useMemo<SshMonitorColumn[]>(
+    () => [
+      {
+        key: "time",
+        label: "Time",
+        defaultWidth: 112,
+        minWidth: 86,
+        render: (entry) => entry.time,
+      },
+      {
+        key: "action",
+        label: "Action",
+        defaultWidth: 132,
+        minWidth: 96,
+        render: (entry) => entry.action,
+      },
+      {
+        key: "location",
+        label: "Location",
+        defaultWidth: 360,
+        minWidth: 220,
+        render: (entry) => entry.location,
+      },
+      {
+        key: "source",
+        label: "Source",
+        defaultWidth: 116,
+        minWidth: 88,
+        render: (entry) => entry.source,
+      },
+      {
+        key: "item",
+        label: "Item",
+        defaultWidth: 180,
+        minWidth: 120,
+        render: (entry) => entry.item,
+      },
+      {
+        key: "status",
+        label: "Status",
+        defaultWidth: 116,
+        minWidth: 88,
+        render: (entry) => entry.status,
+      },
+      {
+        key: "detail",
+        label: "Detail",
+        defaultWidth: 280,
+        minWidth: 160,
+        render: (entry) => entry.detail,
+      },
+    ],
+    [],
+  );
+  const calculatedColumns = columns.map((column) => ({
+    ...column,
+    width: columnWidths[column.key] ?? column.defaultWidth,
+  }));
+  const tableWidth = Math.ceil(
+    calculatedColumns.reduce((total, column) => total + column.width, 0),
+  );
+  const tableSizeStyle: CSSProperties = {
+    width: `${tableWidth}px`,
+    minWidth: "100%",
+  };
+
+  useEffect(() => {
+    return () => {
+      if (resizeFrameRef.current !== null) {
+        window.cancelAnimationFrame(resizeFrameRef.current);
+      }
+    };
+  }, []);
+
+  function startColumnResize(
+    column: SshMonitorColumn,
+    event: ReactPointerEvent<HTMLSpanElement>,
+  ): void {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const width = columnWidths[column.key] ?? column.defaultWidth;
+    columnDragRef.current = {
+      key: column.key,
+      startX: event.clientX,
+      startWidth: width,
+      nextWidth: width,
+    };
+  }
+
+  function resizeColumn(event: ReactPointerEvent<HTMLSpanElement>): void {
+    const drag = columnDragRef.current;
+    if (!drag) {
+      return;
+    }
+    const column = columns.find((item) => item.key === drag.key);
+    if (!column) {
+      return;
+    }
+    drag.nextWidth = clamp(
+      drag.startWidth + event.clientX - drag.startX,
+      column.minWidth,
+      720,
+    );
+    if (resizeFrameRef.current !== null) {
+      return;
+    }
+    resizeFrameRef.current = window.requestAnimationFrame(() => {
+      resizeFrameRef.current = null;
+      const latestDrag = columnDragRef.current;
+      if (!latestDrag) {
+        return;
+      }
+      setColumnWidths((current) => ({
+        ...current,
+        [latestDrag.key]: latestDrag.nextWidth,
+      }));
+    });
+  }
+
+  function stopColumnResize(event: ReactPointerEvent<HTMLSpanElement>): void {
+    if (
+      columnDragRef.current &&
+      event.currentTarget.hasPointerCapture(event.pointerId)
+    ) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (resizeFrameRef.current !== null) {
+      window.cancelAnimationFrame(resizeFrameRef.current);
+      resizeFrameRef.current = null;
+    }
+    const drag = columnDragRef.current;
+    columnDragRef.current = null;
+    if (drag) {
+      setColumnWidths((current) => ({
+        ...current,
+        [drag.key]: drag.nextWidth,
+      }));
+    }
+  }
+
+  function resetColumnWidth(column: SshMonitorColumn): void {
+    setColumnWidths((current) => {
+      const next = { ...current };
+      delete next[column.key];
+      return next;
+    });
+  }
+
   return (
     <div className="ssh-monitor-tab">
       <Panel
@@ -2891,33 +3184,54 @@ function SshMonitorTab({
         className="ssh-monitor-panel recent-builds-panel"
       >
         <div className="recent-builds-table-scroll ssh-monitor-table-scroll">
-          <table className="recent-builds-table ssh-monitor-table directory-action-log-table">
+          <table
+            className="recent-builds-table ssh-monitor-table directory-action-log-table"
+            style={tableSizeStyle}
+          >
+            <colgroup>
+              {calculatedColumns.map((column) => (
+                <col key={column.key} style={{ width: `${column.width}px` }} />
+              ))}
+            </colgroup>
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Action</th>
-                <th>Location</th>
-                <th>Source</th>
-                <th>Item</th>
-                <th>Status</th>
-                <th>Detail</th>
+                {columns.map((column) => (
+                  <th key={column.key}>
+                    <span className="database-result-th-content ssh-monitor-th-content">
+                      <span className="database-result-column-label">
+                        {column.label}
+                      </span>
+                      <span
+                        className="database-column-resize-handle ssh-monitor-column-resize-handle"
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`Resize ${column.label} column`}
+                        onPointerDown={(event) =>
+                          startColumnResize(column, event)
+                        }
+                        onPointerMove={resizeColumn}
+                        onPointerUp={stopColumnResize}
+                        onPointerCancel={stopColumnResize}
+                        onDoubleClick={() => resetColumnWidth(column)}
+                      >
+                        <ArrowLeftRight size={13} />
+                      </span>
+                    </span>
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {directoryActionLog.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>No directory actions yet.</td>
+                  <td colSpan={columns.length}>No directory actions yet.</td>
                 </tr>
               ) : (
                 directoryActionLog.map((entry) => (
                   <tr key={entry.id}>
-                    <td>{entry.time}</td>
-                    <td>{entry.action}</td>
-                    <td>{entry.location}</td>
-                    <td>{entry.source}</td>
-                    <td>{entry.item}</td>
-                    <td>{entry.status}</td>
-                    <td>{entry.detail}</td>
+                    {columns.map((column) => (
+                      <td key={column.key}>{column.render(entry)}</td>
+                    ))}
                   </tr>
                 ))
               )}
@@ -2925,7 +3239,7 @@ function SshMonitorTab({
           </table>
         </div>
       </Panel>
-      <Panel
+      {/* <Panel
         title="Terminal Command Log"
         className="ssh-monitor-panel recent-builds-panel"
       >
@@ -2959,7 +3273,7 @@ function SshMonitorTab({
             </tbody>
           </table>
         </div>
-      </Panel>
+      </Panel> */}
     </div>
   );
 }
@@ -3269,27 +3583,31 @@ function formatMonitorTime(date: Date): string {
 }
 
 function formatRemoteDirectoryTitle(server: SshServerConfig | null): string {
-  if (!server?.address.trim()) {
+  if (!server || !getSshHost(server)) {
     return "Remote Directory";
   }
 
-  const host = server.address.trim();
-  const username = server.username.trim();
+  const host = getSshHost(server);
+  const username = getSshUsername(server);
   return username ? `Remote: ${username}@${host}` : `Remote: ${host}`;
 }
 
 function formatRemoteDirectoryTitleForHost(
-  server: SshServerConfig | null,
+  username: string | null,
   host: string,
 ): string {
   const trimmedHost = host.trim();
   if (!trimmedHost) {
-    return formatRemoteDirectoryTitle(server);
+    return "Remote Directory";
   }
-  const username = server?.username.trim() ?? "";
-  return username
-    ? `Remote: ${username}@${trimmedHost}`
+  const trimmedUsername = username?.trim() ?? "";
+  return trimmedUsername
+    ? `Remote: ${trimmedUsername}@${trimmedHost}`
     : `Remote: ${trimmedHost}`;
+}
+
+function isAllowedInitialSshCommand(command: string): boolean {
+  return /^ssh(?:\.exe)?(?:\s|$)/i.test(command.trim());
 }
 
 function isInteractivePasswordPrompt(partialLine: string): boolean {
@@ -3352,8 +3670,9 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
     return null;
   }
   const record = value as Partial<SshServerConfig>;
-  const parsedEndpoint = parseStoredSshEndpoint(
+  const parsedEndpoint = parseSshEndpointInput(
     typeof record.address === "string" ? record.address : "",
+    normalizeSshPort(record.port),
   );
   const id =
     typeof record.id === "string" && record.id.length > 0
@@ -3362,9 +3681,20 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
   return {
     id,
     name: typeof record.name === "string" ? record.name : "Remote",
-    address: parsedEndpoint.host,
-    port: normalizeSshPort(record.port ?? parsedEndpoint.port),
-    username: typeof record.username === "string" ? record.username.trim() : "",
+    address: parsedEndpoint.ok
+      ? parsedEndpoint.host
+      : typeof record.address === "string"
+        ? record.address.trim()
+        : "",
+    port: parsedEndpoint.ok
+      ? parsedEndpoint.port
+      : normalizeSshPort(record.port),
+    username:
+      typeof record.username === "string" && record.username.trim()
+        ? record.username.trim()
+        : parsedEndpoint.ok
+          ? (parsedEndpoint.username ?? "")
+          : "",
     password: typeof record.password === "string" ? record.password : "",
     macs:
       typeof record.macs === "string"
@@ -3388,32 +3718,6 @@ function normalizeStoredServer(value: unknown): SshServerConfig | null {
       SSH_RECONNECT_DELAY_MAX_MS,
       SSH_RECONNECT_DELAY_DEFAULT_MS,
     ),
-  };
-}
-
-function parseStoredSshEndpoint(address: string): {
-  host: string;
-  port: number;
-} {
-  const trimmed = address.trim();
-  if (!trimmed) {
-    return { host: "", port: SSH_PORT_DEFAULT };
-  }
-
-  const lastColonIndex = trimmed.lastIndexOf(":");
-  if (lastColonIndex <= 0 || lastColonIndex === trimmed.length - 1) {
-    return { host: trimmed, port: SSH_PORT_DEFAULT };
-  }
-
-  const host = trimmed.slice(0, lastColonIndex).trim();
-  const portText = trimmed.slice(lastColonIndex + 1).trim();
-  if (!host || !/^\d+$/.test(portText)) {
-    return { host: trimmed, port: SSH_PORT_DEFAULT };
-  }
-
-  return {
-    host,
-    port: normalizeSshPort(Number.parseInt(portText, 10)),
   };
 }
 
@@ -3973,11 +4277,9 @@ function formatSshPrompt(
   server: SshServerConfig | null,
   remoteCwd: string | null,
 ): string {
-  const address = server?.address.trim() || "ssh";
-  const host = address;
-  const userHost = server?.username.trim()
-    ? `${server.username.trim()}@${host}`
-    : host;
+  const host = server ? getSshHost(server) || "ssh" : "ssh";
+  const username = server ? getSshUsername(server) : "";
+  const userHost = username ? `${username}@${host}` : host;
   const cwd = normalizePromptRemotePath(remoteCwd);
   return cwd ? `${userHost} ${cwd} >` : `${userHost} >`;
 }

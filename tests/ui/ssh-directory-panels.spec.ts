@@ -57,7 +57,7 @@ test.describe("SSH directory panels", () => {
 
     await expect(localPanel).toBeVisible();
     await expect(remotePanel).toBeVisible();
-    await expect(page.getByTestId("ssh-terminal")).toBeVisible();
+    await expect(page.getByTestId("xterm-terminal-host")).toBeVisible();
     await expect(page.getByText("Drop here to upload")).toHaveCount(0);
     await expect(page.getByText("Drop here to download")).toHaveCount(0);
 
@@ -105,43 +105,17 @@ test.describe("SSH directory panels", () => {
     await expect(remotePanel.locator(".ssh-row-action-button")).toHaveCount(0);
   });
 
-  test("renders inline terminal prompt with autocomplete and history", async () => {
-    const terminal = page.getByTestId("ssh-terminal");
-    const commandInput = terminal.getByLabel("SSH command");
-
-    await expect(commandInput).toBeVisible();
-    await expect(page.locator(".ssh-command-row")).toHaveCount(0);
-
-    await commandInput.fill("l");
-    await expect(page.getByRole("listbox")).toBeVisible();
-    await expect(page.locator(".ssh-terminal-suggestion.is-active")).toContainText("ls");
-    const activeLineBox = await terminal.locator(".ssh-terminal-active-line").boundingBox();
-    const suggestionsBox = await page.getByRole("listbox").boundingBox();
-    expect(activeLineBox).not.toBeNull();
-    expect(suggestionsBox).not.toBeNull();
-    expect(suggestionsBox!.y).toBeGreaterThan(activeLineBox!.y);
-
-    await page.keyboard.press("Enter");
-    await expect(commandInput).toHaveValue("ls");
+  test("renders xterm CLI with the directory panels", async () => {
+    await expect(page.getByRole("heading", { name: "CLI" })).toBeVisible();
+    await expect(page.getByTestId("xterm-terminal-host")).toBeVisible();
+    await expect(page.getByLabel("SSH command")).toHaveCount(0);
     await expect(page.getByRole("listbox")).toHaveCount(0);
 
-    await page.keyboard.press("Enter");
-    await expect(terminal).toContainText("Not connected");
-    await expect(commandInput).toBeFocused();
-
-    await page.keyboard.press("ArrowUp");
-    await expect(commandInput).toHaveValue("ls");
-    await page.keyboard.press("ArrowDown");
-    await expect(commandInput).toHaveValue("");
-
-    const promptLineCount = await terminal.locator(".ssh-terminal-line-prompt").count();
-    await page.keyboard.press("Enter");
-    await expect(commandInput).toBeFocused();
-    await expect(terminal.locator(".ssh-terminal-line-prompt")).toHaveCount(promptLineCount + 1);
-    await expect(terminal).not.toContainText("Command error");
-
-    await terminal.locator(".ssh-terminal-line").first().click();
-    await expect(commandInput).toBeFocused();
+    const screen = page.getByTestId("ssh-tool-screen");
+    await page.getByRole("button", { name: "Collapse command panel" }).click();
+    await expect(screen).toHaveClass(/ssh-command-panel-collapsed/);
+    await page.getByRole("button", { name: "Expand command panel" }).click();
+    await expect(screen).not.toHaveClass(/ssh-command-panel-collapsed/);
   });
 
   test("manages SSH connections in the redesigned settings modal", async () => {
@@ -455,7 +429,7 @@ async function expectStoredSshAlgorithms(
 async function openSshTool(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "SSH" })).toBeVisible();
   await page.getByRole("button", { name: "SSH" }).click();
-  await expect(page.getByLabel("SSH command")).toBeVisible();
+  await expect(page.getByTestId("xterm-terminal-host")).toBeVisible();
 }
 
 async function closePreviewIfOpen(page: Page): Promise<void> {

@@ -241,6 +241,30 @@ const api: DashboardApi = {
     ipcRenderer.on("window:maximized-changed", handler);
     return () => ipcRenderer.off("window:maximized-changed", handler);
   },
+  xtermCreateSession: (request) =>
+    ipcRenderer.invoke("xterm:createSession", request),
+  xtermInput: (sessionId, data) =>
+    ipcRenderer.invoke("xterm:input", sessionId, data),
+  xtermResize: (sessionId, cols, rows) =>
+    ipcRenderer.invoke("xterm:resize", sessionId, cols, rows),
+  xtermKillSession: (sessionId) =>
+    ipcRenderer.invoke("xterm:killSession", sessionId),
+  onXtermData: (listener) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      payload: { sessionId: string; data: string },
+    ) => listener(payload);
+    ipcRenderer.on("xterm:data", handler);
+    return () => ipcRenderer.off("xterm:data", handler);
+  },
+  onXtermExit: (listener) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      payload: { sessionId: string; exitCode: number; signal?: number },
+    ) => listener(payload);
+    ipcRenderer.on("xterm:exit", handler);
+    return () => ipcRenderer.off("xterm:exit", handler);
+  },
 };
 
 contextBridge.exposeInMainWorld("ivsDashboard", api);

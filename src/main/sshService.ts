@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { lookup } from "node:dns/promises";
 import { join as joinLocalPath, posix } from "node:path";
 import { Client } from "ssh2";
 import type {
@@ -7,6 +9,7 @@ import type {
   FileEntryWithStats,
   SFTPWrapper,
 } from "ssh2";
+import type { Duplex } from "node:stream";
 import type {
   DirectoryActionResult,
   DirectoryListResult,
@@ -17,6 +20,12 @@ import type {
   SshExecResult,
   SshWriteResult,
 } from "../shared/dashboardTypes";
+import {
+  formatSshEndpoint,
+  isIpAddressHost,
+  parseSshEndpointInput,
+  type SshEndpointValidationResult,
+} from "../shared/sshHost";
 
 export type SshShellDataSink = (sessionId: string, data: string) => void;
 
@@ -24,6 +33,7 @@ type SshSession = {
   id: string;
   serverId: string;
   client: Client;
+  jumpClient?: Client;
   sftp?: SFTPWrapper;
   shell?: ClientChannel;
   shellReady?: Promise<string>;
@@ -39,6 +49,18 @@ type PendingShellCommand = {
   timer: NodeJS.Timeout;
   idleTimer?: NodeJS.Timeout;
   resolve: (result: SshExecResult) => void;
+};
+
+type SshEndpoint = {
+  host: string;
+  port: number;
+};
+
+type SshCredentials = {
+  username: string;
+  password: string;
+  macs?: string;
+  ciphers?: string;
 };
 
 const FILE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
@@ -74,38 +96,181 @@ export class SshService {
       );
   }
 
-  connect(request: SshConnectRequest): Promise<SshConnectResult> {
-    const endpoint = parseSshAddress(request.address);
-    if (!endpoint) {
+  async connect(request: SshConnectRequest): Promise<SshConnectResult> {
+    const endpointResult = parseSshAddress(request.address);
+    if (!endpointResult.ok) {
+      logSshConnectValidation("target", request.address, endpointResult);
       return Promise.resolve({
         ok: false,
         sessionId: null,
-        error: "SSH address must use host:port format.",
+        error: endpointResult.error,
+      });
+    }
+    logSshConnectValidation("target", request.address, endpointResult);
+
+    const endpoint = toSshEndpoint(endpointResult);
+    const credentials = normalizeSshCredentials(
+      request,
+      endpointResult.username,
+    );
+    if (!credentials.username) {
+      return Promise.resolve({
+        ok: false,
+        sessionId: null,
+        error: "SSH username is required.",
       });
     }
 
-    const client = new Client();
-    const config: ConnectConfig = {
-      host: endpoint.host,
-      port: endpoint.port,
-      username: request.username,
-      password: request.password,
-      readyTimeout: 15000,
-      keepaliveInterval: 15000,
-    };
-    const hmac = parseAlgorithmList(request.macs);
-    const cipher = parseAlgorithmList(request.ciphers);
-    if (hmac.length > 0 || cipher.length > 0) {
-      const algorithms: NonNullable<ConnectConfig["algorithms"]> = {};
-      if (hmac.length > 0) {
-        algorithms.hmac = hmac as NonNullable<typeof algorithms.hmac>;
-      }
-      if (cipher.length > 0) {
-        algorithms.cipher = cipher as NonNullable<typeof algorithms.cipher>;
-      }
-      config.algorithms = algorithms;
+    if (request.jump) {
+      return this.connectThroughJump(request, endpoint, credentials);
     }
 
+    const client = new Client();
+    const resolvedEndpoint = await resolveOpenSshEndpoint(endpoint).catch(
+      (error) => null,
+    );
+    if (!resolvedEndpoint) {
+      return {
+        ok: false,
+        sessionId: null,
+        error: "OpenSSH resolved an invalid SSH host.",
+      };
+    }
+    const dnsResult = await testDnsResolution("target", resolvedEndpoint);
+    if (!dnsResult.ok) {
+      return {
+        ok: false,
+        sessionId: null,
+        error: dnsResult.error,
+      };
+    }
+    const config = buildConnectConfig(resolvedEndpoint, credentials);
+
+    return this.establishSession(request, client, config);
+  }
+
+  private async connectThroughJump(
+    request: SshConnectRequest,
+    endpoint: SshEndpoint,
+    credentials: SshCredentials,
+  ): Promise<SshConnectResult> {
+    const jump = request.jump;
+    const jumpEndpointResult = jump ? parseSshAddress(jump.address) : null;
+    if (!jump || !jumpEndpointResult?.ok) {
+      if (jump) {
+        logSshConnectValidation("jump", jump.address, jumpEndpointResult);
+      }
+      return Promise.resolve({
+        ok: false,
+        sessionId: null,
+        error:
+          jumpEndpointResult && !jumpEndpointResult.ok
+            ? jumpEndpointResult.error
+            : "SSH jump address is required.",
+      });
+    }
+    logSshConnectValidation("jump", jump.address, jumpEndpointResult);
+
+    const jumpEndpoint = toSshEndpoint(jumpEndpointResult);
+    const jumpCredentials = normalizeSshCredentials(
+      jump,
+      jumpEndpointResult.username,
+    );
+    if (!jumpCredentials.username) {
+      return Promise.resolve({
+        ok: false,
+        sessionId: null,
+        error: "SSH jump username is required.",
+      });
+    }
+
+    const jumpClient = new Client();
+    const resolvedJumpEndpoint = await resolveOpenSshEndpoint(
+      jumpEndpoint,
+    ).catch(() => null);
+    if (!resolvedJumpEndpoint) {
+      return {
+        ok: false,
+        sessionId: null,
+        error: "OpenSSH resolved an invalid SSH jump host.",
+      };
+    }
+    const jumpDnsResult = await testDnsResolution("jump", resolvedJumpEndpoint);
+    if (!jumpDnsResult.ok) {
+      return {
+        ok: false,
+        sessionId: null,
+        error: jumpDnsResult.error,
+      };
+    }
+    const jumpConfig = buildConnectConfig(
+      resolvedJumpEndpoint,
+      jumpCredentials,
+    );
+    logSshDnsSkipped("target-via-jump", endpoint);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      let jumpReady = false;
+
+      const finish = (result: SshConnectResult): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(result);
+      };
+
+      jumpClient.once("ready", () => {
+        jumpReady = true;
+        jumpClient.forwardOut(
+          "127.0.0.1",
+          0,
+          endpoint.host,
+          endpoint.port,
+          (error, stream) => {
+            if (error) {
+              jumpClient.end();
+              finish({ ok: false, sessionId: null, error: formatError(error) });
+              return;
+            }
+
+            const targetClient = new Client();
+            const targetConfig = buildConnectConfig(
+              endpoint,
+              credentials,
+              stream,
+            );
+            void this.establishSession(
+              request,
+              targetClient,
+              targetConfig,
+              jumpClient,
+            ).then(finish);
+          },
+        );
+      });
+
+      jumpClient.on("error", (error) => {
+        if (!settled && !jumpReady) {
+          finish({ ok: false, sessionId: null, error: formatError(error) });
+        }
+      });
+
+      try {
+        jumpClient.connect(jumpConfig);
+      } catch (error) {
+        finish({ ok: false, sessionId: null, error: formatError(error) });
+      }
+    });
+  }
+
+  private establishSession(
+    request: SshConnectRequest,
+    client: Client,
+    config: ConnectConfig,
+    jumpClient?: Client,
+  ): Promise<SshConnectResult> {
     return new Promise((resolve) => {
       let settled = false;
       let ready = false;
@@ -125,10 +290,12 @@ export class SshService {
           id: sessionId,
           serverId: request.serverId,
           client,
+          jumpClient,
         };
         this.sessions.set(sessionId, session);
         client.once("close", () => {
           this.sessions.delete(sessionId);
+          jumpClient?.end();
         });
         void getRemoteWorkingDirectory(client)
           .then((cwd) => {
@@ -176,6 +343,7 @@ export class SshService {
     this.sessions.delete(sessionId);
     session.shell?.end();
     session.client.end();
+    session.jumpClient?.end();
     return { ok: true };
   }
 
@@ -376,6 +544,7 @@ export class SshService {
     for (const session of this.sessions.values()) {
       session.shell?.end();
       session.client.end();
+      session.jumpClient?.end();
     }
     this.sessions.clear();
   }
@@ -628,24 +797,256 @@ function parseAlgorithmList(value?: string): string[] {
     .filter(Boolean);
 }
 
-function parseSshAddress(
-  address: string,
-): { host: string; port: number } | null {
-  const trimmed = address.trim();
-  if (!trimmed) {
-    return null;
+function buildConnectConfig(
+  endpoint: SshEndpoint,
+  credentials: SshCredentials,
+  sock?: Duplex,
+): ConnectConfig {
+  const config: ConnectConfig = {
+    host: endpoint.host,
+    port: endpoint.port,
+    username: credentials.username,
+    password: credentials.password,
+    readyTimeout: 15000,
+    keepaliveInterval: 15000,
+  };
+  if (sock) {
+    config.sock = sock;
   }
 
-  const lastColonIndex = trimmed.lastIndexOf(":");
-  if (lastColonIndex === -1) {
-    return { host: trimmed, port: 22 };
+  const hmac = parseAlgorithmList(credentials.macs);
+  const cipher = parseAlgorithmList(credentials.ciphers);
+  if (hmac.length > 0 || cipher.length > 0) {
+    const algorithms: NonNullable<ConnectConfig["algorithms"]> = {};
+    if (hmac.length > 0) {
+      algorithms.hmac = hmac as NonNullable<typeof algorithms.hmac>;
+    }
+    if (cipher.length > 0) {
+      algorithms.cipher = cipher as NonNullable<typeof algorithms.cipher>;
+    }
+    config.algorithms = algorithms;
   }
 
-  const host = trimmed.slice(0, lastColonIndex).trim();
-  const portText = trimmed.slice(lastColonIndex + 1).trim();
-  const port = Number.parseInt(portText, 10);
-  if (!host || !Number.isInteger(port) || port <= 0 || port > 65535) {
-    return null;
+  return config;
+}
+
+function parseSshAddress(address: string): SshEndpointValidationResult {
+  return parseSshEndpointInput(address);
+}
+
+function toSshEndpoint(
+  result: Extract<SshEndpointValidationResult, { ok: true }>,
+): SshEndpoint {
+  return { host: result.host, port: result.port };
+}
+
+function normalizeSshCredentials(
+  credentials: SshCredentials,
+  endpointUsername?: string,
+): SshCredentials {
+  return {
+    username: credentials.username.trim() || endpointUsername?.trim() || "",
+    password: credentials.password,
+    macs: credentials.macs,
+    ciphers: credentials.ciphers,
+  };
+}
+
+async function resolveOpenSshEndpoint(
+  endpoint: SshEndpoint,
+): Promise<SshEndpoint> {
+  const output = await getOpenSshConfig(endpoint).catch(() => null);
+  if (!output) {
+    logSshResolvedEndpoint(endpoint, endpoint, false);
+    return endpoint;
+  }
+
+  const config = parseOpenSshConfig(output);
+  const resolved = {
+    host: config.host || endpoint.host,
+    port: config.port ?? endpoint.port,
+  };
+  const validation = parseSshEndpointInput(
+    formatSshEndpoint(resolved.host, resolved.port),
+  );
+  if (!validation.ok) {
+    throw new Error(`OpenSSH resolved an invalid host: ${validation.error}`);
+  }
+  const normalized = toSshEndpoint(validation);
+  logSshResolvedEndpoint(endpoint, normalized, true);
+  return normalized;
+}
+
+type DnsResolutionResult =
+  | { ok: true; host: string; addresses: string[]; skipped?: boolean }
+  | { ok: false; host: string; error: string };
+
+async function testDnsResolution(
+  label: string,
+  endpoint: SshEndpoint,
+): Promise<DnsResolutionResult> {
+  if (isIpAddressHost(endpoint.host)) {
+    const result: DnsResolutionResult = {
+      ok: true,
+      host: endpoint.host,
+      addresses: [endpoint.host],
+      skipped: true,
+    };
+    logSshDnsResult(label, endpoint, result);
+    return result;
+  }
+
+  try {
+    const records = await lookup(endpoint.host, { all: true });
+    const result = {
+      ok: true,
+      host: endpoint.host,
+      addresses: records.map(
+        (record) => `${record.address}/IPv${record.family}`,
+      ),
+    } as const;
+    logSshDnsResult(label, endpoint, result);
+    return result;
+  } catch (error) {
+    const message = formatError(error);
+    const result = {
+      ok: false,
+      host: endpoint.host,
+      error: `DNS lookup failed for SSH ${label} host "${endpoint.host}" inside the app: ${message}`,
+    } as const;
+    logSshDnsResult(label, endpoint, result);
+    return result;
+  }
+}
+
+function logSshConnectValidation(
+  label: string,
+  rawAddress: string,
+  result: SshEndpointValidationResult | null,
+): void {
+  if (!result) {
+    console.warn("[ssh:connect:host]", {
+      label,
+      rawAddress,
+      ok: false,
+      error: "Missing SSH address.",
+    });
+    return;
+  }
+  const payload = {
+    label,
+    rawAddress,
+    ok: result.ok,
+    normalizedHost: result.host,
+    port: result.port,
+    embeddedUsername: result.username ?? null,
+    warnings: result.warnings,
+    error: result.ok ? null : result.error,
+  };
+  if (result.ok) {
+    console.info("[ssh:connect:host]", payload);
+  } else {
+    console.warn("[ssh:connect:host]", payload);
+  }
+}
+
+function logSshResolvedEndpoint(
+  input: SshEndpoint,
+  resolved: SshEndpoint,
+  usedOpenSshConfig: boolean,
+): void {
+  console.info("[ssh:connect:resolved-host]", {
+    inputHost: input.host,
+    inputPort: input.port,
+    hostPassedToSsh2: resolved.host,
+    portPassedToSsh2: resolved.port,
+    usedOpenSshConfig,
+  });
+}
+
+function logSshDnsResult(
+  label: string,
+  endpoint: SshEndpoint,
+  result: DnsResolutionResult,
+): void {
+  const payload = {
+    label,
+    host: endpoint.host,
+    port: endpoint.port,
+    ok: result.ok,
+    addresses: result.ok ? result.addresses : [],
+    skipped: result.ok ? Boolean(result.skipped) : false,
+    error: result.ok ? null : result.error,
+  };
+  if (result.ok) {
+    console.info("[ssh:connect:dns]", payload);
+  } else {
+    console.warn("[ssh:connect:dns]", payload);
+  }
+}
+
+function logSshDnsSkipped(label: string, endpoint: SshEndpoint): void {
+  console.info("[ssh:connect:dns]", {
+    label,
+    host: endpoint.host,
+    port: endpoint.port,
+    ok: true,
+    skipped: true,
+    reason:
+      "Target host is resolved by the jump server, not by the app process.",
+  });
+}
+
+function getOpenSshConfig(endpoint: SshEndpoint): Promise<string> {
+  const args = ["-G"];
+  if (endpoint.port !== 22) {
+    args.push("-p", String(endpoint.port));
+  }
+  args.push(endpoint.host);
+
+  return new Promise((resolve, reject) => {
+    execFile(
+      "ssh",
+      args,
+      {
+        windowsHide: true,
+        timeout: 5000,
+        maxBuffer: 256 * 1024,
+      },
+      (error, stdout) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve(stdout);
+      },
+    );
+  });
+}
+
+function parseOpenSshConfig(output: string): { host?: string; port?: number } {
+  let host: string | undefined;
+  let port: number | undefined;
+
+  for (const line of output.split(/\r?\n/)) {
+    const match = /^(hostname|port)\s+(.+)$/i.exec(line.trim());
+    if (!match) {
+      continue;
+    }
+    const key = match[1]?.toLowerCase();
+    const value = match[2]?.trim() ?? "";
+    if (key === "hostname" && value) {
+      host = value;
+    } else if (key === "port") {
+      const parsedPort = Number.parseInt(value, 10);
+      if (
+        Number.isInteger(parsedPort) &&
+        parsedPort > 0 &&
+        parsedPort <= 65535
+      ) {
+        port = parsedPort;
+      }
+    }
   }
 
   return { host, port };

@@ -590,6 +590,15 @@ export type SshConnectRequest = {
   password: string;
   macs?: string;
   ciphers?: string;
+  jump?: SshJumpRequest;
+};
+
+export type SshJumpRequest = {
+  address: string;
+  username: string;
+  password: string;
+  macs?: string;
+  ciphers?: string;
 };
 
 export type SshConnectResult = {
@@ -883,4 +892,45 @@ export type DashboardApi = {
   onWindowMaximizedChange: (
     listener: (maximized: boolean) => void,
   ) => () => void;
+  xtermCreateSession: (
+    request?: XtermCreateRequest,
+  ) => Promise<XtermCreateResult>;
+  xtermInput: (sessionId: string, data: string) => Promise<XtermSimpleResult>;
+  xtermResize: (
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ) => Promise<XtermSimpleResult>;
+  xtermKillSession: (sessionId: string) => Promise<XtermSimpleResult>;
+  onXtermData: (
+    listener: (event: { sessionId: string; data: string }) => void,
+  ) => () => void;
+  onXtermExit: (
+    listener: (event: {
+      sessionId: string;
+      exitCode: number;
+      signal?: number;
+    }) => void,
+  ) => () => void;
+};
+
+export type XtermCreateRequest = {
+  shell?: string | null;
+  args?: string[] | null;
+  cwd?: string | null;
+  cols?: number | null;
+  rows?: number | null;
+  env?: Record<string, string> | null;
+};
+
+export type XtermCreateResult = {
+  ok: boolean;
+  sessionId: string | null;
+  shell: string | null;
+  error?: string;
+};
+
+export type XtermSimpleResult = {
+  ok: boolean;
+  error?: string;
 };

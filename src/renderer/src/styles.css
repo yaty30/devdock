@@ -37,7 +37,7 @@
   --field-bg: #ffffff;
   --subtle-bg: #f9fafb;
   --icon-muted: #6b7280;
-  --terminal-bg: #f8f8f8;
+  --terminal-bg: #313131;
   --terminal-border: #d6d6d6;
   --font-scale: 1;
   --cm-sql-keyword: #1d4ed8;
@@ -9907,6 +9907,24 @@ button.database-tree-item {
   display: none;
 }
 
+.ssh-command-panel-collapsed .ssh-cli-panel .xterm-panel-actions {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  place-items: center;
+  gap: 0;
+}
+
+.ssh-command-panel-collapsed .ssh-cli-panel .xterm-status,
+.ssh-command-panel-collapsed .ssh-cli-panel .xterm-action-button,
+.ssh-command-panel-collapsed .ssh-cli-panel .xterm-tool-host {
+  display: none;
+}
+
+.ssh-command-panel-collapsed .ssh-cli-panel .ssh-panel-collapse-button {
+  display: inline-flex;
+}
+
 .ssh-terminal {
   flex: 1 1 auto;
   position: relative;
@@ -10240,6 +10258,10 @@ button.database-tree-item {
 .ssh-command-panel-collapsed .ssh-directory-column {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
+}
+
+.ssh-main-tab-hidden {
+  display: none !important;
 }
 
 .ssh-directory-panel.panel {
@@ -10608,7 +10630,7 @@ button.database-tree-item {
 .ssh-monitor-tab {
   display: grid;
   grid-column: 1 / -1;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  /* grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); */
   gap: 12px;
   width: 100%;
   min-width: 0;
@@ -10634,37 +10656,14 @@ button.database-tree-item {
   table-layout: fixed;
 }
 
-.directory-action-log-table th:nth-child(1),
-.directory-action-log-table td:nth-child(1),
-.terminal-command-log-table th:nth-child(1),
-.terminal-command-log-table td:nth-child(1) {
-  width: 112px;
+.ssh-monitor-th-content {
+  padding-right: 22px;
 }
 
-.directory-action-log-table th:nth-child(2),
-.directory-action-log-table td:nth-child(2) {
-  width: 132px;
-}
-
-.directory-action-log-table th:nth-child(3),
-.directory-action-log-table td:nth-child(3),
-.terminal-command-log-table th:nth-child(3),
-.terminal-command-log-table td:nth-child(3) {
-  width: 190px;
-}
-
-.directory-action-log-table th:nth-child(4),
-.directory-action-log-table td:nth-child(4),
-.directory-action-log-table th:nth-child(6),
-.directory-action-log-table td:nth-child(6),
-.terminal-command-log-table th:nth-child(4),
-.terminal-command-log-table td:nth-child(4) {
-  width: 116px;
-}
-
-.directory-action-log-table th:nth-child(5),
-.directory-action-log-table td:nth-child(5) {
-  width: 150px;
+.ssh-monitor-table th:hover .ssh-monitor-column-resize-handle,
+.ssh-monitor-column-resize-handle:hover,
+.ssh-monitor-column-resize-handle:focus-visible {
+  opacity: 1;
 }
 
 .ssh-monitor-table td {
@@ -11116,6 +11115,11 @@ button.database-tree-item {
 
 .ssh-settings-helper-full {
   margin: -1px 0 0 160px;
+}
+
+.ssh-settings-algorithm-preset {
+  justify-self: start;
+  margin-left: 160px;
 }
 
 .ssh-status {
@@ -14792,4 +14796,93 @@ button.database-tree-item {
   .app-header-right {
     min-width: max-content;
   }
+}
+
+/* Xterm experimental tab */
+.xterm-tool-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.xterm-tool-panel.panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.xterm-tool-panel .panel-header {
+  background: var(--subtle-bg);
+  border-bottom: 1px solid var(--border);
+}
+.xterm-tool-panel .panel-header h2 {
+  color: var(--text);
+}
+.xterm-panel-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.xterm-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--subtle-bg);
+}
+.xterm-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+.xterm-status-ready .xterm-status-dot { background: var(--success); }
+.xterm-status-starting .xterm-status-dot { background: var(--warning); }
+.xterm-status-error .xterm-status-dot { background: var(--error); }
+.xterm-status-exited .xterm-status-dot { background: var(--muted); }
+.xterm-action-button {
+  background: var(--subtle-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.xterm-action-button:hover:not(:disabled) {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+.xterm-action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.xterm-tool-host {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+  background: var(--terminal-bg);
+}
+.xterm-tool-host-disabled {
+  cursor: not-allowed;
+}
+.xterm-tool-host .xterm,
+.xterm-tool-host .xterm-viewport,
+.xterm-tool-host .xterm-screen {
+  width: 100% !important;
+  height: 100% !important;
+  background: transparent !important;
 }
