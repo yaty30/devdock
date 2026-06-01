@@ -138,7 +138,10 @@ module.exports = {
     ],
     ignore: ignoreDevelopmentFiles,
   },
-  rebuildConfig: {},
+  rebuildConfig: {
+    force: true,
+    onlyModules: ['better-sqlite3', 'oracledb', 'node-pty'],
+  },
   makers: [
     {
       name: "@electron-forge/maker-zip",
