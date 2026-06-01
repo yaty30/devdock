@@ -21,6 +21,13 @@
   --accent: #444ce7;
   --accent-soft: #eef2ff;
   --accent-border: #dfe3ff;
+  --app-logo-color-1: color-mix(in srgb, var(--accent) 32%, #ffffff);
+  --app-logo-color-2: color-mix(in srgb, var(--accent) 48%, #ffffff);
+  --app-logo-color-3: color-mix(in srgb, var(--accent) 66%, #ffffff);
+  --app-logo-color-4: var(--accent);
+  --app-logo-color-5: color-mix(in srgb, var(--accent) 56%, #ffffff);
+  --app-logo-color-6: color-mix(in srgb, var(--accent) 82%, #111827);
+  --app-logo-color-7: color-mix(in srgb, var(--accent) 68%, #111827);
   --success: #16a34a;
   --warning: #f59e0b;
   --warning-soft: #ebcb93;
@@ -114,6 +121,13 @@
   --accent: #8b8df8;
   --accent-soft: #2a2c40;
   --accent-border: #383b62;
+  --app-logo-color-1: color-mix(in srgb, var(--accent) 35%, #ffffff);
+  --app-logo-color-2: color-mix(in srgb, var(--accent) 52%, #ffffff);
+  --app-logo-color-3: color-mix(in srgb, var(--accent) 72%, #ffffff);
+  --app-logo-color-4: var(--accent);
+  --app-logo-color-5: color-mix(in srgb, var(--accent) 62%, #ffffff);
+  --app-logo-color-6: color-mix(in srgb, var(--accent) 84%, #f9fafb);
+  --app-logo-color-7: color-mix(in srgb, var(--accent) 72%, #e5e7eb);
   --success: #4ade80;
   --success-soft: #064e3b;
   --info: #60a5fa;
@@ -545,6 +559,11 @@ body {
   transform-origin: center;
   animation: splash-logo-in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
   will-change: transform, opacity;
+}
+
+.app-logo-icon {
+  display: block;
+  overflow: visible;
 }
 
 .splash-screen.exiting .splash-logo {

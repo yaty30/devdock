@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
 import { getProjectBackendLabel } from "../../../../shared/projectFrontend";
+import { AppLogoIcon } from "../common/AppLogoIcon";
 import { MonitorCloud } from "../common/MonitorCloud";
 import { Tooltip } from "../common/Tooltip";
 import type {
@@ -241,45 +242,7 @@ export function Sidebar({
     >
       <div className="brand">
         <div className="brand-mark">
-          {/* <Atom size={27} strokeWidth={2.2} />
-           */}
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            width="30"
-            height="30"
-            viewBox="0 0 24 24"
-            fill="none"
-            className="lucide lucide-face-alien-icon lucide-face-alien"
-          >
-            <defs>
-              <linearGradient
-                id="orangeGradient"
-                x1="2"
-                y1="2"
-                x2="22"
-                y2="22"
-                gradientUnits="userSpaceOnUse"
-              >
-                <stop offset="0%" stop-color="#FFD27A" />
-                <stop offset="18%" stop-color="#FFB347" />
-                <stop offset="38%" stop-color="#FF8C1A" />
-                <stop offset="55%" stop-color="#F97316" />
-                <stop offset="72%" stop-color="#FFB84D" />
-                <stop offset="88%" stop-color="#EA580C" />
-                <stop offset="100%" stop-color="#C2410C" />
-              </linearGradient>
-            </defs>
-
-            <path
-              d="M22 12a7.85 7.85 0 0 1-3.7 6.6l-4 2.7a3.9 3.9 0 0 1-4.5 0l-4-2.7A7.57 7.57 0 0 1 2 12a10 10 0 0 1 20 0
-       M10.7 11.3c-1.4-1.3-3.3-1.7-4.2-.8s-.5 2.8.8 4.2c1.4 1.4 3.2 1.8 4.2.8.9-.9.5-2.8-.8-4.2
-       M17.5 10.5c-.9-.9-2.8-.5-4.2.8-1.4 1.4-1.8 3.2-.8 4.2.9.9 2.8.5 4.2-.8 1.3-1.4 1.7-3.3.8-4.2"
-              stroke="url(#orangeGradient)"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
+          <AppLogoIcon size={30} />
         </div>
         <span className="brand-label">DevDock</span>
       </div>

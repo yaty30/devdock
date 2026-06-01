@@ -12,7 +12,14 @@ import type {
   OpenDialogOptions,
   SaveDialogOptions,
 } from "electron";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import {
   mkdir as mkdirAsync,
   readFile,
@@ -21,6 +28,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { hostname } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -67,6 +75,8 @@ if (started) {
 }
 
 const APP_NAME = "DevDock";
+const LEGACY_APP_NAME = "IVS Dashboard";
+const DATA_MIGRATION_ENV_FLAG = "DEVDOCK_DATA_MIGRATION_COMPLETED";
 app.setName(APP_NAME);
 if (process.platform === "win32" && !app.isPackaged) {
   app.setAppUserModelId(process.execPath);
@@ -2123,6 +2133,7 @@ const createWindow = (): void => {
 
 app.whenReady().then(() => {
   try {
+    migrateLegacyUserDataIfNeeded();
     const userDataPath = app.getPath("userData");
     if (CHAT_ENABLED) {
       chatConfig = initializeChat(userDataPath);
@@ -2166,3 +2177,80 @@ app.on("window-all-closed", () => {
     app.quit();
   }
 });
+
+function migrateLegacyUserDataIfNeeded(): void {
+  if (
+    process.platform !== "win32" ||
+    readBooleanEnvironmentFlag(DATA_MIGRATION_ENV_FLAG, false)
+  ) {
+    return;
+  }
+
+  const appDataPath = app.getPath("appData");
+  const legacyUserDataPath = join(appDataPath, LEGACY_APP_NAME);
+  const currentUserDataPath = join(appDataPath, APP_NAME);
+
+  if (!existsSync(legacyUserDataPath)) {
+    return;
+  }
+
+  try {
+    if (existsSync(currentUserDataPath)) {
+      const backupPath = nextAvailableUserDataBackupPath(currentUserDataPath);
+      renameSync(currentUserDataPath, backupPath);
+      console.info(
+        `[main:migrateUserData] Existing ${APP_NAME} data moved to ${backupPath}.`,
+      );
+    }
+
+    renameSync(legacyUserDataPath, currentUserDataPath);
+    removeLegacyUserDataPathIfPresent(legacyUserDataPath);
+    markLegacyUserDataMigrationComplete();
+    console.info(
+      `[main:migrateUserData] Migrated ${LEGACY_APP_NAME} data to ${APP_NAME}.`,
+    );
+  } catch (error) {
+    console.error("[main:migrateUserData]", error);
+  }
+}
+
+function nextAvailableUserDataBackupPath(userDataPath: string): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const baseBackupPath = `${userDataPath}.before-devdock-migration-${timestamp}`;
+  let backupPath = baseBackupPath;
+  let suffix = 1;
+
+  while (existsSync(backupPath)) {
+    backupPath = `${baseBackupPath}-${suffix}`;
+    suffix += 1;
+  }
+
+  return backupPath;
+}
+
+function removeLegacyUserDataPathIfPresent(legacyUserDataPath: string): void {
+  if (!existsSync(legacyUserDataPath)) {
+    return;
+  }
+
+  rmSync(legacyUserDataPath, { recursive: true, force: true });
+  console.info(
+    `[main:migrateUserData] Removed leftover ${LEGACY_APP_NAME} data folder.`,
+  );
+}
+
+function markLegacyUserDataMigrationComplete(): void {
+  process.env[DATA_MIGRATION_ENV_FLAG] = "1";
+
+  const result = spawnSync("setx", [DATA_MIGRATION_ENV_FLAG, "1"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+
+  if (result.error || result.status !== 0) {
+    console.warn(
+      `[main:migrateUserData] Failed to persist ${DATA_MIGRATION_ENV_FLAG}.`,
+      result.error ?? result.stderr,
+    );
+  }
+}

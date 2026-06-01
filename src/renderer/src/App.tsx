@@ -23,6 +23,7 @@ import {
   HeaderActions,
   HeaderUtilityActions,
 } from "./components/layout/HeaderActions";
+import { AppLogoIcon } from "./components/common/AppLogoIcon";
 import { Sidebar } from "./components/layout/Sidebar";
 import {
   DatabaseConnectionModal,
@@ -70,7 +71,6 @@ import {
 } from "./features/tools/SshTool";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
-import splashIcon from "./assets/icon.png";
 import { MAX_PROJECTS } from "../../shared/appLimits";
 import { isProjectFrontendEnabled } from "../../shared/projectFrontend";
 import type {
@@ -1820,7 +1820,7 @@ function App(): JSX.Element {
     splashPhase !== "hidden" ? (
       <div className={`splash-screen ${splashPhase}`} aria-hidden="true">
         <div className="splash-logo-shell" style={{ width: SPLASH_LOGO_SIZE }}>
-          <img className="splash-logo" src={splashIcon} alt="" />
+          <AppLogoIcon className="splash-logo" />
         </div>
       </div>
     ) : null;
