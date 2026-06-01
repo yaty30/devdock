@@ -66,7 +66,7 @@ if (started) {
   process.exit(0);
 }
 
-const APP_NAME = "IVS Dashboard";
+const APP_NAME = "DevDock";
 app.setName(APP_NAME);
 if (process.platform === "win32" && !app.isPackaged) {
   app.setAppUserModelId(process.execPath);
@@ -1976,7 +1976,7 @@ const createWindow = (): void => {
     minWidth: 1280,
     minHeight: 800,
     frame: false,
-    title: "IVS Dashboard",
+    title: "DevDock",
     icon: resolveAppIconPath(),
     backgroundColor: "#f3f4f6",
     show: false,

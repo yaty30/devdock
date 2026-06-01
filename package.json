@@ -1,9 +1,9 @@
 {
-  "name": "ivs-dashboard",
+  "name": "devdock",
   "version": "1.2.0",
-  "description": "IVS Dashboard.",
+  "description": "DevDock.",
   "main": "build/main/index.js",
-  "productName": "IVS Dashboard",
+  "productName": "DevDock",
   "author": "yaty",
   "scripts": {
     "dev": "node scripts/dev.cjs",
