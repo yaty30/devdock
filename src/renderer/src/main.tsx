@@ -34,7 +34,7 @@ function FatalStartupError({ error }: { error: Error }): JSX.Element {
   return (
     <main className="fatal-startup-screen">
       <section className="fatal-startup-panel">
-        <h1>IVS Dashboard could not start</h1>
+        <h1>DevDock could not start</h1>
         <p>{error.message || "An unknown renderer error occurred."}</p>
         <pre>{error.stack ?? String(error)}</pre>
       </section>

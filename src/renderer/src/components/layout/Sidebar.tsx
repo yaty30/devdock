@@ -245,39 +245,43 @@ export function Sidebar({
            */}
           <svg
             xmlns="http://www.w3.org/2000/svg"
-            width="27"
-            height="27"
+            width="30"
+            height="30"
             viewBox="0 0 24 24"
             fill="none"
-            stroke="url(#shrimpGradient)"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            className="lucide lucide-shrimp-icon lucide-shrimp"
+            className="lucide lucide-face-alien-icon lucide-face-alien"
           >
             <defs>
               <linearGradient
-                id="shrimpGradient"
-                x1="0"
-                y1="0"
-                x2="24"
-                y2="24"
+                id="orangeGradient"
+                x1="2"
+                y1="2"
+                x2="22"
+                y2="22"
                 gradientUnits="userSpaceOnUse"
               >
-                <stop offset="0%" stop-color="#c4b5fd" />
-                <stop offset="45%" stop-color="#8b8df8" />
-                <stop offset="100%" stop-color="#6366f1" />
+                <stop offset="0%" stop-color="#FFD27A" />
+                <stop offset="18%" stop-color="#FFB347" />
+                <stop offset="38%" stop-color="#FF8C1A" />
+                <stop offset="55%" stop-color="#F97316" />
+                <stop offset="72%" stop-color="#FFB84D" />
+                <stop offset="88%" stop-color="#EA580C" />
+                <stop offset="100%" stop-color="#C2410C" />
               </linearGradient>
             </defs>
 
-            <path d="M11 12h.01" />
-            <path d="M13 22c.5-.5 1.12-1 2.5-1-1.38 0-2-.5-2.5-1" />
-            <path d="M14 2a3.28 3.28 0 0 1-3.227 1.798l-6.17-.561A2.387 2.387 0 1 0 4.387 8H15.5a1 1 0 0 1 0 13 1 1 0 0 0 0-5H12a7 7 0 0 1-7-7V8" />
-            <path d="M14 8a8.5 8.5 0 0 1 0 8" />
-            <path d="M16 16c2 0 4.5-4 4-6" />
+            <path
+              d="M22 12a7.85 7.85 0 0 1-3.7 6.6l-4 2.7a3.9 3.9 0 0 1-4.5 0l-4-2.7A7.57 7.57 0 0 1 2 12a10 10 0 0 1 20 0
+       M10.7 11.3c-1.4-1.3-3.3-1.7-4.2-.8s-.5 2.8.8 4.2c1.4 1.4 3.2 1.8 4.2.8.9-.9.5-2.8-.8-4.2
+       M17.5 10.5c-.9-.9-2.8-.5-4.2.8-1.4 1.4-1.8 3.2-.8 4.2.9.9 2.8.5 4.2-.8 1.3-1.4 1.7-3.3.8-4.2"
+              stroke="url(#orangeGradient)"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
           </svg>
         </div>
-        <span className="brand-label">IVS Dashboard</span>
+        <span className="brand-label">DevDock</span>
       </div>
 
       <nav className="sidebar-nav" aria-label="Main navigation">

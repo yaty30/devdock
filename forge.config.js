@@ -156,11 +156,11 @@ module.exports = {
       name: "@electron-forge/maker-squirrel",
       platforms: ["win32"],
       config: {
-        name: "ivs_dashboard",
+        name: "devdock",
         authors: "yaty",
-        description: "IVS Dashboard",
+        description: "DevDock",
 
-        setupExe: "IVS-Dashboard-Setup.exe",
+        setupExe: "DevDock-Setup.exe",
 
         setupIcon: path.join(
           __dirname,
@@ -176,10 +176,10 @@ module.exports = {
         createDesktopShortcut: true,
 
         // Display name shown in Start Menu / desktop shortcut
-        shortcutName: "IVS Dashboard",
+        shortcutName: "DevDock",
 
         // Optional: Start Menu folder name
-        shortcutFolderName: "IVS Dashboard",
+        shortcutFolderName: "DevDock",
       },
     },
   ],
