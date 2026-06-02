@@ -65,6 +65,9 @@ type SshCredentials = {
 
 const FILE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
 const FILE_PREVIEW_SAMPLE_BYTES = 4096;
+const SFTP_READY_TIMEOUT_MS = 15000;
+const SFTP_DIRECTORY_TIMEOUT_MS = 15000;
+const SFTP_CWD_TIMEOUT_MS = 8000;
 
 export class SshService {
   private readonly sessions = new Map<string, SshSession>();
@@ -647,13 +650,33 @@ export class SshService {
     }
 
     return new Promise<SFTPWrapper>((resolve, reject) => {
-      session.client.sftp((error, sftp) => {
+      let settled = false;
+      const finish = (error: unknown, sftp?: SFTPWrapper): void => {
+        if (settled) {
+          sftp?.end();
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
         if (error) {
           reject(error);
           return;
         }
+        if (!sftp) {
+          reject(new Error("SFTP session was not created."));
+          return;
+        }
         session.sftp = sftp;
         resolve(sftp);
+      };
+      const timer = setTimeout(() => {
+        finish(
+          createTimeoutError("Opening SFTP session", SFTP_READY_TIMEOUT_MS),
+        );
+      }, SFTP_READY_TIMEOUT_MS);
+
+      session.client.sftp((error, sftp) => {
+        finish(error, sftp);
       });
     });
   }
@@ -1058,19 +1081,42 @@ function cleanShellOutput(output: string): string {
 
 function getRemoteWorkingDirectory(client: Client): Promise<string> {
   return new Promise((resolve, reject) => {
-    client.sftp((error, sftp) => {
+    let settled = false;
+    const finish = (error: unknown, sftp?: SFTPWrapper, path?: string): void => {
+      if (settled) {
+        sftp?.end();
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      sftp?.end();
       if (error) {
         reject(error);
         return;
       }
+      resolve(path || "");
+    };
+    const timer = setTimeout(() => {
+      finish(
+        createTimeoutError(
+          "Resolving remote working directory",
+          SFTP_CWD_TIMEOUT_MS,
+        ),
+      );
+    }, SFTP_CWD_TIMEOUT_MS);
+
+    client.sftp((error, sftp) => {
+      if (error) {
+        finish(error);
+        return;
+      }
+      if (settled) {
+        sftp.end();
+        return;
+      }
 
       sftp.realpath(".", (realpathError, absolutePath) => {
-        sftp.end();
-        if (realpathError) {
-          reject(realpathError);
-          return;
-        }
-        resolve(absolutePath || "");
+        finish(realpathError, sftp, absolutePath);
       });
     });
   });
@@ -1081,14 +1127,41 @@ function readRemoteDirectory(
   path: string,
 ): Promise<FileEntryWithStats[]> {
   return new Promise((resolve, reject) => {
-    sftp.readdir(path, (error, list) => {
+    let settled = false;
+    const finish = (
+      error: unknown,
+      list?: FileEntryWithStats[],
+    ): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
       if (error) {
         reject(error);
         return;
       }
-      resolve(list);
+      resolve(list ?? []);
+    };
+    const timer = setTimeout(() => {
+      finish(
+        createTimeoutError(
+          "Listing remote directory",
+          SFTP_DIRECTORY_TIMEOUT_MS,
+        ),
+      );
+    }, SFTP_DIRECTORY_TIMEOUT_MS);
+
+    sftp.readdir(path, (error, list) => {
+      finish(error, list);
     });
   });
+}
+
+function createTimeoutError(operation: string, timeoutMs: number): Error {
+  return new Error(
+    `${operation} timed out after ${Math.round(timeoutMs / 1000)}s.`,
+  );
 }
 
 function readRemoteFile(sftp: SFTPWrapper, path: string): Promise<Buffer> {

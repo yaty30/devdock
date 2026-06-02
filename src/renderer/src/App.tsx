@@ -65,6 +65,7 @@ import {
   storeSelectedSshServerId,
   storeSshServers,
   type SshConnectionStatus,
+  type SftpConnectionStatus,
   type SshActiveHostContext,
   type SshServerConfig,
   type SshToolTab,
@@ -267,6 +268,11 @@ function App(): JSX.Element {
     null,
   );
   const [sshRemoteCwd, setSshRemoteCwd] = useState<string | null>(null);
+  const [sftpConnectionStatus, setSftpConnectionStatus] =
+    useState<SftpConnectionStatus>("idle");
+  const [sftpConnectionError, setSftpConnectionError] = useState<string | null>(
+    null,
+  );
   const [projects, setProjects] = useState<Project[]>([]);
   const [databaseConnections, setDatabaseConnections] = useState<
     DatabaseConnection[]
@@ -850,6 +856,8 @@ function App(): JSX.Element {
     const sessionId = sshActiveSessionIdRef.current;
     sshActiveSessionIdRef.current = null;
     setSshActiveSessionId(null);
+    setSftpConnectionStatus("idle");
+    setSftpConnectionError(null);
     if (!sessionId) {
       return;
     }
@@ -872,6 +880,8 @@ function App(): JSX.Element {
     clearSshReconnectTimer();
     await disconnectActiveSshSession();
     setSshConnectionStatus(status);
+    setSftpConnectionStatus("connecting");
+    setSftpConnectionError(null);
 
     const result = await window.ivsDashboard
       .sshConnect({
@@ -907,12 +917,16 @@ function App(): JSX.Element {
       sshActiveSessionIdRef.current = result.sessionId;
       setSshActiveSessionId(result.sessionId);
       setSshRemoteCwd(result.cwd ?? null);
+      setSftpConnectionStatus("ready");
+      setSftpConnectionError(null);
       setSshConnectionStatus("connected");
       setSshReconnectAttempt(0);
       return;
     }
 
     setSshActiveSessionId(null);
+    setSftpConnectionStatus("failed");
+    setSftpConnectionError(result.error ?? "Unable to start SFTP session.");
     if (shouldRetrySshConnection(server, currentAttempt)) {
       scheduleSshReconnect(server, currentAttempt + 1);
       return;
@@ -948,12 +962,18 @@ function App(): JSX.Element {
     if ((!profile || !isValidSshServerCredential(profile)) && !jumpProfile) {
       await disconnectActiveSshSession();
       setSshRemoteCwd(context.cwd ?? null);
+      setSftpConnectionStatus("failed");
+      setSftpConnectionError("No saved SSH profile matches this terminal host.");
       return;
     }
     const targetProfile = profile ?? jumpProfile;
     if (!targetProfile) {
       await disconnectActiveSshSession();
       setSshRemoteCwd(context.cwd ?? null);
+      setSftpConnectionStatus("failed");
+      setSftpConnectionError(
+        "No SSH profile is available for this terminal host.",
+      );
       return;
     }
     const directorySessionServerId = profile
@@ -968,6 +988,8 @@ function App(): JSX.Element {
         sshTerminalHostProfileMapRef.current.set(hostProfileKey, profile.id);
       }
       setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, sshRemoteCwd));
+      setSftpConnectionStatus("ready");
+      setSftpConnectionError(null);
       setSshConnectionStatus("connected");
       return;
     }
@@ -976,6 +998,8 @@ function App(): JSX.Element {
     sshDirectorySyncRequestRef.current = requestId;
     sshActiveServerIdRef.current = directorySessionServerId;
     await disconnectActiveSshSession();
+    setSftpConnectionStatus("connecting");
+    setSftpConnectionError(null);
 
     const result = await window.ivsDashboard
       .sshConnect({
@@ -1029,6 +1053,8 @@ function App(): JSX.Element {
       sshActiveSessionIdRef.current = result.sessionId;
       setSshActiveSessionId(result.sessionId);
       setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, result.cwd));
+      setSftpConnectionStatus("ready");
+      setSftpConnectionError(null);
       setSshConnectionStatus("connected");
       setSshReconnectAttempt(0);
       return;
@@ -1036,6 +1062,8 @@ function App(): JSX.Element {
 
     setSshActiveSessionId(null);
     setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, null));
+    setSftpConnectionStatus("failed");
+    setSftpConnectionError(result.error ?? "Unable to start SFTP session.");
   }
 
   function handleSshTerminalConnectionStatusChange(
@@ -1057,6 +1085,8 @@ function App(): JSX.Element {
       void disconnectActiveSshSession();
       setSshReconnectAttempt(0);
       setSshRemoteCwd(null);
+      setSftpConnectionStatus("idle");
+      setSftpConnectionError(null);
       setSshConnectionStatus(status);
     }
   }
@@ -1104,6 +1134,8 @@ function App(): JSX.Element {
     sshActiveServerIdRef.current = server.id;
     void disconnectActiveSshSession();
     setSshRemoteCwd(null);
+    setSftpConnectionStatus("idle");
+    setSftpConnectionError(null);
     setSshConnectionStatus("connecting");
   }
 
@@ -1114,6 +1146,8 @@ function App(): JSX.Element {
     void disconnectActiveSshSession();
     setSshReconnectAttempt(0);
     setSshRemoteCwd(null);
+    setSftpConnectionStatus("idle");
+    setSftpConnectionError(null);
     setSshConnectionStatus("disconnected");
   }
 
@@ -1179,6 +1213,8 @@ function App(): JSX.Element {
       setSshConnectionStatus("idle");
       setSshReconnectAttempt(0);
       setSshRemoteCwd(null);
+      setSftpConnectionStatus("idle");
+      setSftpConnectionError(null);
     }
     sshActiveServerIdRef.current = selectedSshServerId || null;
   }, [selectedSshServerId]);
@@ -2120,6 +2156,8 @@ function App(): JSX.Element {
                 terminalConnectionSignal={sshTerminalConnectionSignal}
                 sshSessionId={sshActiveSessionId}
                 remoteCwd={sshRemoteCwd}
+                sftpStatus={sftpConnectionStatus}
+                sftpError={sftpConnectionError}
                 onConfigure={() => setSshSettingsOpen(true)}
                 onCommandSubmit={handleSshCommandSubmit}
                 onTerminalConnectionStatusChange={
@@ -2463,6 +2501,8 @@ function App(): JSX.Element {
               terminalConnectionSignal={sshTerminalConnectionSignal}
               sshSessionId={sshActiveSessionId}
               remoteCwd={sshRemoteCwd}
+              sftpStatus={sftpConnectionStatus}
+              sftpError={sftpConnectionError}
               onConfigure={() => setSshSettingsOpen(true)}
               onCommandSubmit={handleSshCommandSubmit}
               onTerminalConnectionStatusChange={

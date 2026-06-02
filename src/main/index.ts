@@ -75,11 +75,12 @@ if (started) {
 }
 
 const APP_NAME = "DevDock";
+const WINDOWS_APP_USER_MODEL_ID = "com.squirrel.devdock.DevDock";
 const LEGACY_APP_NAME = "IVS Dashboard";
 const DATA_MIGRATION_ENV_FLAG = "DEVDOCK_DATA_MIGRATION_COMPLETED";
 app.setName(APP_NAME);
-if (process.platform === "win32" && !app.isPackaged) {
-  app.setAppUserModelId(process.execPath);
+if (process.platform === "win32") {
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
 }
 loadEnvironmentFile();
 

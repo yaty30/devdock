@@ -84,6 +84,7 @@ export type SshConnectionStatus =
   | "failed"
   | "disconnected"
   | "reconnecting";
+export type SftpConnectionStatus = "idle" | "connecting" | "ready" | "failed";
 
 export const SSH_RECONNECT_ATTEMPTS_MIN = 0;
 export const SSH_RECONNECT_ATTEMPTS_MAX = 10;
@@ -1150,6 +1151,8 @@ export function SshTool({
   terminalConnectionSignal = 0,
   sshSessionId = null,
   remoteCwd = null,
+  sftpStatus = "idle",
+  sftpError = null,
   onConfigure,
   onCommandSubmit,
   onTerminalConnectionStatusChange,
@@ -1165,6 +1168,8 @@ export function SshTool({
   terminalConnectionSignal?: number;
   sshSessionId?: string | null;
   remoteCwd?: string | null;
+  sftpStatus?: SftpConnectionStatus;
+  sftpError?: string | null;
   onConfigure?: () => void;
   onCommandSubmit?: (command: string) => Promise<SshExecResult>;
   onTerminalConnectionStatusChange?: (status: XtermConnectionStatus) => void;
@@ -1219,11 +1224,14 @@ export function SshTool({
   const terminalStateRef = useRef<TerminalState>("idle");
   const lastTabCompletionRef = useRef<TerminalTabCompletionState | null>(null);
   const previousStatusRef = useRef<SshConnectionStatus>(connectionStatus);
+  const previousSftpStatusRef = useRef<SftpConnectionStatus>(sftpStatus);
+  const previousSftpErrorRef = useRef<string | null>(sftpError);
   const previousServerIdRef = useRef<string | null>(selectedServer?.id ?? null);
 
   const connected = connectionStatus === "connected";
+  const remoteDirectoryReady = connected && Boolean(sshSessionId);
   const remoteDirectoryLoading =
-    remoteBusyCount > 0 || (connected && !sshSessionId);
+    remoteBusyCount > 0 || sftpStatus === "connecting";
   const commandRunning = terminalState === "running";
   const commandSubmitDisabled = disabled || commandRunning;
   const fallbackRemoteTitle = formatRemoteDirectoryTitle(selectedServer);
@@ -1325,6 +1333,24 @@ export function SshTool({
     void loadRemoteDirectory(startPath, { recordHistory: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRemoteHost, connected, remoteCwd, sshSessionId]);
+
+  useEffect(() => {
+    const previousStatus = previousSftpStatusRef.current;
+    const previousError = previousSftpErrorRef.current;
+    if (previousStatus === sftpStatus && previousError === sftpError) {
+      return;
+    }
+    previousSftpStatusRef.current = sftpStatus;
+    previousSftpErrorRef.current = sftpError;
+
+    if (sftpStatus === "connecting") {
+      appendLines(["Preparing remote directory session..."]);
+    } else if (sftpStatus === "failed") {
+      appendLines([
+        `Remote directory error: ${sftpError ?? "Unable to start SFTP session."}`,
+      ]);
+    }
+  }, [sftpError, sftpStatus]);
 
   useEffect(() => {
     // Reset stream state whenever the active session changes.
@@ -2183,8 +2209,14 @@ export function SshTool({
     path: string | null,
     options: { recordHistory?: boolean } = {},
   ): Promise<void> {
-    if (!connected || !sshSessionId) {
+    if (!connected) {
       appendLines(["Remote directory error: Not connected."]);
+      return;
+    }
+    if (!sshSessionId) {
+      appendLines([
+        `Remote directory error: ${sftpError ?? "SFTP session is not ready."}`,
+      ]);
       return;
     }
 
@@ -2671,8 +2703,12 @@ export function SshTool({
             onUpload={() => void uploadSelectedItems()}
             onDownload={() => void downloadSelectedItems()}
             onNewFolder={() => openNewFolderDialog("local")}
-            uploadDisabled={!connected || selectedLocalIds.length === 0}
-            downloadDisabled={!connected || selectedRemoteIds.length === 0}
+            uploadDisabled={
+              !remoteDirectoryReady || selectedLocalIds.length === 0
+            }
+            downloadDisabled={
+              !remoteDirectoryReady || selectedRemoteIds.length === 0
+            }
             onSubmitPath={(path) => navigateDirectory("local", path)}
             onSelectItem={(item, multiSelect) =>
               toggleItemSelection("local", item, multiSelect)
@@ -2701,7 +2737,7 @@ export function SshTool({
             items={remoteItems}
             source="remote"
             dragOver={dragOverPanel === "remote"}
-            disabled={disabled || !connected}
+            disabled={disabled || !remoteDirectoryReady}
             loading={remoteDirectoryLoading}
             selectedItemIds={selectedRemoteIds}
             onPathChange={setRemotePath}
@@ -2714,8 +2750,12 @@ export function SshTool({
             onUpload={() => void uploadSelectedItems()}
             onDownload={() => void downloadSelectedItems()}
             onNewFolder={() => openNewFolderDialog("remote")}
-            uploadDisabled={!connected || selectedLocalIds.length === 0}
-            downloadDisabled={!connected || selectedRemoteIds.length === 0}
+            uploadDisabled={
+              !remoteDirectoryReady || selectedLocalIds.length === 0
+            }
+            downloadDisabled={
+              !remoteDirectoryReady || selectedRemoteIds.length === 0
+            }
             onSubmitPath={(path) => navigateDirectory("remote", path)}
             onSelectItem={(item, multiSelect) =>
               toggleItemSelection("remote", item, multiSelect)

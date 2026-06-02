@@ -133,6 +133,8 @@ export function XtermTerminal({
     let hostKeyAccepted = false;
     let passwordSent = false;
     let lastActiveHostKey = "";
+    let hasRemotePrompt = false;
+    let remoteConnectionClosed = false;
     let macFailureHintShown = false;
     let inputGate: "locked" | "connecting" | "connected" = autoSsh
       ? "connecting"
@@ -169,7 +171,6 @@ export function XtermTerminal({
         }
         try {
           fitAddon.fit();
-          term.refresh(0, Math.max(0, term.rows - 1));
         } catch {
           return;
         }
@@ -245,7 +246,7 @@ export function XtermTerminal({
               term?.write(data);
               if (autoSsh) {
                 promptBuffer = trimPromptBuffer(promptBuffer + data);
-                if (isSshFailure(promptBuffer)) {
+                if (!hasRemotePrompt && isSshFailure(promptBuffer)) {
                   const macIntegrityFailure =
                     isMacIntegrityFailure(promptBuffer);
                   onConnectionStatusChange?.("failed");
@@ -259,6 +260,8 @@ export function XtermTerminal({
                 }
                 const activeHost = parseActiveHost(promptBuffer);
                 if (activeHost) {
+                  hasRemotePrompt = true;
+                  remoteConnectionClosed = false;
                   const activeHostKey = `${activeHost.username}@${activeHost.host}`;
                   if (activeHostKey !== lastActiveHostKey) {
                     lastActiveHostKey = activeHostKey;
@@ -266,9 +269,17 @@ export function XtermTerminal({
                     onConnectionStatusChange?.("connected");
                     onActiveHostChange?.(activeHost);
                   }
-                } else if (isSshClosed(promptBuffer)) {
+                } else if (hasRemotePrompt && isSshClosed(promptBuffer)) {
+                  remoteConnectionClosed = true;
+                } else if (
+                  hasRemotePrompt &&
+                  remoteConnectionClosed &&
+                  isLocalPrompt(promptBuffer)
+                ) {
                   onConnectionStatusChange?.("disconnected");
-                  setInputGate("locked");
+                  setInputGate("connected");
+                  hasRemotePrompt = false;
+                  remoteConnectionClosed = false;
                   promptBuffer = "";
                   return;
                 }
@@ -523,7 +534,6 @@ function refitTerminal(
   }
   try {
     fitAddon.fit();
-    term.refresh(0, Math.max(0, term.rows - 1));
   } catch {
     return false;
   }
@@ -614,6 +624,18 @@ function isMacIntegrityFailure(value: string): boolean {
 
 function isSshClosed(value: string): boolean {
   return /(?:^|\n)connection to .* closed\.?\s*(?:\n|$)/i.test(value);
+}
+
+function isLocalPrompt(value: string): boolean {
+  const lines = value.split(/\r?\n/);
+  const line = lines[lines.length - 1]?.trimEnd() ?? "";
+  return (
+    /^PS\s+[A-Za-z]:[\\/][^\r\n>]*>\s*$/.test(line) ||
+    /^[A-Za-z]:[\\/][^\r\n>]*>\s*$/.test(line) ||
+    /^[^@\s]+@[A-Za-z0-9._-]+\s+[A-Za-z]:[\\/][^\r\n$#>]*[>$#]\s*$/.test(
+      line,
+    )
+  );
 }
 
 function parseActiveHost(value: string): XtermActiveHost | null {

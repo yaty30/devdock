@@ -115,7 +115,9 @@ function moduleNameFromParts(parts) {
 
 module.exports = {
   packagerConfig: {
-    asar: true,
+    asar: {
+      unpack: "**/node_modules/node-pty/**/*",
+    },
     prune: true,
     icon: path.join(
       __dirname,
