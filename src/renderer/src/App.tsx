@@ -58,10 +58,6 @@ import {
   getSshUsername,
   hasValidSshCredential,
   isValidSshServerCredential,
-  SshHeaderActions,
-  SshHeaderTabs,
-  SshSettingsModal,
-  SshTool,
   storeSelectedSshServerId,
   storeSshServers,
   type SshConnectionStatus,
@@ -69,9 +65,10 @@ import {
   type SshActiveHostContext,
   type SshServerConfig,
   type SshToolTab,
-} from "./features/tools/SshTool";
+} from "./features/tools/sshFeatureState";
 import { ChatFeature } from "./features/chat/ChatDrawer";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
+import { APP_FEATURE_FLAGS } from "../../shared/appFeatures";
 import { MAX_PROJECTS } from "../../shared/appLimits";
 import { isProjectFrontendEnabled } from "../../shared/projectFrontend";
 import type {
@@ -121,6 +118,7 @@ type BuildMiniPanelItem = {
   build: RecentBuildRecord;
   debug?: boolean;
 };
+type SshFeatureModule = typeof import("./features/tools/SshTool");
 type DatabaseRuntimeStatus =
   | "idle"
   | "connecting"
@@ -149,6 +147,10 @@ const ACCENT_OPTIONS: ReadonlyArray<{ value: AccentColor; label: string }> = [
   { value: "pink", label: "Pink" },
   { value: "black", label: "Black" },
 ];
+
+const IS_MACOS =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toLowerCase().includes("mac");
 
 function findSshProfileForTerminalHost(
   context: SshActiveHostContext,
@@ -249,12 +251,10 @@ function App(): JSX.Element {
   const [comparingView, setComparingView] = useState<CompareView>("compare");
   const [cryptoActiveTab, setCryptoActiveTab] =
     useState<CryptographicToolTab>("base64");
-  const [sshServers, setSshServers] = useState<SshServerConfig[]>(() =>
-    readStoredSshServers(),
-  );
-  const [selectedSshServerId, setSelectedSshServerId] = useState(() =>
-    readStoredSelectedSshServerId(sshServers),
-  );
+  const [sshFeatureModule, setSshFeatureModule] =
+    useState<SshFeatureModule | null>(null);
+  const [sshServers, setSshServers] = useState<SshServerConfig[]>([]);
+  const [selectedSshServerId, setSelectedSshServerId] = useState("");
   const [sshSettingsOpen, setSshSettingsOpen] = useState(false);
   const [activeSshTab, setActiveSshTab] = useState<SshToolTab>("ssh");
   const [sshConnectionStatus, setSshConnectionStatus] =
@@ -337,6 +337,7 @@ function App(): JSX.Element {
   const [snackbarClosing, setSnackbarClosing] = useState(false);
   const [chatEnabled, setChatEnabled] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(false);
+  const [macosWindowFullscreen, setMacosWindowFullscreen] = useState(false);
   const [buildMiniPanelMinimized, setBuildMiniPanelMinimized] = useState(false);
   const [dismissedBuildMiniRecordKeys, setDismissedBuildMiniRecordKeys] =
     useState<Set<string>>(() => new Set());
@@ -370,23 +371,75 @@ function App(): JSX.Element {
   }, [selectedDatabaseConnectionId]);
 
   useEffect(() => {
+    if (!IS_MACOS) {
+      return undefined;
+    }
+
+    void window.ivsDashboard.isWindowMaximized().then(setMacosWindowFullscreen);
+    return window.ivsDashboard.onWindowMaximizedChange(
+      setMacosWindowFullscreen,
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    void import("./features/tools/SshTool")
+      .then((module) => {
+        if (cancelled) {
+          return;
+        }
+        const servers = readStoredSshServers();
+        setSshFeatureModule(module);
+        setSshServers(servers);
+        setSelectedSshServerId(readStoredSelectedSshServerId(servers));
+      })
+      .catch((error) => {
+        console.error("[ssh:feature-load]", error);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!APP_FEATURE_FLAGS.ssh || !sshFeatureModule) {
+      return;
+    }
     storeSshServers(sshServers);
     setSelectedSshServerId((current) =>
       sshServers.some((server) => server.id === current)
         ? current
         : (sshServers[0]?.id ?? ""),
     );
-  }, [sshServers]);
+  }, [sshFeatureModule, sshServers]);
 
   useEffect(() => {
+    if (!APP_FEATURE_FLAGS.ssh || !sshFeatureModule) {
+      return;
+    }
     if (selectedSshServerId) {
       storeSelectedSshServerId(selectedSshServerId);
     }
-  }, [selectedSshServerId]);
+  }, [selectedSshServerId, sshFeatureModule]);
 
   useEffect(() => {
     sshActiveSessionIdRef.current = sshActiveSessionId;
   }, [sshActiveSessionId]);
+
+  useEffect(() => {
+    if (APP_FEATURE_FLAGS.ssh || activeSection !== "tools" || activeTool !== "ssh") {
+      return;
+    }
+    // SSH is experimental and intentionally disabled; direct navigation falls
+    // back to the main dashboard until it returns or moves to a separate app.
+    setActiveTool("comparing");
+    setActiveSection("dashboard");
+  }, [activeSection, activeTool]);
 
   useEffect(() => {
     let cancelled = false;
@@ -794,15 +847,20 @@ function App(): JSX.Element {
       )
     : [];
   const selectedSshServer =
-    sshServers.find((server) => server.id === selectedSshServerId) ??
-    sshServers[0] ??
-    null;
+    APP_FEATURE_FLAGS.ssh
+      ? sshServers.find((server) => server.id === selectedSshServerId) ??
+        sshServers[0] ??
+        null
+      : null;
   const sshHasValidCredential = useMemo(
-    () => hasValidSshCredential(sshServers),
+    () => APP_FEATURE_FLAGS.ssh && hasValidSshCredential(sshServers),
     [sshServers],
   );
   const sshSettingsRequired =
-    activeSection === "tools" && activeTool === "ssh" && !sshHasValidCredential;
+    APP_FEATURE_FLAGS.ssh &&
+    activeSection === "tools" &&
+    activeTool === "ssh" &&
+    !sshHasValidCredential;
 
   useEffect(() => {
     if (!sshSettingsRequired) {
@@ -819,6 +877,9 @@ function App(): JSX.Element {
   }, [sshSettingsRequired]);
 
   function saveSshServers(nextServers: SshServerConfig[]): void {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     setSshServers(nextServers);
     const selectedStillExists = nextServers.some(
       (server) => server.id === selectedSshServerId,
@@ -858,6 +919,9 @@ function App(): JSX.Element {
     setSshActiveSessionId(null);
     setSftpConnectionStatus("idle");
     setSftpConnectionError(null);
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     if (!sessionId) {
       return;
     }
@@ -872,6 +936,9 @@ function App(): JSX.Element {
     status: SshConnectionStatus,
     currentAttempt: number,
   ): Promise<void> {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     if (!isValidSshServerCredential(server)) {
       return;
     }
@@ -938,6 +1005,9 @@ function App(): JSX.Element {
   async function syncDirectoryToTerminalHost(
     context: SshActiveHostContext,
   ): Promise<void> {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     const hostProfileKey = getTerminalHostProfileKey(context);
     const mappedProfileId =
       sshTerminalHostProfileMapRef.current.get(hostProfileKey);
@@ -963,7 +1033,9 @@ function App(): JSX.Element {
       await disconnectActiveSshSession();
       setSshRemoteCwd(context.cwd ?? null);
       setSftpConnectionStatus("failed");
-      setSftpConnectionError("No saved SSH profile matches this terminal host.");
+      setSftpConnectionError(
+        "No saved SSH profile matches this terminal host.",
+      );
       return;
     }
     const targetProfile = profile ?? jumpProfile;
@@ -1069,6 +1141,9 @@ function App(): JSX.Element {
   function handleSshTerminalConnectionStatusChange(
     status: SshConnectionStatus,
   ): void {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     clearSshReconnectTimer();
     if (status === "connecting") {
       sshManualDisconnectRef.current = false;
@@ -1092,6 +1167,9 @@ function App(): JSX.Element {
   }
 
   function handleSshTerminalHostChange(context: SshActiveHostContext): void {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     setSshConnectionStatus("connected");
     void syncDirectoryToTerminalHost(context);
   }
@@ -1101,6 +1179,7 @@ function App(): JSX.Element {
     currentAttempt: number,
   ): boolean {
     return (
+      APP_FEATURE_FLAGS.ssh &&
       server.autoReconnect &&
       !sshManualDisconnectRef.current &&
       currentAttempt < server.maxReconnectAttempts &&
@@ -1113,6 +1192,9 @@ function App(): JSX.Element {
     server: SshServerConfig,
     nextAttempt: number,
   ): void {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     setSshReconnectAttempt(nextAttempt);
     setSshConnectionStatus("reconnecting");
     sshReconnectTimerRef.current = window.setTimeout(() => {
@@ -1128,6 +1210,9 @@ function App(): JSX.Element {
   }
 
   function handleSshConnect(server: SshServerConfig): void {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     sshManualDisconnectRef.current = false;
     setSshTerminalConnectionActive(true);
     setSshReconnectAttempt(0);
@@ -1140,6 +1225,9 @@ function App(): JSX.Element {
   }
 
   function handleSshDisconnect(): void {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     sshManualDisconnectRef.current = true;
     clearSshReconnectTimer();
     setSshTerminalConnectionActive(false);
@@ -1152,6 +1240,9 @@ function App(): JSX.Element {
   }
 
   function handleSshConnectionToggle(server: SshServerConfig): void {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     if (
       sshConnectionStatus === "connected" ||
       sshConnectionStatus === "connecting" ||
@@ -1165,6 +1256,14 @@ function App(): JSX.Element {
   }
 
   async function handleSshCommandSubmit(command: string) {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return {
+        stdout: "",
+        stderr: "",
+        exitCode: null,
+        error: "SSH is currently unavailable.",
+      };
+    }
     const sessionId = sshActiveSessionIdRef.current;
     if (sshConnectionStatus !== "connected" || !sessionId) {
       return {
@@ -1194,6 +1293,9 @@ function App(): JSX.Element {
   // XtermTerminal now owns the visible SSH login flow. This effect only resets
   // the old guard when leaving the SSH tool so profile changes can start fresh.
   useEffect(() => {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     const onSshTool = activeSection === "tools" && activeTool === "ssh";
     if (!onSshTool) {
       sshAutoLoginAttemptedRef.current = null;
@@ -1202,6 +1304,9 @@ function App(): JSX.Element {
 
   // Cancel pending SSH activity when selected server changes.
   useEffect(() => {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return;
+    }
     if (
       sshActiveServerIdRef.current !== null &&
       sshActiveServerIdRef.current !== selectedSshServerId
@@ -1221,6 +1326,9 @@ function App(): JSX.Element {
 
   // Cleanup SSH timers on unmount.
   useEffect(() => {
+    if (!APP_FEATURE_FLAGS.ssh) {
+      return undefined;
+    }
     return () => {
       clearSshReconnectTimer();
       void disconnectActiveSshSession();
@@ -1584,6 +1692,14 @@ function App(): JSX.Element {
   }
 
   function handleToolChange(tool: ToolId): void {
+    if (tool === "ssh" && !APP_FEATURE_FLAGS.ssh) {
+      setSettingsOpen(false);
+      setActiveTool("comparing");
+      setActiveSection("dashboard");
+      showSnackbar("SSH is currently unavailable.", "warning");
+      return;
+    }
+
     if (settingsDirty && settingsOpen) {
       setPendingNav(() => () => {
         setSettingsOpen(false);
@@ -1894,6 +2010,10 @@ function App(): JSX.Element {
       onConfirm={() => void confirmDeleteDatabaseConnection()}
     />
   ) : null;
+  const SshHeaderActionsComponent = sshFeatureModule?.SshHeaderActions;
+  const SshHeaderTabsComponent = sshFeatureModule?.SshHeaderTabs;
+  const SshSettingsModalComponent = sshFeatureModule?.SshSettingsModal;
+  const SshToolComponent = sshFeatureModule?.SshTool;
   const cookieModal = (
     <ApiTesterCookieModal
       open={cookieModalOpen}
@@ -1905,6 +2025,18 @@ function App(): JSX.Element {
       onClose={() => setCookieModalOpen(false)}
     />
   );
+  const sshSettingsModal =
+    APP_FEATURE_FLAGS.ssh && SshSettingsModalComponent ? (
+    <SshSettingsModalComponent
+      open={sshSettingsOpen}
+      servers={sshServers}
+      selectedServerId={selectedSshServerId}
+      connectionStatus={sshConnectionStatus}
+      credentialRequired={sshSettingsRequired}
+      onSave={saveSshServers}
+      onClose={closeSshSettings}
+    />
+  ) : null;
   const chatFeature = chatEnabled ? (
     <ChatFeature onToast={showSnackbar} />
   ) : null;
@@ -1938,11 +2070,14 @@ function App(): JSX.Element {
       onClose={() => setInterfaceSettingsOpen(false)}
     />
   );
+  const nativeWindowClass = IS_MACOS
+    ? ` macos-native-window${macosWindowFullscreen ? " macos-window-fullscreen" : ""}`
+    : "";
   if (!selectedProject && !initialStateLoaded) {
     return (
       <div
         ref={appShellRef}
-        className="app-shell"
+        className={`app-shell no-sidebar${nativeWindowClass}`}
         data-theme={theme}
         data-accent={accentColor}
         data-font-size={fontSizeMode}
@@ -1960,7 +2095,7 @@ function App(): JSX.Element {
     return (
       <div
         ref={appShellRef}
-        className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+        className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${nativeWindowClass}`}
         data-theme={theme}
         data-accent={accentColor}
         data-font-size={fontSizeMode}
@@ -2056,8 +2191,11 @@ function App(): JSX.Element {
                       onChange={setFontSizeMode}
                     />
                   </>
-                ) : activeSection === "tools" && activeTool === "ssh" ? (
-                  <SshHeaderActions
+                ) : APP_FEATURE_FLAGS.ssh &&
+                  activeSection === "tools" &&
+                  activeTool === "ssh" &&
+                  SshHeaderActionsComponent ? (
+                  <SshHeaderActionsComponent
                     servers={sshServers}
                     selectedServerId={selectedSshServerId}
                     fontSizeMode={fontSizeMode}
@@ -2110,8 +2248,11 @@ function App(): JSX.Element {
               />
             ) : activeSection === "tools" && activeTool === "notebook" ? (
               <SingleToolHeaderTabs label="Notes" />
-            ) : activeSection === "tools" && activeTool === "ssh" ? (
-              <SshHeaderTabs
+            ) : APP_FEATURE_FLAGS.ssh &&
+              activeSection === "tools" &&
+              activeTool === "ssh" &&
+              SshHeaderTabsComponent ? (
+              <SshHeaderTabsComponent
                 activeTab={activeSshTab}
                 onTabChange={setActiveSshTab}
               />
@@ -2142,8 +2283,10 @@ function App(): JSX.Element {
                 addNoteRequestId={notebookAddRequestId}
                 onFeedback={(message) => showSnackbar(message, "invalid")}
               />
-            ) : activeTool === "ssh" ? (
-              <SshTool
+            ) : APP_FEATURE_FLAGS.ssh &&
+              activeTool === "ssh" &&
+              SshToolComponent ? (
+              <SshToolComponent
                 selectedServer={selectedSshServer}
                 activeTab={activeSshTab}
                 disabled={!sshHasValidCredential}
@@ -2214,6 +2357,7 @@ function App(): JSX.Element {
           />
         ) : null}
         {databaseConnectionDialog}
+        {sshSettingsModal}
         {cookieModal}
         {interfaceSettingsModal}
         {databaseDeleteDialog}
@@ -2226,7 +2370,7 @@ function App(): JSX.Element {
   return (
     <div
       ref={appShellRef}
-      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}${nativeWindowClass}`}
       data-theme={theme}
       data-accent={accentColor}
       data-font-size={fontSizeMode}
@@ -2384,8 +2528,11 @@ function App(): JSX.Element {
                     onChange={setFontSizeMode}
                   />
                 </>
-              ) : activeSection === "tools" && activeTool === "ssh" ? (
-                <SshHeaderActions
+              ) : APP_FEATURE_FLAGS.ssh &&
+                activeSection === "tools" &&
+                activeTool === "ssh" &&
+                SshHeaderActionsComponent ? (
+                <SshHeaderActionsComponent
                   servers={sshServers}
                   selectedServerId={selectedSshServerId}
                   fontSizeMode={fontSizeMode}
@@ -2429,8 +2576,11 @@ function App(): JSX.Element {
             />
           ) : activeSection === "tools" && activeTool === "notebook" ? (
             <SingleToolHeaderTabs label="Notes" />
-          ) : activeSection === "tools" && activeTool === "ssh" ? (
-            <SshHeaderTabs
+          ) : APP_FEATURE_FLAGS.ssh &&
+            activeSection === "tools" &&
+            activeTool === "ssh" &&
+            SshHeaderTabsComponent ? (
+            <SshHeaderTabsComponent
               activeTab={activeSshTab}
               onTabChange={setActiveSshTab}
             />
@@ -2487,8 +2637,10 @@ function App(): JSX.Element {
               addNoteRequestId={notebookAddRequestId}
               onFeedback={(message) => showSnackbar(message, "invalid")}
             />
-          ) : activeTool === "ssh" ? (
-            <SshTool
+          ) : APP_FEATURE_FLAGS.ssh &&
+            activeTool === "ssh" &&
+            SshToolComponent ? (
+            <SshToolComponent
               selectedServer={selectedSshServer}
               activeTab={activeSshTab}
               disabled={!sshHasValidCredential}
@@ -2559,15 +2711,7 @@ function App(): JSX.Element {
         ) : null}
       </main>
 
-      <SshSettingsModal
-        open={sshSettingsOpen}
-        servers={sshServers}
-        selectedServerId={selectedSshServerId}
-        connectionStatus={sshConnectionStatus}
-        credentialRequired={sshSettingsRequired}
-        onSave={saveSshServers}
-        onClose={closeSshSettings}
-      />
+      {sshSettingsModal}
 
       <Modal
         open={settingsOpen && activeProjectState !== null}

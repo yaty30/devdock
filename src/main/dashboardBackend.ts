@@ -189,6 +189,15 @@ const ORACLE_OBJECT_TYPE_BY_COLLECTION: Partial<
   packages: "PACKAGE",
 };
 
+const MYSQL_DESCRIBE_COLUMNS = [
+  { key: "Field", label: "Field", type: "varchar" },
+  { key: "Type", label: "Type", type: "varchar" },
+  { key: "Null", label: "Null", type: "varchar" },
+  { key: "Key", label: "Key", type: "varchar" },
+  { key: "Default", label: "Default", type: "varchar" },
+  { key: "Extra", label: "Extra", type: "varchar" },
+];
+
 type ServiceProcess = {
   child: ChildProcessWithoutNullStreams;
   startedAt: string;
@@ -1392,38 +1401,22 @@ export class DashboardBackend {
 
         const startedAt = performance.now();
         try {
-          const executionResult = await oracleConnection.execute(
-            trimmedStatement,
-            [],
-            {
-              outFormat: oracleDriver.OUT_FORMAT_OBJECT,
-              autoCommit: true,
-              fetchInfo: { DDL: { type: oracleDriver.STRING } },
-            },
-          );
-          const durationMs = Math.max(1, performance.now() - startedAt);
-          const rowArray = Array.isArray(executionResult.rows)
-            ? executionResult.rows
-            : [];
-          const normalizedRows = rowArray.map((row) => normalizeOracleRow(row));
-          const result: DatabaseStatementExecutionResult = {
-            statement: trimmedStatement,
-            columns: (executionResult.metaData ?? []).map((field) => ({
-              key: field.name ?? "",
-              label: field.name ?? "",
-              type: formatOracleResultColumnType(field),
-            })),
-            rows: normalizedRows,
-            status: "success",
-            durationMs,
-            rowsFetched: normalizedRows.length,
-            rowsAffected: executionResult.rowsAffected,
-          };
-          if (executionResult.rowsAffected !== undefined) {
+          const result =
+            (await executeOracleDescribeStatement(
+              oracleConnection,
+              trimmedStatement,
+              startedAt,
+            )) ??
+            (await executeOracleSqlStatement(
+              oracleConnection,
+              trimmedStatement,
+              startedAt,
+            ));
+          if (result.rowsAffected !== undefined) {
             this.updateEstimatedRowCountOverride(
               connection,
               trimmedStatement,
-              executionResult.rowsAffected,
+              result.rowsAffected,
             );
           }
           this.recordDatabaseExecution(connection, result);
@@ -5037,7 +5030,7 @@ function oracleSelectOptions(): OracleExecuteOptions {
 async function executeOracleRows(
   connection: OracleConnection,
   statement: string,
-  binds: unknown[] = [],
+  binds: unknown[] | Record<string, unknown> = [],
 ): Promise<Array<Record<string, unknown>>> {
   const result = await connection.execute(
     statement,
@@ -5058,6 +5051,258 @@ function createOracleInPredicate(
     sql: `${columnName} IN (${placeholders})`,
     binds: values,
   };
+}
+
+async function executeOracleSqlStatement(
+  oracleConnection: OracleConnection,
+  trimmedStatement: string,
+  startedAt: number,
+): Promise<DatabaseStatementExecutionResult> {
+  const executionResult = await oracleConnection.execute(
+    trimmedStatement,
+    [],
+    {
+      outFormat: oracleDriver.OUT_FORMAT_OBJECT,
+      autoCommit: true,
+      fetchInfo: { DDL: { type: oracleDriver.STRING } },
+    },
+  );
+  const durationMs = Math.max(1, performance.now() - startedAt);
+  const rowArray = Array.isArray(executionResult.rows)
+    ? executionResult.rows
+    : [];
+  const normalizedRows = rowArray.map((row) => normalizeOracleRow(row));
+  return {
+    statement: trimmedStatement,
+    columns: (executionResult.metaData ?? []).map((field) => ({
+      key: field.name ?? "",
+      label: field.name ?? "",
+      type: formatOracleResultColumnType(field),
+    })),
+    rows: normalizedRows,
+    status: "success",
+    durationMs,
+    rowsFetched: normalizedRows.length,
+    rowsAffected: executionResult.rowsAffected,
+  };
+}
+
+async function executeOracleDescribeStatement(
+  oracleConnection: OracleConnection,
+  trimmedStatement: string,
+  startedAt: number,
+): Promise<DatabaseStatementExecutionResult | null> {
+  const target = parseOracleDescribeStatement(trimmedStatement);
+  if (!target) {
+    return null;
+  }
+
+  const rows = await executeOracleRows(
+    oracleConnection,
+    `SELECT C.OWNER,
+            C.TABLE_NAME,
+            C.COLUMN_NAME,
+            C.DATA_TYPE,
+            C.DATA_LENGTH,
+            C.CHAR_LENGTH,
+            C.DATA_PRECISION,
+            C.DATA_SCALE,
+            C.NULLABLE,
+            C.DATA_DEFAULT,
+            CASE
+              WHEN EXISTS (
+                SELECT 1
+                FROM ALL_CONSTRAINTS AC
+                JOIN ALL_CONS_COLUMNS ACC
+                  ON ACC.OWNER = AC.OWNER
+                 AND ACC.CONSTRAINT_NAME = AC.CONSTRAINT_NAME
+                 AND ACC.TABLE_NAME = AC.TABLE_NAME
+                WHERE AC.CONSTRAINT_TYPE = 'P'
+                  AND AC.OWNER = C.OWNER
+                  AND AC.TABLE_NAME = C.TABLE_NAME
+                  AND ACC.COLUMN_NAME = C.COLUMN_NAME
+              ) THEN 'PRI'
+              WHEN EXISTS (
+                SELECT 1
+                FROM ALL_CONSTRAINTS AC
+                JOIN ALL_CONS_COLUMNS ACC
+                  ON ACC.OWNER = AC.OWNER
+                 AND ACC.CONSTRAINT_NAME = AC.CONSTRAINT_NAME
+                 AND ACC.TABLE_NAME = AC.TABLE_NAME
+                WHERE AC.CONSTRAINT_TYPE = 'U'
+                  AND AC.OWNER = C.OWNER
+                  AND AC.TABLE_NAME = C.TABLE_NAME
+                  AND ACC.COLUMN_NAME = C.COLUMN_NAME
+              ) OR EXISTS (
+                SELECT 1
+                FROM ALL_INDEXES IX
+                JOIN ALL_IND_COLUMNS IC
+                  ON IC.INDEX_OWNER = IX.OWNER
+                 AND IC.INDEX_NAME = IX.INDEX_NAME
+                 AND IC.TABLE_OWNER = IX.TABLE_OWNER
+                 AND IC.TABLE_NAME = IX.TABLE_NAME
+                WHERE IX.UNIQUENESS = 'UNIQUE'
+                  AND IC.TABLE_OWNER = C.OWNER
+                  AND IC.TABLE_NAME = C.TABLE_NAME
+                  AND IC.COLUMN_NAME = C.COLUMN_NAME
+              ) THEN 'UNI'
+              WHEN EXISTS (
+                SELECT 1
+                FROM ALL_IND_COLUMNS IC
+                WHERE IC.TABLE_OWNER = C.OWNER
+                  AND IC.TABLE_NAME = C.TABLE_NAME
+                  AND IC.COLUMN_NAME = C.COLUMN_NAME
+              ) THEN 'MUL'
+              ELSE ''
+            END AS COLUMN_KEY
+     FROM ALL_TAB_COLUMNS C
+     WHERE C.TABLE_NAME IN (:tableName, :tableNameUpper)
+       AND (
+         (:ownerName IS NULL AND C.OWNER = SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA'))
+         OR (:ownerName IS NOT NULL AND C.OWNER IN (:ownerName, :ownerNameUpper))
+       )
+     ORDER BY C.COLUMN_ID`,
+    {
+      tableName: target.table,
+      tableNameUpper: target.tableUpper,
+      ownerName: target.schema ?? null,
+      ownerNameUpper: target.schemaUpper ?? null,
+    },
+  );
+  const durationMs = Math.max(1, performance.now() - startedAt);
+  const normalizedRows = rows.map((row) => ({
+    Field: normalizeOracleValue(row.COLUMN_NAME),
+    Type: formatOracleDataType(row),
+    Null: String(row.NULLABLE).toUpperCase() === "Y" ? "YES" : "NO",
+    Key: normalizeOracleValue(row.COLUMN_KEY),
+    Default:
+      row.DATA_DEFAULT === null || row.DATA_DEFAULT === undefined
+        ? null
+        : String(row.DATA_DEFAULT).trim(),
+    Extra: "",
+  }));
+
+  if (normalizedRows.length === 0) {
+    throw new Error(`Table '${target.qualifiedName}' doesn't exist.`);
+  }
+
+  return {
+    statement: trimmedStatement,
+    columns: MYSQL_DESCRIBE_COLUMNS,
+    rows: normalizedRows,
+    status: "success",
+    durationMs,
+    rowsFetched: normalizedRows.length,
+  };
+}
+
+function parseOracleDescribeStatement(
+  statement: string,
+): {
+  schema?: string;
+  schemaUpper?: string;
+  table: string;
+  tableUpper: string;
+  qualifiedName: string;
+} | null {
+  const match = /^\s*desc(?:ribe)?\s+(.+?)\s*;?\s*$/i.exec(statement);
+  if (!match?.[1]) {
+    return null;
+  }
+
+  const parts = splitOracleQualifiedIdentifier(match[1].trim());
+  if (parts.length < 1 || parts.length > 2) {
+    return null;
+  }
+
+  const identifiers = parts.map((part) => parseOracleIdentifier(part));
+  if (identifiers.some((identifier) => !identifier)) {
+    return null;
+  }
+
+  const [first, second] = identifiers as [
+    { value: string; quoted: boolean },
+    { value: string; quoted: boolean } | undefined,
+  ];
+  const schema = second ? first.value : undefined;
+  const schemaUpper = second
+    ? normalizeOracleIdentifierForLookup(first)
+    : undefined;
+  const tableIdentifier = second ?? first;
+  const table = tableIdentifier.value;
+  const tableUpper = normalizeOracleIdentifierForLookup(tableIdentifier);
+  return {
+    schema,
+    schemaUpper,
+    table,
+    tableUpper,
+    qualifiedName: schema ? `${schema}.${table}` : table,
+  };
+}
+
+function splitOracleQualifiedIdentifier(target: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let quoted = false;
+
+  for (let index = 0; index < target.length; index += 1) {
+    const char = target[index];
+    const next = target[index + 1];
+    if (char === '"' && quoted && next === '"') {
+      current += '""';
+      index += 1;
+      continue;
+    }
+    if (char === '"') {
+      quoted = !quoted;
+      current += char;
+      continue;
+    }
+    if (char === "." && !quoted) {
+      parts.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  if (quoted) {
+    return [];
+  }
+
+  parts.push(current.trim());
+  return parts;
+}
+
+function parseOracleIdentifier(
+  identifier: string,
+): { value: string; quoted: boolean } | null {
+  if (!identifier) {
+    return null;
+  }
+
+  if (identifier.startsWith('"') || identifier.endsWith('"')) {
+    if (!/^"(?:[^"]|"")+"$/.test(identifier)) {
+      return null;
+    }
+    return {
+      value: identifier.slice(1, -1).replace(/""/g, '"'),
+      quoted: true,
+    };
+  }
+
+  if (!/^[A-Za-z_][\w$#]*$/.test(identifier)) {
+    return null;
+  }
+
+  return { value: identifier, quoted: false };
+}
+
+function normalizeOracleIdentifierForLookup(identifier: {
+  value: string;
+  quoted: boolean;
+}): string {
+  return identifier.quoted ? identifier.value : identifier.value.toUpperCase();
 }
 
 function selectRelevantSchemas(

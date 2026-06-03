@@ -34,9 +34,8 @@ import { dirname, extname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DashboardBackend } from "./dashboardBackend";
 import { ChatService } from "./chatService";
-import { SshService } from "./sshService";
-import { XtermService, type XtermCreateRequest } from "./xtermService";
 import os from "os";
+import { APP_FEATURE_FLAGS } from "../shared/appFeatures";
 import type {
   BuildQueryOptions,
   ApiFetchQueryOptions,
@@ -63,6 +62,8 @@ import type {
   DirectoryListResult,
   SshConnectRequest,
 } from "../shared/dashboardTypes";
+import type { SshService } from "./sshService";
+import type { XtermCreateRequest, XtermService } from "./xtermService";
 import type {
   ChatNativeNotification,
   ChatServiceConfig,
@@ -78,6 +79,7 @@ const APP_NAME = "DevDock";
 const WINDOWS_APP_USER_MODEL_ID = "com.squirrel.devdock.DevDock";
 const LEGACY_APP_NAME = "IVS Dashboard";
 const DATA_MIGRATION_ENV_FLAG = "DEVDOCK_DATA_MIGRATION_COMPLETED";
+const IS_MACOS = process.platform === "darwin";
 app.setName(APP_NAME);
 if (process.platform === "win32") {
   app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
@@ -89,8 +91,8 @@ let chatService: ChatService | null = null;
 let chatConfig: ChatServiceConfig | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
-const sshService = new SshService();
-const xtermService = new XtermService();
+let sshService: SshService | null = null;
+let xtermService: XtermService | null = null;
 const EXIT_AFTER_SHUTDOWN_DELAY_MS = 1000;
 const DATABASE_EXPORT_RESULT_CHANNEL = "database:exportResult";
 const API_TESTER_REQUEST_CHANNEL = "apiTester:sendRequest";
@@ -139,12 +141,29 @@ function getBackend(): DashboardBackend {
   return backend;
 }
 
+function getSshService(): SshService {
+  if (!sshService) {
+    throw new Error("SSH feature is disabled.");
+  }
+
+  return sshService;
+}
+
+function getXtermService(): XtermService {
+  if (!xtermService) {
+    throw new Error("SSH terminal feature is disabled.");
+  }
+
+  return xtermService;
+}
+
 function registerIpc(): void {
   console.info("[main:ipc] registering IPC handlers");
   ipcMain.handle("dashboard:getFeatureFlags", () =>
     withLoggedErrors("dashboard:getFeatureFlags", () => ({
       chatEnabled: CHAT_ENABLED,
       debugEnabled: DEBUG_ENABLED,
+      features: APP_FEATURE_FLAGS,
     })),
   );
   ipcMain.handle("dashboard:showDebugBuildNotification", () =>
@@ -190,18 +209,28 @@ function registerIpc(): void {
       BrowserWindow.fromWebContents(event.sender)?.close();
     }),
   );
-  ipcMain.handle("ssh:connect", (_event, request: SshConnectRequest) =>
-    withLoggedErrors("ssh:connect", () => sshService.connect(request)),
-  );
-  ipcMain.handle("ssh:disconnect", (_event, sessionId: string) =>
-    withLoggedErrors("ssh:disconnect", () => sshService.disconnect(sessionId)),
-  );
-  ipcMain.handle("ssh:exec", (_event, sessionId: string, command: string) =>
-    withLoggedErrors("ssh:exec", () => sshService.exec(sessionId, command)),
-  );
-  ipcMain.handle("ssh:write", (_event, sessionId: string, data: string) =>
-    withLoggedErrors("ssh:write", () => sshService.write(sessionId, data)),
-  );
+  // SSH is experimental and intentionally disabled by default; keep its IPC
+  // handlers and terminal session services dormant until the feature returns.
+  if (APP_FEATURE_FLAGS.ssh) {
+    ipcMain.handle("ssh:connect", (_event, request: SshConnectRequest) =>
+      withLoggedErrors("ssh:connect", () => getSshService().connect(request)),
+    );
+    ipcMain.handle("ssh:disconnect", (_event, sessionId: string) =>
+      withLoggedErrors("ssh:disconnect", () =>
+        getSshService().disconnect(sessionId),
+      ),
+    );
+    ipcMain.handle("ssh:exec", (_event, sessionId: string, command: string) =>
+      withLoggedErrors("ssh:exec", () =>
+        getSshService().exec(sessionId, command),
+      ),
+    );
+    ipcMain.handle("ssh:write", (_event, sessionId: string, data: string) =>
+      withLoggedErrors("ssh:write", () =>
+        getSshService().write(sessionId, data),
+      ),
+    );
+  }
   ipcMain.handle("fs:listLocalDirectory", (_event, path?: string | null) =>
     withLoggedErrors("fs:listLocalDirectory", () => listLocalDirectory(path)),
   );
@@ -221,79 +250,83 @@ function registerIpc(): void {
   ipcMain.handle("fs:previewFile", (_event, path: string) =>
     withLoggedErrors("fs:previewFile", () => previewLocalFile(path)),
   );
-  ipcMain.handle(
-    "ssh:listDirectory",
-    (_event, sessionId: string, path?: string | null) =>
-      withLoggedErrors("ssh:listDirectory", () =>
-        sshService.listDirectory(sessionId, path),
+  if (APP_FEATURE_FLAGS.ssh) {
+    ipcMain.handle(
+      "ssh:listDirectory",
+      (_event, sessionId: string, path?: string | null) =>
+        withLoggedErrors("ssh:listDirectory", () =>
+          getSshService().listDirectory(sessionId, path),
+        ),
+    );
+    ipcMain.handle(
+      "ssh:createDirectory",
+      (_event, sessionId: string, parentPath: string, name: string) =>
+        withLoggedErrors("ssh:createDirectory", () =>
+          getSshService().createDirectory(sessionId, parentPath, name),
+        ),
+    );
+    ipcMain.handle(
+      "ssh:renamePath",
+      (_event, sessionId: string, path: string, newName: string) =>
+        withLoggedErrors("ssh:renamePath", () =>
+          getSshService().renamePath(sessionId, path, newName),
+        ),
+    );
+    ipcMain.handle(
+      "ssh:deletePath",
+      (_event, sessionId: string, path: string, type: "file" | "folder") =>
+        withLoggedErrors("ssh:deletePath", () =>
+          getSshService().deletePath(sessionId, path, type),
+        ),
+    );
+    ipcMain.handle(
+      "ssh:uploadFile",
+      (_event, sessionId: string, localPath: string, remoteDirectory: string) =>
+        withLoggedErrors("ssh:uploadFile", () =>
+          getSshService().uploadFile(sessionId, localPath, remoteDirectory),
+        ),
+    );
+    ipcMain.handle(
+      "ssh:downloadFile",
+      (_event, sessionId: string, remotePath: string, localDirectory: string) =>
+        withLoggedErrors("ssh:downloadFile", () =>
+          getSshService().downloadFile(sessionId, remotePath, localDirectory),
+        ),
+    );
+    ipcMain.handle(
+      "ssh:previewFile",
+      (_event, sessionId: string, remotePath: string) =>
+        withLoggedErrors("ssh:previewFile", () =>
+          getSshService().previewFile(sessionId, remotePath),
+        ),
+    );
+    ipcMain.handle(
+      "xterm:createSession",
+      (_event, request: XtermCreateRequest | undefined) =>
+        withLoggedErrors("xterm:createSession", () =>
+          getXtermService().createSession(request ?? {}),
+        ),
+    );
+    ipcMain.handle(
+      "xterm:input",
+      (_event, sessionId: string, data: string) =>
+        withLoggedErrors("xterm:input", () =>
+          getXtermService().write(sessionId, data),
+        ),
+    );
+    ipcMain.handle(
+      "xterm:resize",
+      (_event, sessionId: string, cols: number, rows: number) =>
+        withLoggedErrors("xterm:resize", () =>
+          getXtermService().resize(sessionId, cols, rows),
+        ),
+    );
+    ipcMain.handle("xterm:killSession", (_event, sessionId: string) =>
+      withLoggedErrors("xterm:killSession", () =>
+        getXtermService().kill(sessionId),
       ),
-  );
-  ipcMain.handle(
-    "ssh:createDirectory",
-    (_event, sessionId: string, parentPath: string, name: string) =>
-      withLoggedErrors("ssh:createDirectory", () =>
-        sshService.createDirectory(sessionId, parentPath, name),
-      ),
-  );
-  ipcMain.handle(
-    "ssh:renamePath",
-    (_event, sessionId: string, path: string, newName: string) =>
-      withLoggedErrors("ssh:renamePath", () =>
-        sshService.renamePath(sessionId, path, newName),
-      ),
-  );
-  ipcMain.handle(
-    "ssh:deletePath",
-    (_event, sessionId: string, path: string, type: "file" | "folder") =>
-      withLoggedErrors("ssh:deletePath", () =>
-        sshService.deletePath(sessionId, path, type),
-      ),
-  );
-  ipcMain.handle(
-    "ssh:uploadFile",
-    (_event, sessionId: string, localPath: string, remoteDirectory: string) =>
-      withLoggedErrors("ssh:uploadFile", () =>
-        sshService.uploadFile(sessionId, localPath, remoteDirectory),
-      ),
-  );
-  ipcMain.handle(
-    "ssh:downloadFile",
-    (_event, sessionId: string, remotePath: string, localDirectory: string) =>
-      withLoggedErrors("ssh:downloadFile", () =>
-        sshService.downloadFile(sessionId, remotePath, localDirectory),
-      ),
-  );
-  ipcMain.handle(
-    "ssh:previewFile",
-    (_event, sessionId: string, remotePath: string) =>
-      withLoggedErrors("ssh:previewFile", () =>
-        sshService.previewFile(sessionId, remotePath),
-      ),
-  );
-  ipcMain.handle(
-    "xterm:createSession",
-    (_event, request: XtermCreateRequest | undefined) =>
-      withLoggedErrors("xterm:createSession", () =>
-        xtermService.createSession(request ?? {}),
-      ),
-  );
-  ipcMain.handle(
-    "xterm:input",
-    (_event, sessionId: string, data: string) =>
-      withLoggedErrors("xterm:input", () =>
-        xtermService.write(sessionId, data),
-      ),
-  );
-  ipcMain.handle(
-    "xterm:resize",
-    (_event, sessionId: string, cols: number, rows: number) =>
-      withLoggedErrors("xterm:resize", () =>
-        xtermService.resize(sessionId, cols, rows),
-      ),
-  );
-  ipcMain.handle("xterm:killSession", (_event, sessionId: string) =>
-    withLoggedErrors("xterm:killSession", () => xtermService.kill(sessionId)),
-  );
+    );
+  }
   ipcMain.handle(
     API_TESTER_REQUEST_CHANNEL,
     (_event, request: ApiTesterRequest) =>
@@ -2008,7 +2041,9 @@ const createWindow = (): void => {
     height: 900,
     minWidth: 1280,
     minHeight: 800,
-    frame: false,
+    frame: !IS_MACOS,
+    titleBarStyle: IS_MACOS ? "hiddenInset" : undefined,
+    trafficLightPosition: IS_MACOS ? { x: 22, y: 18 } : undefined,
     title: "DevDock",
     icon: resolveAppIconPath(),
     backgroundColor: "#f3f4f6",
@@ -2034,28 +2069,30 @@ const createWindow = (): void => {
   mainWindow.on("enter-full-screen", emitMaximizedState);
   mainWindow.on("leave-full-screen", emitMaximizedState);
 
-  sshService.setShellDataSink((sessionId, data) => {
-    const win = mainWindow;
-    if (!win || win.isDestroyed()) {
-      return;
-    }
-    win.webContents.send("ssh:shell-data", { sessionId, data });
-  });
+  if (APP_FEATURE_FLAGS.ssh) {
+    sshService?.setShellDataSink((sessionId, data) => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed()) {
+        return;
+      }
+      win.webContents.send("ssh:shell-data", { sessionId, data });
+    });
 
-  xtermService.setDataSink((sessionId, data) => {
-    const win = mainWindow;
-    if (!win || win.isDestroyed()) {
-      return;
-    }
-    win.webContents.send("xterm:data", { sessionId, data });
-  });
-  xtermService.setExitSink((sessionId, exit) => {
-    const win = mainWindow;
-    if (!win || win.isDestroyed()) {
-      return;
-    }
-    win.webContents.send("xterm:exit", { sessionId, ...exit });
-  });
+    xtermService?.setDataSink((sessionId, data) => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed()) {
+        return;
+      }
+      win.webContents.send("xterm:data", { sessionId, data });
+    });
+    xtermService?.setExitSink((sessionId, exit) => {
+      const win = mainWindow;
+      if (!win || win.isDestroyed()) {
+        return;
+      }
+      win.webContents.send("xterm:exit", { sessionId, ...exit });
+    });
+  }
 
   mainWindow.on("close", (event) => {
     if (isQuitting) return;
@@ -2154,12 +2191,20 @@ const createWindow = (): void => {
   }
 };
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
     migrateLegacyUserDataIfNeeded();
     const userDataPath = app.getPath("userData");
     if (CHAT_ENABLED) {
       chatConfig = initializeChat(userDataPath);
+    }
+    if (APP_FEATURE_FLAGS.ssh) {
+      const [{ SshService }, { XtermService }] = await Promise.all([
+        import("./sshService"),
+        import("./xtermService"),
+      ]);
+      sshService = new SshService();
+      xtermService = new XtermService();
     }
     backend = new DashboardBackend(userDataPath, app.getAppPath());
     registerNotificationActivationHandler();
@@ -2191,8 +2236,8 @@ app.on("before-quit", (event) => {
 
   backend?.shutdown();
   chatService?.stop();
-  sshService.disconnectAll();
-  xtermService.killAll();
+  sshService?.disconnectAll();
+  xtermService?.killAll();
 });
 
 app.on("window-all-closed", () => {

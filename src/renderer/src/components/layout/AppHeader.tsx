@@ -3,6 +3,10 @@ import { Minus, Minimize2, Square, X } from "lucide-react";
 import type { DashboardTab } from "../../types";
 import { SegmentedTabs } from "../navigation/SegmentedTabs";
 
+const IS_MACOS =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toLowerCase().includes("mac");
+
 export function AppHeader({
   activeTab,
   onTabChange,
@@ -32,9 +36,11 @@ export function AppHeader({
 
       <div className="app-header-right">
         <div className="app-header-actions">{actions}</div>
-        <div className="app-header-window-controls">
-          <WindowControls />
-        </div>
+        {!IS_MACOS ? (
+          <div className="app-header-window-controls">
+            <WindowControls />
+          </div>
+        ) : null}
       </div>
     </header>
   );

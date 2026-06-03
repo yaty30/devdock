@@ -614,10 +614,17 @@ body {
   padding: 18px 12px;
   overflow: visible;
   background: var(--surface);
-  border-right: 1px solid var(--border);
   transition:
     width 180ms ease,
-    padding 180ms ease;
+    padding 100ms ease;
+}
+
+.app-shell.macos-native-window .sidebar {
+  padding-top: 62px;
+}
+
+.app-shell.macos-native-window.macos-window-fullscreen .sidebar {
+  padding-top: 18px;
 }
 
 .sidebar.collapsed {
@@ -1478,7 +1485,7 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 14px 16px 12px 14px;
+  padding: 10px 12px;
   overflow: hidden;
   background: var(--surface);
 }
@@ -1497,11 +1504,10 @@ body {
   place-items: center;
   width: 54px;
   height: 100%;
-  min-height: 52px;
+  min-height: 48px;
   padding: 0;
   color: var(--muted);
   background: transparent;
-  border: 1px solid transparent;
   border-radius: 0;
 }
 
@@ -1524,13 +1530,20 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 52px;
-  margin: -14px -16px 6px -14px;
-  padding: 8px 10px 8px 16px;
+  min-height: 48px;
+  margin: -10px -12px 0 -12px;
+  padding: 7px 8px 7px 12px;
   user-select: none;
   -webkit-app-region: drag;
   background: color-mix(in srgb, var(--surface) 88%, var(--app-bg));
-  border-bottom: 1px solid var(--border);
+}
+
+.app-shell.macos-native-window.no-sidebar .app-header {
+  padding-left: 88px;
+}
+
+.app-shell.macos-native-window.macos-window-fullscreen.no-sidebar .app-header {
+  padding-left: 16px;
 }
 
 .app-header-tabs {
@@ -1568,7 +1581,7 @@ body {
   align-items: center;
   flex: 0 0 auto;
   align-self: stretch;
-  margin: -8px -10px -8px 0;
+  margin: -7px -8px -7px 0;
 }
 
 .app-header button,
@@ -3008,8 +3021,8 @@ body {
   gap: 0;
   flex: 1 1 0;
   min-height: 0;
-  margin-top: 4px;
-  padding: 18px 32px 48px;
+  margin-top: 0;
+  padding: 10px 12px 28px;
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-color: var(--accent-soft) transparent;
@@ -3019,17 +3032,17 @@ body {
 .dashboard-kpi-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 16px;
+  gap: 10px;
+  margin-bottom: 10px;
 }
 
 .dashboard-kpi-card {
   display: flex;
   align-items: center;
-  gap: 18px;
+  gap: 12px;
   min-width: 0;
-  min-height: 94px;
-  padding: 17px 20px;
+  min-height: 76px;
+  padding: 12px 14px;
   color: var(--text);
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
@@ -3041,8 +3054,8 @@ body {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 10px;
@@ -3066,7 +3079,7 @@ body {
 .dashboard-project-list {
   display: grid;
   align-content: start;
-  gap: 16px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -3120,7 +3133,7 @@ body {
 
 .dashboard-project-card {
   min-width: 0;
-  padding: 20px 22px 18px;
+  padding: 14px 16px;
   overflow: hidden;
   color: var(--text);
   background: var(--surface);
@@ -3134,16 +3147,16 @@ body {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   min-width: 0;
-  padding-bottom: 16px;
+  padding-bottom: 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
 }
 
 .dashboard-project-title-group {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -3151,8 +3164,8 @@ body {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 48px;
-  height: 48px;
+  width: 42px;
+  height: 42px;
   color: var(--accent);
   font-size: var(--font-xl);
   font-weight: 800;
@@ -3178,7 +3191,7 @@ body {
 }
 
 .dashboard-project-card h2 {
-  margin-bottom: 7px;
+  margin-bottom: 5px;
   font-size: var(--font-xl);
   line-height: 1.2;
 }
@@ -3192,7 +3205,7 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0 16px;
+  gap: 0 10px;
   color: var(--muted);
   font-size: var(--font-md);
 }
@@ -3204,8 +3217,8 @@ body {
 }
 
 .dashboard-project-meta strong:first-of-type {
-  height: 26px;
-  padding: 4px 6px;
+  height: 24px;
+  padding: 3px 6px;
   color: var(--text);
   background: color-mix(in srgb, var(--accent-soft) 32%, var(--subtle-bg));
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
@@ -3223,16 +3236,16 @@ body {
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
 }
 
 .dashboard-status-group {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  min-height: 36px;
-  padding: 0 9px 0 11px;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 8px;
   background: color-mix(in srgb, var(--accent-soft) 24%, var(--subtle-bg));
   border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
   border-radius: 7px;
@@ -3275,8 +3288,8 @@ body {
   align-items: center;
   justify-content: center;
   width: max-content;
-  min-height: 26px;
-  padding: 0 10px;
+  min-height: 24px;
+  padding: 0 8px;
   font-size: var(--font-sm);
   font-weight: 750;
   white-space: nowrap;
@@ -3311,15 +3324,15 @@ body {
     minmax(0, 1fr);
   gap: 0;
   min-width: 0;
-  padding-top: 16px;
+  padding-top: 12px;
 }
 
 .dashboard-project-detail {
   display: grid;
   align-content: start;
   min-width: 0;
-  min-height: 132px;
-  padding: 2px clamp(12px, 1.6vw, 24px) 0;
+  min-height: 112px;
+  padding: 2px clamp(10px, 1.2vw, 18px) 0;
   border-left: 1px solid var(--accent-border);
 }
 
@@ -3335,9 +3348,9 @@ body {
 .dashboard-project-detail header {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
 }
 
 .dashboard-project-detail header svg {
@@ -3352,11 +3365,11 @@ body {
 
 .dashboard-detail-row {
   display: grid;
-  grid-template-columns: 176px minmax(0, 1fr);
+  grid-template-columns: 156px minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  margin-top: 9px;
+  margin-top: 7px;
   color: var(--muted);
   font-size: var(--font-md);
 }
@@ -3437,7 +3450,7 @@ body {
 
   .dashboard-project-detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px 0;
+    gap: 10px 0;
   }
 
   .dashboard-project-detail:nth-child(odd) {
@@ -3448,7 +3461,7 @@ body {
 
 @media (max-width: 760px) {
   .dashboard-overview-screen {
-    padding: 14px 16px 34px;
+    padding: 10px 12px 24px;
   }
 
   .dashboard-kpi-grid,
@@ -9982,11 +9995,7 @@ button.database-tree-item {
   overflow: auto;
   color: var(--ssh-terminal-text);
   font-family:
-    "Cascadia Mono",
-    "SFMono-Regular",
-    Consolas,
-    "Liberation Mono",
-    Menlo,
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
     monospace;
   font-size: var(--font-sm);
   line-height: 1.42;
@@ -10206,11 +10215,7 @@ button.database-tree-item {
   height: 36px;
   color: var(--ssh-terminal-text);
   font-family:
-    "Cascadia Mono",
-    "SFMono-Regular",
-    Consolas,
-    "Liberation Mono",
-    Menlo,
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
     monospace;
   font-size: var(--font-sm);
   background: var(--field-bg);
@@ -10382,7 +10387,7 @@ button.database-tree-item {
   transition:
     color 140ms ease,
     background 140ms ease,
-    border-color 140ms ease,
+    border-color 140ms ease;
 }
 
 .ssh-directory-action-button:hover,
@@ -10422,11 +10427,7 @@ button.database-tree-item {
   padding: 0 10px;
   color: var(--text);
   font-family:
-    "Cascadia Mono",
-    "SFMono-Regular",
-    Consolas,
-    "Liberation Mono",
-    Menlo,
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
     monospace;
   font-size: var(--font-sm);
   background: var(--subtle-bg);
@@ -10543,11 +10544,7 @@ button.database-tree-item {
 .ssh-file-modified-cell {
   color: var(--muted);
   font-family:
-    "Cascadia Mono",
-    "SFMono-Regular",
-    Consolas,
-    "Liberation Mono",
-    Menlo,
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
     monospace;
   font-size: var(--font-xs);
 }
@@ -10665,11 +10662,7 @@ button.database-tree-item {
   overflow: auto;
   color: var(--ssh-terminal-text);
   font-family:
-    "Cascadia Mono",
-    "SFMono-Regular",
-    Consolas,
-    "Liberation Mono",
-    Menlo,
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo,
     monospace;
   font-size: var(--font-sm);
   line-height: 1.55;
@@ -14817,8 +14810,8 @@ button.database-tree-item {
 
 @media (max-width: 1320px) {
   .main-content {
-    padding-right: 24px;
-    padding-left: 24px;
+    padding-right: 12px;
+    padding-left: 12px;
   }
 
   .header-actions {
@@ -14892,10 +14885,18 @@ button.database-tree-item {
   border-radius: 999px;
   background: var(--muted);
 }
-.xterm-status-ready .xterm-status-dot { background: var(--success); }
-.xterm-status-starting .xterm-status-dot { background: var(--warning); }
-.xterm-status-error .xterm-status-dot { background: var(--error); }
-.xterm-status-exited .xterm-status-dot { background: var(--muted); }
+.xterm-status-ready .xterm-status-dot {
+  background: var(--success);
+}
+.xterm-status-starting .xterm-status-dot {
+  background: var(--warning);
+}
+.xterm-status-error .xterm-status-dot {
+  background: var(--error);
+}
+.xterm-status-exited .xterm-status-dot {
+  background: var(--muted);
+}
 .xterm-action-button {
   background: var(--subtle-bg);
   border: 1px solid var(--border);

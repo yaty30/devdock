@@ -19,6 +19,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { APP_VERSION } from "../../../../shared/appVersion";
+import { APP_FEATURE_FLAGS } from "../../../../shared/appFeatures";
 import { getProjectBackendLabel } from "../../../../shared/projectFrontend";
 import { AppLogoIcon } from "../common/AppLogoIcon";
 import { MonitorCloud } from "../common/MonitorCloud";
@@ -38,6 +39,7 @@ type DatabaseInfoFlyoutState = {
   connection: DatabaseConnection;
   top: number;
 } | null;
+const ENABLED_TOOL_COUNT = APP_FEATURE_FLAGS.ssh ? 5 : 4;
 
 export function Sidebar({
   projects,
@@ -516,13 +518,15 @@ export function Sidebar({
                 }
               }}
               aria-expanded={collapsed ? false : toolsOpen}
-              aria-label="Tools (5)"
-              title="Tools (5)"
+              aria-label={`Tools (${ENABLED_TOOL_COUNT})`}
+              title={`Tools (${ENABLED_TOOL_COUNT})`}
             >
               <Wrench size={18} />
               <span className="nav-label project-nav-label">
                 <span>Tools</span>
-                <span className="project-count-badge">5</span>
+                <span className="project-count-badge">
+                  {ENABLED_TOOL_COUNT}
+                </span>
               </span>
               {!collapsed ? (
                 <ChevronDown className="chevron" size={16} />
@@ -591,20 +595,22 @@ export function Sidebar({
                 <NotebookText size={16} />
                 <span>Notebook</span>
               </button>
-              <button
-                className={`project-item tool-item${
-                  activeSection === "tools" && activeTool === "ssh"
-                    ? " active"
-                    : ""
-                }`}
-                type="button"
-                tabIndex={toolsOpen || collapsed ? 0 : -1}
-                onClick={() => onToolChange("ssh")}
-                title="SSH"
-              >
-                <MonitorCloud size={16} />
-                <span>SSH</span>
-              </button>
+              {APP_FEATURE_FLAGS.ssh ? (
+                <button
+                  className={`project-item tool-item${
+                    activeSection === "tools" && activeTool === "ssh"
+                      ? " active"
+                      : ""
+                  }`}
+                  type="button"
+                  tabIndex={toolsOpen || collapsed ? 0 : -1}
+                  onClick={() => onToolChange("ssh")}
+                  title="SSH"
+                >
+                  <MonitorCloud size={16} />
+                  <span>SSH</span>
+                </button>
+              ) : null}
 
               {collapsed ? (
                 <>
@@ -661,19 +667,21 @@ export function Sidebar({
                   >
                     <NotebookText size={18} />
                   </button>
-                  <button
-                    className={`nav-item add-project-collapsed-btn${
-                      activeSection === "tools" && activeTool === "ssh"
-                        ? " active"
-                        : ""
-                    }`}
-                    type="button"
-                    onClick={() => onToolChange("ssh")}
-                    aria-label="SSH"
-                    title="SSH"
-                  >
-                    <MonitorCloud size={18} />
-                  </button>
+                  {APP_FEATURE_FLAGS.ssh ? (
+                    <button
+                      className={`nav-item add-project-collapsed-btn${
+                        activeSection === "tools" && activeTool === "ssh"
+                          ? " active"
+                          : ""
+                      }`}
+                      type="button"
+                      onClick={() => onToolChange("ssh")}
+                      aria-label="SSH"
+                      title="SSH"
+                    >
+                      <MonitorCloud size={18} />
+                    </button>
+                  ) : null}
                 </>
               ) : null}
             </div>
@@ -873,15 +881,17 @@ export function Sidebar({
                 setActiveFlyout(null);
               }}
             />
-            <SidebarFlyoutTool
-              icon={<MonitorCloud size={16} />}
-              label="SSH"
-              isActive={activeSection === "tools" && activeTool === "ssh"}
-              onClick={() => {
-                onToolChange("ssh");
-                setActiveFlyout(null);
-              }}
-            />
+            {APP_FEATURE_FLAGS.ssh ? (
+              <SidebarFlyoutTool
+                icon={<MonitorCloud size={16} />}
+                label="SSH"
+                isActive={activeSection === "tools" && activeTool === "ssh"}
+                onClick={() => {
+                  onToolChange("ssh");
+                  setActiveFlyout(null);
+                }}
+              />
+            ) : null}
           </div>
         </SidebarFlyout>
       ) : null}

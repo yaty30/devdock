@@ -3,6 +3,7 @@ import type {
   ChatServiceConfig,
   ChatUserProfile,
 } from "./chatTypes";
+import type { AppFeatureFlags } from "./appFeatures";
 
 export type BackendType = "wildfly" | "python";
 export type BackendServiceName = BackendType;
@@ -673,6 +674,7 @@ export type DashboardApi = {
   getFeatureFlags: () => Promise<{
     chatEnabled: boolean;
     debugEnabled: boolean;
+    features: AppFeatureFlags;
   }>;
   showDebugBuildNotification: () => Promise<void>;
   isWindowMaximized: () => Promise<boolean>;
