@@ -486,7 +486,7 @@ body {
   background: #ffffff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  box-shadow: 0 18px 44px rgba(17, 24, 39, 0.08);
+  box-shadow: none;
 }
 
 .fatal-startup-panel h1 {
@@ -614,6 +614,7 @@ body {
   padding: 18px 12px;
   overflow: visible;
   background: var(--surface);
+  border-right: 1px solid var(--border);
   transition:
     width 180ms ease,
     padding 100ms ease;
@@ -621,6 +622,7 @@ body {
 
 .app-shell.macos-native-window .sidebar {
   padding-top: 62px;
+  border-right: 0;
 }
 
 .app-shell.macos-native-window.macos-window-fullscreen .sidebar {
@@ -1485,9 +1487,13 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 10px 12px;
+  padding: 14px 16px 12px 14px;
   overflow: hidden;
   background: var(--surface);
+}
+
+.app-shell.macos-native-window .main-content {
+  padding: 10px 12px;
 }
 
 .app-window-controls {
@@ -1504,10 +1510,11 @@ body {
   place-items: center;
   width: 54px;
   height: 100%;
-  min-height: 48px;
+  min-height: 52px;
   padding: 0;
   color: var(--muted);
   background: transparent;
+  border: 1px solid transparent;
   border-radius: 0;
 }
 
@@ -1530,12 +1537,20 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 48px;
-  margin: -10px -12px 0 -12px;
-  padding: 7px 8px 7px 12px;
+  min-height: 52px;
+  margin: -14px -16px 6px -14px;
+  padding: 8px 10px 8px 16px;
   user-select: none;
   -webkit-app-region: drag;
   background: color-mix(in srgb, var(--surface) 88%, var(--app-bg));
+  border-bottom: 1px solid var(--border);
+}
+
+.app-shell.macos-native-window .app-header {
+  min-height: 48px;
+  margin: -10px -12px 0 -12px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 0;
 }
 
 .app-shell.macos-native-window.no-sidebar .app-header {
@@ -1581,6 +1596,10 @@ body {
   align-items: center;
   flex: 0 0 auto;
   align-self: stretch;
+  margin: -8px -10px -8px 0;
+}
+
+.app-shell.macos-native-window .app-header-window-controls {
   margin: -7px -8px -7px 0;
 }
 
@@ -1930,7 +1949,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 6px 16px rgba(17, 24, 39, 0.04);
+  box-shadow: none;
 }
 
 .chat-message.own {
@@ -2809,7 +2828,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.03);
+  box-shadow: none;
 }
 
 .service-control-card span {
@@ -3047,7 +3066,7 @@ body {
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--border));
   border-radius: 12px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .dashboard-kpi-icon {
@@ -3139,7 +3158,7 @@ body {
   background: var(--surface);
   border: 1px solid color-mix(in srgb, var(--accent) 10%, var(--border));
   border-radius: 12px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
   user-select: none;
 }
 
@@ -3416,7 +3435,7 @@ body {
   background: color-mix(in srgb, var(--accent-soft) 18%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--border));
   border-radius: 12px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .dashboard-database-empty {
@@ -4519,17 +4538,16 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
   transition:
     border-color 150ms ease,
-    box-shadow 150ms ease,
     transform 120ms ease;
 }
 
 .note-preview-card:hover,
 .note-preview-card:focus-visible {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: 0 12px 28px color-mix(in srgb, var(--accent) 13%, transparent);
+  box-shadow: none;
   outline: none;
 }
 
@@ -4593,7 +4611,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .sheet-card.expanded {
@@ -5346,7 +5364,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .monitor-card-one {
@@ -8947,7 +8965,7 @@ button.database-tree-item {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 7px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .database-result-th-content {
@@ -9189,7 +9207,7 @@ button.database-tree-item {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .database-summary-card span {
@@ -9806,7 +9824,7 @@ button.database-tree-item {
   background: var(--subtle-bg);
   border: 1px solid var(--border);
   border-radius: 8px;
-  box-shadow: var(--shadow-lg);
+  box-shadow: none;
   transform: translate(-50%, -50%);
 }
 
@@ -9852,7 +9870,7 @@ button.database-tree-item {
   color: var(--ssh-terminal-text);
   background: var(--ssh-terminal-shell);
   border-color: var(--border);
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
   transition:
     opacity 180ms ease,
     border-color 180ms ease;
@@ -9872,7 +9890,7 @@ button.database-tree-item {
   --ssh-terminal-command: #6ee7f9;
   --ssh-terminal-directory: #6cc9ff;
   --ssh-terminal-file: #8af59e;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+  box-shadow: none;
 }
 
 .ssh-cli-panel .panel-header,
@@ -10322,7 +10340,7 @@ button.database-tree-item {
   color: var(--text);
   background: var(--subtle-bg);
   border-color: var(--border);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
+  box-shadow: none;
 }
 
 .ssh-directory-panel .panel-header {
@@ -10844,7 +10862,7 @@ button.database-tree-item {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: none;
 }
 
 .ssh-settings-connection-card.is-new .ssh-settings-connection-icon {
@@ -14085,7 +14103,7 @@ button.database-tree-item {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.18);
+  box-shadow: none;
   transform-origin: right bottom;
 }
 

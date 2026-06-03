@@ -2041,7 +2041,7 @@ const createWindow = (): void => {
     height: 900,
     minWidth: 1280,
     minHeight: 800,
-    frame: !IS_MACOS,
+    frame: false,
     titleBarStyle: IS_MACOS ? "hiddenInset" : undefined,
     trafficLightPosition: IS_MACOS ? { x: 22, y: 18 } : undefined,
     title: "DevDock",
