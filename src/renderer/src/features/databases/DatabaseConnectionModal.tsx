@@ -52,9 +52,10 @@ const DEFAULT_CONNECTION_TIMEOUT_SECONDS = "10";
 const DATABASE_TYPE_OPTIONS: Array<AppSelectOption<DatabaseConnectionType>> = [
   { value: "MySQL", label: "MySQL", dotColor: "#2563eb" },
   { value: "Oracle", label: "Oracle", dotColor: "#ef4444" },
+  { value: "PostgreSQL", label: "PostgreSQL", dotColor: "#14b8a6" },
 ];
 
-const MYSQL_SSL_OPTIONS: Array<AppSelectOption<DatabaseSslMode>> = [
+const DATABASE_SSL_OPTIONS: Array<AppSelectOption<DatabaseSslMode>> = [
   { value: "disabled", label: "Disabled", dotColor: "var(--muted)" },
   { value: "preferred", label: "Preferred", dotColor: "var(--info)" },
   { value: "required", label: "Required", dotColor: "var(--error)" },
@@ -144,8 +145,8 @@ export function DatabaseConnectionModal({
     setDraft((current) => ({
       ...current,
       type,
-      port: type === "MySQL" ? "3306" : "1521",
-      sslMode: type === "MySQL" ? current.sslMode : "disabled",
+      port: defaultPortForDatabaseType(type),
+      sslMode: type === "Oracle" ? "disabled" : current.sslMode,
       connectionMode:
         type === "Oracle" ? current.connectionMode : "serviceName",
       serviceName: type === "Oracle" ? current.serviceName || "XEPDB1" : "",
@@ -376,9 +377,11 @@ export function DatabaseConnectionModal({
           </div>
         </section>
 
-        {draft.type === "MySQL" ? (
+        {draft.type !== "Oracle" ? (
           <section className="database-connection-section database-specific-fields">
-            <h3 className="database-connection-section-title">MySQL options</h3>
+            <h3 className="database-connection-section-title">
+              {draft.type} options
+            </h3>
             <div className="database-connection-form-grid">
               <ConnectionField label="Default database/schema">
                 <input
@@ -394,7 +397,7 @@ export function DatabaseConnectionModal({
                 <AppSelect
                   className="database-form-select"
                   value={draft.sslMode}
-                  options={MYSQL_SSL_OPTIONS}
+                  options={DATABASE_SSL_OPTIONS}
                   onChange={(value) => updateDraft("sslMode", value)}
                   ariaLabel="SSL mode"
                 />
@@ -600,7 +603,7 @@ function createConnectionDraft(
       networkAlias:
         connection.networkAlias ??
         (connection.connectionMode === "tnsAlias"
-          ? connection.connectString ?? connection.schema ?? ""
+          ? (connection.connectString ?? connection.schema ?? "")
           : ""),
       role: connection.role ?? "",
       walletPath: connection.walletPath ?? "",
@@ -611,7 +614,7 @@ function createConnectionDraft(
     name: "",
     type: "MySQL",
     host: "localhost",
-    port: "3306",
+    port: defaultPortForDatabaseType("MySQL"),
     user: "",
     password: "",
     savePassword: true,
@@ -733,15 +736,17 @@ function createConnectionFromDraft(
     ? Number(draft.connectionTimeoutSeconds)
     : Number(DEFAULT_CONNECTION_TIMEOUT_SECONDS);
   const schema =
-    draft.type === "MySQL"
-      ? draft.database.trim()
-      : draft.connectionMode === "sid"
+    draft.type === "Oracle"
+      ? draft.connectionMode === "sid"
         ? draft.sid.trim()
         : draft.connectionMode === "connectString"
           ? draft.connectString.trim()
           : draft.connectionMode === "tnsAlias"
             ? draft.networkAlias.trim()
-            : draft.serviceName.trim();
+            : draft.serviceName.trim()
+      : draft.type === "PostgreSQL"
+        ? draft.database.trim()
+        : draft.database.trim();
 
   // TODO: store saved passwords in secure Electron/OS credential storage.
   return {
@@ -781,4 +786,14 @@ function isOracleIndirectConnection(draft: DatabaseConnectionDraft): boolean {
     (draft.connectionMode === "connectString" ||
       draft.connectionMode === "tnsAlias")
   );
+}
+
+function defaultPortForDatabaseType(type: DatabaseConnectionType): string {
+  if (type === "Oracle") {
+    return "1521";
+  }
+  if (type === "PostgreSQL") {
+    return "5432";
+  }
+  return "3306";
 }

@@ -618,8 +618,8 @@ export function quoteSqlIdentifier(
   identifier: string,
   connectionType: DatabaseConnectionType,
 ): string {
-  if (connectionType === "Oracle") {
-    return `"${identifier.replace(/"/g, "\"\"")}"`;
+  if (connectionType === "Oracle" || connectionType === "PostgreSQL") {
+    return `"${identifier.replace(/"/g, '""')}"`;
   }
 
   return `\`${identifier.replace(/`/g, "``")}\``;

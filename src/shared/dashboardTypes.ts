@@ -305,7 +305,7 @@ export type BrowsePathOptions = {
 };
 
 export type DatabaseConnectionStatus = "connected" | "disconnected" | "error";
-export type DatabaseConnectionType = "MySQL" | "Oracle";
+export type DatabaseConnectionType = "MySQL" | "Oracle" | "PostgreSQL";
 export type DatabaseSslMode = "disabled" | "preferred" | "required";
 export type OracleConnectionMode =
   | "serviceName"
@@ -685,9 +685,7 @@ export type DashboardApi = {
   sshDisconnect: (sessionId: string) => Promise<SshDisconnectResult>;
   sshExec: (sessionId: string, command: string) => Promise<SshExecResult>;
   sshWrite: (sessionId: string, data: string) => Promise<SshWriteResult>;
-  onSshShellData: (
-    listener: (event: SshShellDataEvent) => void,
-  ) => () => void;
+  onSshShellData: (listener: (event: SshShellDataEvent) => void) => () => void;
   listLocalDirectory: (path?: string | null) => Promise<DirectoryListResult>;
   sshListDirectory: (
     sessionId: string,

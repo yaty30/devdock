@@ -334,11 +334,10 @@ const ORACLE_LAZY_OBJECT_COLLECTIONS = [
   "packages",
 ] as const;
 
-type OracleLazyObjectCollection =
-  (typeof ORACLE_LAZY_OBJECT_COLLECTIONS)[number];
+type LazyObjectCollection = (typeof ORACLE_LAZY_OBJECT_COLLECTIONS)[number];
 
 const OBJECT_TYPE_BY_COLLECTION: Record<
-  OracleLazyObjectCollection,
+  LazyObjectCollection,
   DatabaseObjectType
 > = {
   views: "view",
@@ -473,8 +472,8 @@ function quoteSqlIdentifier(
   value: string,
   connectionType: DatabaseConnectionType,
 ): string {
-  if (connectionType === "Oracle") {
-    return `"${value.replace(/"/g, "\"\"")}"`;
+  if (connectionType === "Oracle" || connectionType === "PostgreSQL") {
+    return `"${value.replace(/"/g, '""')}"`;
   }
 
   return `\`${value.replace(/`/g, "``")}\``;
@@ -518,8 +517,32 @@ function createObjectTemplate(
   const tableName = table
     ? formatQualifiedIdentifier(table.schema, table.name, connectionType)
     : "table_name";
+  if (connectionType === "PostgreSQL") {
+    const templates: Record<DatabaseObjectType, string> = {
+      table: limitSelectTemplate(
+        `SELECT *\nFROM ${tableName};`,
+        connectionType,
+        100,
+      ),
+      view: "CREATE OR REPLACE VIEW __object_name__\nAS\nSELECT *\nFROM table_name;",
+      procedure:
+        "CREATE PROCEDURE __object_name__()\nLANGUAGE plpgsql\nAS $$\nBEGIN\n\nEND;\n$$;",
+      function:
+        "CREATE FUNCTION __object_name__() RETURNS integer\nLANGUAGE sql\nAS $$\n  SELECT 0;\n$$;",
+      type: "CREATE TYPE __object_name__ AS (\n  field_name text\n);",
+      sequence: "CREATE SEQUENCE __object_name__ START WITH 1 INCREMENT BY 1;",
+      package: "-- PostgreSQL does not support packages.",
+      trigger: `CREATE TRIGGER __object_name__\nBEFORE INSERT ON ${tableName}\nFOR EACH ROW\nEXECUTE FUNCTION trigger_function();`,
+      index: `CREATE INDEX __object_name__ ON ${tableName} (column_name);`,
+    };
+    return templates[objectType];
+  }
   const templates: Record<DatabaseObjectType, string> = {
-    table: limitSelectTemplate(`SELECT *\nFROM ${tableName};`, connectionType, 100),
+    table: limitSelectTemplate(
+      `SELECT *\nFROM ${tableName};`,
+      connectionType,
+      100,
+    ),
     view: "CREATE OR REPLACE VIEW __object_name__\nAS\nSELECT *\nFROM table_name;",
     procedure:
       "DELIMITER //\n\nCREATE PROCEDURE __object_name__()\nBEGIN\n\nEND //\n\nDELIMITER ;",
@@ -571,9 +594,14 @@ function findCreateStatement(
 function formatLoadedObjectSql(
   objectType: DatabaseObjectType,
   createSql: string,
+  connectionType: DatabaseConnectionType,
 ): string {
   if (objectType === "view") {
     return createSql.replace(/^CREATE\s+VIEW/i, "CREATE OR REPLACE VIEW");
+  }
+
+  if (connectionType === "PostgreSQL") {
+    return createSql;
   }
 
   if (
@@ -639,9 +667,26 @@ function createObjectSaveSql(
     binding.objectType === "sequence" ||
     binding.objectType === "package"
   ) {
+    if (
+      connectionType === "PostgreSQL" &&
+      (binding.objectType === "procedure" || binding.objectType === "function")
+    ) {
+      return `DROP ${binding.objectType.toUpperCase()} IF EXISTS ${qualifiedName}();\n${sql}`;
+    }
     return `DROP ${binding.objectType.toUpperCase()} IF EXISTS ${qualifiedName};\n${sql}`;
   }
   if (binding.objectType === "trigger") {
+    if (connectionType === "PostgreSQL" && binding.tableName) {
+      const qualifiedTable = formatQualifiedIdentifier(
+        binding.schema,
+        binding.tableName,
+        connectionType,
+      );
+      return `DROP TRIGGER IF EXISTS ${quoteSqlIdentifier(
+        binding.name,
+        connectionType,
+      )} ON ${qualifiedTable};\n${sql}`;
+    }
     return `DROP TRIGGER IF EXISTS ${qualifiedName};\n${sql}`;
   }
   if (binding.objectType === "index" && binding.tableName) {
@@ -650,6 +695,14 @@ function createObjectSaveSql(
       binding.tableName,
       connectionType,
     );
+    if (connectionType === "PostgreSQL") {
+      const qualifiedIndex = formatQualifiedIdentifier(
+        binding.schema,
+        binding.name,
+        connectionType,
+      );
+      return `DROP INDEX IF EXISTS ${qualifiedIndex};\n${sql}`;
+    }
     if (binding.name.toUpperCase() === "PRIMARY") {
       return `ALTER TABLE ${qualifiedTable} DROP PRIMARY KEY;\n${sql}`;
     }
@@ -679,6 +732,15 @@ function createIndexDefinitionSql(
     : "column_name";
   if (index.name.toUpperCase() === "PRIMARY") {
     return `ALTER TABLE ${qualifiedTable} ADD PRIMARY KEY (${columns});`;
+  }
+
+  if (connectionType === "PostgreSQL") {
+    const qualifiedIndex = formatQualifiedIdentifier(
+      table.schema,
+      index.name,
+      connectionType,
+    );
+    return `CREATE INDEX ${qualifiedIndex} ON ${qualifiedTable} (${columns});`;
   }
 
   return `ALTER TABLE ${qualifiedTable} ADD INDEX ${quoteSqlIdentifier(
@@ -740,6 +802,9 @@ function isIncrementallyPageableSelect(
   if (connectionType === "MySQL") {
     return !/\blimit\b/iu.test(normalized);
   }
+  if (connectionType === "PostgreSQL") {
+    return !/\blimit\b/iu.test(normalized);
+  }
   return !/(\bfetch\s+(?:first|next)\b|\boffset\b|\brownum\b)/iu.test(
     normalized,
   );
@@ -757,7 +822,7 @@ function createIncrementalSelectStatement({
   pageSize: number;
 }): string {
   const normalized = normalizeExecutableStatement(statement);
-  if (connectionType === "MySQL") {
+  if (connectionType === "MySQL" || connectionType === "PostgreSQL") {
     return `${normalized} LIMIT ${pageSize} OFFSET ${offset}`;
   }
   return `${normalized} OFFSET ${offset} ROWS FETCH NEXT ${pageSize} ROWS ONLY`;
@@ -842,6 +907,57 @@ function createOracleObjectDefinitionStatement(
   return `SELECT DBMS_METADATA.GET_DDL('${ddlType}', '${escapeSqlStringLiteral(
     objectName,
   )}', '${escapeSqlStringLiteral(schemaName)}') AS DDL FROM DUAL`;
+}
+
+function createPostgresObjectDefinitionStatement(
+  objectType: DatabaseObjectType,
+  schemaName: string,
+  objectName: string,
+  qualifiedName: string,
+): string {
+  const schema = escapeSqlStringLiteral(schemaName);
+  const name = escapeSqlStringLiteral(objectName);
+  const qualifiedLiteral = escapeSqlStringLiteral(
+    schemaName ? `${schemaName}.${objectName}` : objectName,
+  );
+
+  if (objectType === "view") {
+    return `SELECT 'CREATE OR REPLACE VIEW ${qualifiedName} AS\n' || pg_get_viewdef('${qualifiedLiteral}'::regclass, true) AS DDL`;
+  }
+
+  if (objectType === "function" || objectType === "procedure") {
+    const prokind = objectType === "procedure" ? "p" : "f";
+    return `SELECT pg_get_functiondef(p.oid) AS DDL
+FROM pg_proc p
+JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = '${schema}'
+  AND p.proname = '${name}'
+  AND p.prokind = '${prokind}'
+ORDER BY p.oid
+LIMIT 1`;
+  }
+
+  if (objectType === "trigger") {
+    return `SELECT pg_get_triggerdef(t.oid, true) AS DDL
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = '${schema}'
+  AND t.tgname = '${name}'
+  AND NOT t.tgisinternal
+ORDER BY t.oid
+LIMIT 1`;
+  }
+
+  if (objectType === "sequence") {
+    return `SELECT 'CREATE SEQUENCE ${qualifiedName};' AS DDL`;
+  }
+
+  if (objectType === "type") {
+    return `SELECT 'CREATE TYPE ${qualifiedName} AS ();' AS DDL`;
+  }
+
+  return "";
 }
 
 export function DatabaseWorkspace({
@@ -1529,24 +1645,27 @@ function ConnectionActionWorkspace({
     return `${connection.id}:${selectedSchema}:${collection}`;
   }
 
-  function getObjectCollectionCount(
-    collection: OracleLazyObjectCollection,
-  ): number {
+  function getObjectCollectionCount(collection: LazyObjectCollection): number {
     return metadata.objectCounts[collection] ?? metadata[collection].length;
   }
 
   function isObjectCollectionLoading(
-    collection: OracleLazyObjectCollection,
+    collection: LazyObjectCollection,
   ): boolean {
-    return Boolean(loadingObjectCollections[createObjectCollectionLoadKey(collection)]);
+    return Boolean(
+      loadingObjectCollections[createObjectCollectionLoadKey(collection)],
+    );
   }
 
-  function loadObjectCollection(collection: OracleLazyObjectCollection): void {
+  function loadObjectCollection(collection: LazyObjectCollection): void {
     if (connection.type !== "Oracle") {
       return;
     }
 
-    if (metadata[collection].length > 0 || getObjectCollectionCount(collection) === 0) {
+    if (
+      metadata[collection].length > 0 ||
+      getObjectCollectionCount(collection) === 0
+    ) {
       return;
     }
 
@@ -1561,7 +1680,8 @@ function ConnectionActionWorkspace({
       .then((objectNames) => {
         setMetadataStateByConnection((current) => {
           const currentState = current[connection.id];
-          const currentMetadata = currentState?.metadata ?? createEmptyMetadata();
+          const currentMetadata =
+            currentState?.metadata ?? createEmptyMetadata();
           const nextMetadata = {
             ...currentMetadata,
             [collection]: objectNames,
@@ -1586,7 +1706,7 @@ function ConnectionActionWorkspace({
   }
 
   function renderObjectCollectionItems(
-    collection: OracleLazyObjectCollection,
+    collection: LazyObjectCollection,
     icon: ReactNode,
   ): ReactNode {
     const objectType = OBJECT_TYPE_BY_COLLECTION[collection];
@@ -1778,15 +1898,22 @@ function ConnectionActionWorkspace({
               effectiveConnection.database ||
               effectiveConnection.user,
           )
-        : objectType === "view"
-          ? `SHOW CREATE VIEW ${target};`
-          : objectType === "procedure"
-            ? `SHOW CREATE PROCEDURE ${target};`
-            : objectType === "function"
-              ? `SHOW CREATE FUNCTION ${target};`
-              : objectType === "trigger"
-                ? `SHOW CREATE TRIGGER ${target};`
-                : "";
+        : connection.type === "PostgreSQL"
+          ? createPostgresObjectDefinitionStatement(
+              objectType,
+              schema,
+              name,
+              target,
+            )
+          : objectType === "view"
+            ? `SHOW CREATE VIEW ${target};`
+            : objectType === "procedure"
+              ? `SHOW CREATE PROCEDURE ${target};`
+              : objectType === "function"
+                ? `SHOW CREATE FUNCTION ${target};`
+                : objectType === "trigger"
+                  ? `SHOW CREATE TRIGGER ${target};`
+                  : "";
     if (!statement) {
       return `-- Failed to load ${objectType} definition`;
     }
@@ -1800,7 +1927,7 @@ function ConnectionActionWorkspace({
       | undefined;
     const createSql = findCreateStatement(row, objectType);
     return createSql
-      ? formatLoadedObjectSql(objectType, createSql)
+      ? formatLoadedObjectSql(objectType, createSql, connection.type)
       : `-- Failed to load ${objectType} definition`;
   }
 
@@ -1828,7 +1955,10 @@ function ConnectionActionWorkspace({
     event.dataTransfer.dropEffect = "move";
   }
 
-  function dropSheet(event: DragEvent<HTMLElement>, targetSheetId: string): void {
+  function dropSheet(
+    event: DragEvent<HTMLElement>,
+    targetSheetId: string,
+  ): void {
     event.preventDefault();
     const draggedSheetId =
       draggingSheetId || event.dataTransfer.getData("text/plain");
@@ -2279,7 +2409,12 @@ function ConnectionActionWorkspace({
       (tab) => tab.id === tabId,
     );
     const pageRequest = targetTab?.pagination;
-    if (!targetSheet || !pageRequest || pageRequest.loading || !pageRequest.hasMore) {
+    if (
+      !targetSheet ||
+      !pageRequest ||
+      pageRequest.loading ||
+      !pageRequest.hasMore
+    ) {
       return;
     }
 
@@ -2346,7 +2481,9 @@ function ConnectionActionWorkspace({
       }));
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Failed to load additional rows.";
+        error instanceof Error
+          ? error.message
+          : "Failed to load additional rows.";
       updateSheetOutput(targetSheet.id, (output) => ({
         ...output,
         resultTabs: output.resultTabs.map((tab) =>
@@ -2990,7 +3127,7 @@ function ConnectionActionWorkspace({
               <SquareFunction size={15} />,
             )}
           </ObjectTreeGroup>
-          {connection.type === "Oracle" ? (
+          {connection.type === "Oracle" || connection.type === "PostgreSQL" ? (
             <>
               <ObjectTreeGroup
                 title={
@@ -3026,11 +3163,12 @@ function ConnectionActionWorkspace({
                   activeSheet?.objectBinding?.objectType === "sequence"
                 }
               >
-                {renderObjectCollectionItems(
-                  "sequences",
-                  <Sigma size={15} />,
-                )}
+                {renderObjectCollectionItems("sequences", <Sigma size={15} />)}
               </ObjectTreeGroup>
+            </>
+          ) : null}
+          {connection.type === "Oracle" ? (
+            <>
               <ObjectTreeGroup
                 title={
                   <>

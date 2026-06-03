@@ -163,6 +163,46 @@ type OracleConnection = {
 const oracleDriver = require("oracledb") as OracleDbModule;
 let oracleClientInitAttempted = false;
 
+type PostgresModule = {
+  Client: new (options: PostgresClientOptions) => PostgresClient;
+  types?: {
+    builtins?: Record<string, number>;
+  };
+};
+
+type PostgresClientOptions = {
+  host: string;
+  port: number;
+  user: string;
+  password?: string;
+  database?: string;
+  connectionTimeoutMillis: number;
+  ssl?: boolean | { rejectUnauthorized: boolean };
+};
+
+type PostgresField = {
+  name: string;
+  dataTypeID: number;
+};
+
+type PostgresQueryResult = {
+  command?: string;
+  fields: PostgresField[];
+  rowCount: number | null;
+  rows: Array<Record<string, unknown>>;
+};
+
+type PostgresClient = {
+  connect: () => Promise<void>;
+  query: (
+    statement: string,
+    values?: unknown[],
+  ) => Promise<PostgresQueryResult>;
+  end: () => Promise<void>;
+};
+
+const postgresDriver = require("pg") as PostgresModule;
+
 const ORACLE_OBJECT_COUNT_KEY_BY_TYPE: Record<
   string,
   DatabaseObjectCollectionName
@@ -187,6 +227,59 @@ const ORACLE_OBJECT_TYPE_BY_COLLECTION: Partial<
   types: "TYPE",
   sequences: "SEQUENCE",
   packages: "PACKAGE",
+};
+
+const POSTGRES_OBJECT_NAME_QUERY_BY_COLLECTION: Partial<
+  Record<DatabaseObjectCollectionName, string>
+> = {
+  views: `SELECT table_schema AS object_schema,
+                 table_name AS object_name
+          FROM information_schema.views
+          WHERE table_schema = ANY($1)
+          ORDER BY table_schema, table_name`,
+  procedures: `SELECT n.nspname AS object_schema,
+                      p.proname AS object_name
+               FROM pg_proc p
+               JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname = ANY($1)
+                 AND p.prokind = 'p'
+               ORDER BY n.nspname, p.proname`,
+  functions: `SELECT n.nspname AS object_schema,
+                     p.proname AS object_name
+              FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+              WHERE n.nspname = ANY($1)
+                AND p.prokind = 'f'
+              ORDER BY n.nspname, p.proname`,
+  types: `SELECT n.nspname AS object_schema,
+                 t.typname AS object_name
+          FROM pg_type t
+          JOIN pg_namespace n ON n.oid = t.typnamespace
+          WHERE n.nspname = ANY($1)
+            AND t.typtype IN ('b', 'c', 'd', 'e', 'r')
+            AND NOT EXISTS (
+              SELECT 1
+              FROM pg_class c
+              WHERE c.oid = t.typrelid
+                AND c.relkind IN ('r', 'p', 'v', 'm', 'c')
+            )
+          ORDER BY n.nspname, t.typname`,
+  sequences: `SELECT sequence_schema AS object_schema,
+                     sequence_name AS object_name
+              FROM information_schema.sequences
+              WHERE sequence_schema = ANY($1)
+              ORDER BY sequence_schema, sequence_name`,
+  triggers: `SELECT event_object_schema AS object_schema,
+                    trigger_name AS object_name
+             FROM information_schema.triggers
+             WHERE trigger_schema = ANY($1)
+             GROUP BY event_object_schema, trigger_name
+             ORDER BY event_object_schema, trigger_name`,
+  indexes: `SELECT schemaname AS object_schema,
+                   indexname AS object_name
+            FROM pg_indexes
+            WHERE schemaname = ANY($1)
+            ORDER BY schemaname, indexname`,
 };
 
 const MYSQL_DESCRIBE_COLUMNS = [
@@ -718,6 +811,33 @@ export class DashboardBackend {
       }
     }
 
+    if (connection.type === "PostgreSQL") {
+      let postgresClient: PostgresClient | null = null;
+      try {
+        postgresClient = createPostgresClient(connection);
+        await postgresClient.connect();
+        await postgresClient.query("SELECT 1 AS health_check");
+        const latency = `${Math.max(1, performance.now() - startedAt).toFixed(1)} ms`;
+        return {
+          success: true,
+          message: `Connected to ${connection.host}:${connection.port}.`,
+          latency,
+        };
+      } catch (error) {
+        return {
+          success: false,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Database connection test failed.",
+        };
+      } finally {
+        if (postgresClient) {
+          await postgresClient.end().catch(() => undefined);
+        }
+      }
+    }
+
     let mysqlConnection: Awaited<
       ReturnType<typeof createMysqlConnection>
     > | null = null;
@@ -752,6 +872,9 @@ export class DashboardBackend {
   ): Promise<DatabaseMetadata> {
     if (connection.type === "Oracle") {
       return this.getOracleDatabaseMetadata(connection);
+    }
+    if (connection.type === "PostgreSQL") {
+      return this.getPostgresDatabaseMetadata(connection);
     }
 
     const mysqlConnection = await createMysqlConnection(
@@ -1016,8 +1139,328 @@ export class DashboardBackend {
     if (connection.type === "Oracle") {
       return this.getOracleDatabaseObjectNames(connection, collection);
     }
+    if (connection.type === "PostgreSQL") {
+      return this.getPostgresDatabaseObjectNames(connection, collection);
+    }
 
     return [];
+  }
+
+  private async getPostgresDatabaseMetadata(
+    connection: DatabaseConnection,
+  ): Promise<DatabaseMetadata> {
+    const postgresClient = createPostgresClient(connection, {
+      includeDatabase: true,
+    });
+    await postgresClient.connect();
+    try {
+      const schemaRows = await executePostgresRows(
+        postgresClient,
+        `SELECT schema_name
+         FROM information_schema.schemata
+         ORDER BY schema_name`,
+      );
+      const schemas = schemaRows.map((row) => String(row.schema_name));
+      const relevantSchemas = selectRelevantPostgresSchemas(
+        schemas,
+        connection,
+      );
+
+      if (relevantSchemas.length === 0) {
+        return createEmptyDatabaseMetadata(schemas);
+      }
+
+      const [tableRows, columnRows, indexRows, triggerRows, partitionRows] =
+        await Promise.all([
+          executePostgresRows(
+            postgresClient,
+            `SELECT n.nspname AS table_schema,
+                    c.relname AS table_name,
+                    c.reltuples AS row_count
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = ANY($1)
+               AND c.relkind IN ('r', 'p')
+             ORDER BY n.nspname, c.relname`,
+            [relevantSchemas],
+          ),
+          executePostgresRows(
+            postgresClient,
+            `SELECT table_schema,
+                    table_name,
+                    column_name,
+                    data_type,
+                    udt_name,
+                    character_maximum_length,
+                    numeric_precision,
+                    numeric_scale,
+                    is_nullable,
+                    column_default
+             FROM information_schema.columns
+             WHERE table_schema = ANY($1)
+             ORDER BY table_schema, table_name, ordinal_position`,
+            [relevantSchemas],
+          ),
+          executePostgresRows(
+            postgresClient,
+            `SELECT ns.nspname AS table_schema,
+                    tbl.relname AS table_name,
+                    idx.relname AS index_name,
+                    am.amname AS index_type,
+                    attr.attname AS column_name,
+                    ord.ordinality AS column_position,
+                    ix.indisprimary,
+                    ix.indisunique
+             FROM pg_index ix
+             JOIN pg_class tbl ON tbl.oid = ix.indrelid
+             JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
+             JOIN pg_class idx ON idx.oid = ix.indexrelid
+             JOIN pg_am am ON am.oid = idx.relam
+             LEFT JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS ord(attnum, ordinality)
+               ON TRUE
+             LEFT JOIN pg_attribute attr
+               ON attr.attrelid = tbl.oid
+              AND attr.attnum = ord.attnum
+             WHERE ns.nspname = ANY($1)
+             ORDER BY ns.nspname, tbl.relname, idx.relname, ord.ordinality`,
+            [relevantSchemas],
+          ),
+          executePostgresRows(
+            postgresClient,
+            `SELECT trigger_schema,
+                    event_object_table AS table_name,
+                    trigger_name,
+                    action_timing,
+                    string_agg(DISTINCT event_manipulation, ', ' ORDER BY event_manipulation) AS event_manipulation
+             FROM information_schema.triggers
+             WHERE trigger_schema = ANY($1)
+             GROUP BY trigger_schema, event_object_table, trigger_name, action_timing
+             ORDER BY trigger_schema, event_object_table, trigger_name`,
+            [relevantSchemas],
+          ),
+          executePostgresRows(
+            postgresClient,
+            `SELECT parent_ns.nspname AS table_schema,
+                    parent.relname AS table_name,
+                    child.relname AS partition_name,
+                    pg_get_expr(child.relpartbound, child.oid) AS partition_description
+             FROM pg_inherits
+             JOIN pg_class parent ON parent.oid = pg_inherits.inhparent
+             JOIN pg_namespace parent_ns ON parent_ns.oid = parent.relnamespace
+             JOIN pg_class child ON child.oid = pg_inherits.inhrelid
+             WHERE parent_ns.nspname = ANY($1)
+             ORDER BY parent_ns.nspname, parent.relname, child.relname`,
+            [relevantSchemas],
+          ),
+        ]);
+
+      const [views, procedures, functions, types, sequences] =
+        await Promise.all([
+          this.getPostgresObjectNamesWithClient(
+            postgresClient,
+            "views",
+            relevantSchemas,
+          ),
+          this.getPostgresObjectNamesWithClient(
+            postgresClient,
+            "procedures",
+            relevantSchemas,
+          ),
+          this.getPostgresObjectNamesWithClient(
+            postgresClient,
+            "functions",
+            relevantSchemas,
+          ),
+          this.getPostgresObjectNamesWithClient(
+            postgresClient,
+            "types",
+            relevantSchemas,
+          ),
+          this.getPostgresObjectNamesWithClient(
+            postgresClient,
+            "sequences",
+            relevantSchemas,
+          ),
+        ]);
+
+      const columnsByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["columns"]
+      >();
+      const indexAccumulator = new Map<
+        string,
+        Map<string, { name: string; columns: string[]; type: string }>
+      >();
+      const triggersByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["triggers"]
+      >();
+      const partitionsByTable = new Map<
+        string,
+        DatabaseMetadata["tables"][number]["partitions"]
+      >();
+      const estimatedRowCountsByTableKey = new Map<string, number | null>();
+
+      for (const row of tableRows) {
+        const tableSchema = String(row.table_schema);
+        const tableName = String(row.table_name);
+        const rawRowCount = row.row_count;
+        const postgresRowCount =
+          rawRowCount === null || rawRowCount === undefined
+            ? null
+            : Math.max(0, Math.round(Number(rawRowCount)));
+        const cacheKey = createEstimatedRowCountCacheKey(
+          connection,
+          tableSchema,
+          tableName,
+        );
+        const estimatedRowCount =
+          this.estimatedRowCountOverrides.get(cacheKey) ?? postgresRowCount;
+        estimatedRowCountsByTableKey.set(
+          `${tableSchema}.${tableName}`,
+          estimatedRowCount,
+        );
+        this.estimatedRowCountSnapshots.set(cacheKey, estimatedRowCount);
+      }
+
+      for (const row of columnRows) {
+        const tableKey = `${row.table_schema}.${row.table_name}`;
+        const columns = columnsByTable.get(tableKey) ?? [];
+        columns.push({
+          name: String(row.column_name),
+          metadata: createPostgresColumnMetadata(row),
+        });
+        columnsByTable.set(tableKey, columns);
+      }
+
+      for (const row of indexRows) {
+        const tableKey = `${row.table_schema}.${row.table_name}`;
+        const indexes = indexAccumulator.get(tableKey) ?? new Map();
+        const indexName = String(row.index_name);
+        const index = indexes.get(indexName) ?? {
+          name: indexName,
+          columns: [],
+          type: formatPostgresIndexType(row),
+        };
+        if (row.column_name !== null && row.column_name !== undefined) {
+          index.columns.push(String(row.column_name));
+        }
+        indexes.set(indexName, index);
+        indexAccumulator.set(tableKey, indexes);
+      }
+
+      for (const row of triggerRows) {
+        const tableKey = `${row.trigger_schema}.${row.table_name}`;
+        const triggers = triggersByTable.get(tableKey) ?? [];
+        triggers.push({
+          name: String(row.trigger_name),
+          timing: String(row.action_timing || ""),
+          event: String(row.event_manipulation || ""),
+        });
+        triggersByTable.set(tableKey, triggers);
+      }
+
+      for (const row of partitionRows) {
+        const tableKey = `${row.table_schema}.${row.table_name}`;
+        const partitions = partitionsByTable.get(tableKey) ?? [];
+        partitions.push({
+          name: String(row.partition_name),
+          description:
+            row.partition_description === null ||
+            row.partition_description === undefined
+              ? undefined
+              : String(row.partition_description),
+        });
+        partitionsByTable.set(tableKey, partitions);
+      }
+
+      return {
+        schemas,
+        tables: tableRows.map((row) => ({
+          schema: String(row.table_schema),
+          name: String(row.table_name),
+          estimatedRowCount: estimatedRowCountsByTableKey.get(
+            `${row.table_schema}.${row.table_name}`,
+          ),
+          columns:
+            columnsByTable.get(`${row.table_schema}.${row.table_name}`) ?? [],
+          indexes: Array.from(
+            indexAccumulator
+              .get(`${row.table_schema}.${row.table_name}`)
+              ?.values() ?? [],
+          ),
+          triggers:
+            triggersByTable.get(`${row.table_schema}.${row.table_name}`) ?? [],
+          partitions:
+            partitionsByTable.get(`${row.table_schema}.${row.table_name}`) ??
+            [],
+        })),
+        views,
+        procedures,
+        functions,
+        types,
+        sequences,
+        packages: [],
+        objectCounts: {
+          tables: tableRows.length,
+          views: views.length,
+          procedures: procedures.length,
+          functions: functions.length,
+          types: types.length,
+          sequences: sequences.length,
+        },
+      };
+    } finally {
+      await postgresClient.end().catch(() => undefined);
+    }
+  }
+
+  private async getPostgresDatabaseObjectNames(
+    connection: DatabaseConnection,
+    collection: DatabaseObjectCollectionName,
+  ): Promise<string[]> {
+    const postgresClient = createPostgresClient(connection, {
+      includeDatabase: true,
+    });
+    await postgresClient.connect();
+    try {
+      const schemaRows = await executePostgresRows(
+        postgresClient,
+        `SELECT schema_name
+         FROM information_schema.schemata
+         ORDER BY schema_name`,
+      );
+      const schemas = schemaRows.map((row) => String(row.schema_name));
+      const relevantSchemas = selectRelevantPostgresSchemas(
+        schemas,
+        connection,
+      );
+      return this.getPostgresObjectNamesWithClient(
+        postgresClient,
+        collection,
+        relevantSchemas,
+      );
+    } finally {
+      await postgresClient.end().catch(() => undefined);
+    }
+  }
+
+  private async getPostgresObjectNamesWithClient(
+    postgresClient: PostgresClient,
+    collection: DatabaseObjectCollectionName,
+    relevantSchemas: string[],
+  ): Promise<string[]> {
+    const query = POSTGRES_OBJECT_NAME_QUERY_BY_COLLECTION[collection];
+    if (!query || relevantSchemas.length === 0) {
+      return [];
+    }
+
+    const rows = await executePostgresRows(postgresClient, query, [
+      relevantSchemas,
+    ]);
+    return rows.map((row) =>
+      qualifyDatabaseObject(row.object_schema, row.object_name),
+    );
   }
 
   private async getOracleDatabaseMetadata(
@@ -1318,6 +1761,9 @@ export class DashboardBackend {
     if (connection.type === "Oracle") {
       return this.executeOracleDatabaseStatements(connection, statements);
     }
+    if (connection.type === "PostgreSQL") {
+      return this.executePostgresDatabaseStatements(connection, statements);
+    }
 
     const mysqlConnection = await createMysqlConnection(
       toMysqlConnectionOptions(connection),
@@ -1381,6 +1827,77 @@ export class DashboardBackend {
       }
     } finally {
       await mysqlConnection.end().catch(() => undefined);
+    }
+
+    return { results };
+  }
+
+  private async executePostgresDatabaseStatements(
+    connection: DatabaseConnection,
+    statements: string[],
+  ): Promise<DatabaseExecutionBatchResult> {
+    const postgresClient = createPostgresClient(connection);
+    const results: DatabaseStatementExecutionResult[] = [];
+    await postgresClient.connect();
+    try {
+      for (const statement of statements) {
+        const trimmedStatement = statement.trim();
+        if (!trimmedStatement) {
+          continue;
+        }
+
+        const startedAt = performance.now();
+        try {
+          const executionResult = await postgresClient.query(trimmedStatement);
+          const durationMs = Math.max(1, performance.now() - startedAt);
+          const normalizedRows = executionResult.rows.map((row) =>
+            normalizePostgresRow(row),
+          );
+          const rowsAffected = isPostgresRowsAffectedCommand(
+            executionResult.command,
+          )
+            ? (executionResult.rowCount ?? undefined)
+            : undefined;
+          const result: DatabaseStatementExecutionResult = {
+            statement: trimmedStatement,
+            columns: executionResult.fields.map((field) => ({
+              key: field.name,
+              label: field.name,
+              type: formatPostgresResultColumnType(field),
+            })),
+            rows: normalizedRows,
+            status: "success",
+            durationMs,
+            rowsFetched: normalizedRows.length,
+            rowsAffected,
+          };
+          if (rowsAffected !== undefined) {
+            this.updateEstimatedRowCountOverride(
+              connection,
+              trimmedStatement,
+              rowsAffected,
+            );
+          }
+          this.recordDatabaseExecution(connection, result);
+          results.push(result);
+        } catch (error) {
+          const result: DatabaseStatementExecutionResult = {
+            statement: trimmedStatement,
+            columns: [],
+            rows: [],
+            status: "error",
+            errorMessage:
+              error instanceof Error ? error.message : "Statement failed.",
+            durationMs: Math.max(1, performance.now() - startedAt),
+            rowsFetched: 0,
+          };
+          this.recordDatabaseExecution(connection, result);
+          results.push(result);
+          break;
+        }
+      }
+    } finally {
+      await postgresClient.end().catch(() => undefined);
     }
 
     return { results };
@@ -4720,7 +5237,7 @@ function normalizeDatabaseConnection(
     host: connection.host?.trim() ?? "",
     port:
       String(connection.port ?? "").trim() ||
-      (connection.type === "Oracle" ? "1521" : "3306"),
+      defaultDatabasePort(connection.type),
     user: connection.user?.trim() ?? "",
     schema,
     password: connection.password,
@@ -4740,6 +5257,16 @@ function normalizeDatabaseConnection(
     uptime: connection.uptime || "Not connected",
     activeSessions: connection.activeSessions ?? 0,
   };
+}
+
+function defaultDatabasePort(type?: DatabaseConnection["type"]): string {
+  if (type === "Oracle") {
+    return "1521";
+  }
+  if (type === "PostgreSQL") {
+    return "5432";
+  }
+  return "3306";
 }
 
 function createEstimatedRowCountCacheKey(
@@ -4873,6 +5400,47 @@ function toMysqlConnectionOptions(
     supportBigNumbers: true,
     bigNumberStrings: true,
   };
+}
+
+function createPostgresClient(
+  connection: DatabaseConnection,
+  options: { includeDatabase?: boolean } = {},
+): PostgresClient {
+  return new postgresDriver.Client(
+    toPostgresClientOptions(connection, options),
+  );
+}
+
+function toPostgresClientOptions(
+  connection: DatabaseConnection,
+  options: { includeDatabase?: boolean } = {},
+): PostgresClientOptions {
+  const database = connection.database?.trim();
+  const includeDatabase = options.includeDatabase ?? true;
+  const sslMode = connection.sslMode ?? "disabled";
+  return {
+    host: connection.host.trim(),
+    port: Number(connection.port) || 5432,
+    user: connection.user.trim(),
+    password: connection.password ?? "",
+    database: includeDatabase && database ? database : undefined,
+    connectionTimeoutMillis: connection.connectionTimeoutMs ?? 10000,
+    ssl:
+      sslMode === "required"
+        ? { rejectUnauthorized: true }
+        : sslMode === "preferred"
+          ? { rejectUnauthorized: false }
+          : undefined,
+  };
+}
+
+async function executePostgresRows(
+  connection: PostgresClient,
+  statement: string,
+  values: unknown[] = [],
+): Promise<Array<Record<string, unknown>>> {
+  const result = await connection.query(statement, values);
+  return result.rows;
 }
 
 async function createOracleConnection(
@@ -5058,15 +5626,11 @@ async function executeOracleSqlStatement(
   trimmedStatement: string,
   startedAt: number,
 ): Promise<DatabaseStatementExecutionResult> {
-  const executionResult = await oracleConnection.execute(
-    trimmedStatement,
-    [],
-    {
-      outFormat: oracleDriver.OUT_FORMAT_OBJECT,
-      autoCommit: true,
-      fetchInfo: { DDL: { type: oracleDriver.STRING } },
-    },
-  );
+  const executionResult = await oracleConnection.execute(trimmedStatement, [], {
+    outFormat: oracleDriver.OUT_FORMAT_OBJECT,
+    autoCommit: true,
+    fetchInfo: { DDL: { type: oracleDriver.STRING } },
+  });
   const durationMs = Math.max(1, performance.now() - startedAt);
   const rowArray = Array.isArray(executionResult.rows)
     ? executionResult.rows
@@ -5196,9 +5760,7 @@ async function executeOracleDescribeStatement(
   };
 }
 
-function parseOracleDescribeStatement(
-  statement: string,
-): {
+function parseOracleDescribeStatement(statement: string): {
   schema?: string;
   schemaUpper?: string;
   table: string;
@@ -5322,6 +5884,26 @@ function selectRelevantSchemas(
   );
 }
 
+function selectRelevantPostgresSchemas(
+  schemas: string[],
+  connection: DatabaseConnection,
+): string[] {
+  const selected = (connection.schema || "").trim();
+  if (selected && schemas.includes(selected)) {
+    return [selected];
+  }
+
+  return schemas.filter((schema) => {
+    const normalized = schema.toLowerCase();
+    return (
+      normalized !== "information_schema" &&
+      normalized !== "pg_catalog" &&
+      !normalized.startsWith("pg_toast") &&
+      !normalized.startsWith("pg_temp_")
+    );
+  });
+}
+
 function selectRelevantOracleSchemas(
   schemas: string[],
   connection: DatabaseConnection,
@@ -5415,6 +5997,64 @@ function createColumnMetadata(row: RowDataPacket): Array<{
     { label: "Comment", value: String(row.columnComment || "No comment") },
     ...(row.extra ? [{ label: "Extra", value: String(row.extra) }] : []),
   ].filter((item) => item.value !== "");
+}
+
+function createPostgresColumnMetadata(row: Record<string, unknown>): Array<{
+  label: string;
+  value: string;
+}> {
+  return [
+    { label: "Type", value: formatPostgresDataType(row) },
+    {
+      label: "Null",
+      value:
+        String(row.is_nullable).toUpperCase() === "YES"
+          ? "Nullable"
+          : "Not nullable",
+    },
+    {
+      label: "Default",
+      value: row.column_default == null ? "None" : String(row.column_default),
+    },
+  ].filter((item) => item.value !== "");
+}
+
+function formatPostgresDataType(row: Record<string, unknown>): string {
+  const dataType = String(row.data_type ?? row.udt_name ?? "");
+  const udtName = String(row.udt_name ?? "");
+  const characterLength = row.character_maximum_length;
+  const numericPrecision = row.numeric_precision;
+  const numericScale = row.numeric_scale;
+
+  if (
+    ["character varying", "character", "bit varying", "bit"].includes(
+      dataType,
+    ) &&
+    characterLength !== null &&
+    characterLength !== undefined
+  ) {
+    return `${dataType}(${String(characterLength)})`;
+  }
+
+  if (
+    ["numeric", "decimal"].includes(dataType) &&
+    numericPrecision !== null &&
+    numericPrecision !== undefined
+  ) {
+    return numericScale !== null && numericScale !== undefined
+      ? `${dataType}(${String(numericPrecision)},${String(numericScale)})`
+      : `${dataType}(${String(numericPrecision)})`;
+  }
+
+  return dataType === "USER-DEFINED" && udtName ? udtName : dataType;
+}
+
+function formatPostgresIndexType(row: Record<string, unknown>): string {
+  if (row.indisprimary === true) {
+    return "PRIMARY";
+  }
+  const indexType = String(row.index_type || "INDEX").toUpperCase();
+  return row.indisunique === true ? `UNIQUE ${indexType}` : indexType;
 }
 
 function createOracleColumnMetadata(row: Record<string, unknown>): Array<{
@@ -5540,6 +6180,64 @@ function normalizeMysqlValue(value: unknown): DatabaseQueryValue {
     return `0x${value.toString("hex")}`;
   }
   return JSON.stringify(value);
+}
+
+function normalizePostgresRow(
+  row: Record<string, unknown>,
+): Record<string, DatabaseQueryValue> {
+  const normalized: Record<string, DatabaseQueryValue> = {};
+  for (const [key, value] of Object.entries(row)) {
+    normalized[key] = normalizePostgresValue(value);
+  }
+  return normalized;
+}
+
+function normalizePostgresValue(value: unknown): DatabaseQueryValue {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Buffer.isBuffer(value)) {
+    return `0x${value.toString("hex")}`;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  return JSON.stringify(value);
+}
+
+const POSTGRES_TYPE_NAME_BY_OID = createPostgresTypeNameByOid();
+
+function createPostgresTypeNameByOid(): Map<number, string> {
+  const oidByName = postgresDriver.types?.builtins ?? {};
+  return new Map(
+    Object.entries(oidByName).map(([name, oid]) => [
+      Number(oid),
+      name.toLowerCase(),
+    ]),
+  );
+}
+
+function formatPostgresResultColumnType(
+  field: PostgresField,
+): string | undefined {
+  return POSTGRES_TYPE_NAME_BY_OID.get(field.dataTypeID);
+}
+
+function isPostgresRowsAffectedCommand(command?: string): boolean {
+  const normalized = command?.trim().toUpperCase() ?? "";
+  return Boolean(
+    normalized && !["SELECT", "SHOW", "WITH"].includes(normalized),
+  );
 }
 
 function isResultSetHeader(value: unknown): value is ResultSetHeader {
@@ -5913,7 +6611,9 @@ function getProjectEnvRootDescriptors(
     add(
       "frontend",
       "Frontend",
-      settings.services.frontend.workingDirectory || settings.frontend.path || "",
+      settings.services.frontend.workingDirectory ||
+        settings.frontend.path ||
+        "",
     );
   }
 
@@ -5921,7 +6621,9 @@ function getProjectEnvRootDescriptors(
     add(
       "backend",
       "Backend",
-      settings.python.directory || settings.services.python.workingDirectory || "",
+      settings.python.directory ||
+        settings.services.python.workingDirectory ||
+        "",
     );
     return descriptors;
   }
@@ -5946,7 +6648,9 @@ function readProjectEnvFiles(rootPath: string): ProjectEnvFileRecord[] {
   return readdirSync(rootPath, { withFileTypes: true })
     .filter((entry) => entry.isFile() && isEnvFileName(entry.name))
     .map((entry) => readProjectEnvFile(join(rootPath, entry.name)))
-    .sort((a, b) => envFileSortKey(a.name).localeCompare(envFileSortKey(b.name)));
+    .sort((a, b) =>
+      envFileSortKey(a.name).localeCompare(envFileSortKey(b.name)),
+    );
 }
 
 function readProjectEnvFile(filePath: string): ProjectEnvFileRecord {
