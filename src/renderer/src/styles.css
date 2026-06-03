@@ -1539,7 +1539,6 @@ body {
   user-select: none;
   -webkit-app-region: drag;
   background: color-mix(in srgb, var(--surface) 88%, var(--app-bg));
-  border-bottom: 1px solid var(--border);
 }
 
 .app-shell.macos-native-window .app-header {
