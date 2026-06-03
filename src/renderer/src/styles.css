@@ -1487,13 +1487,9 @@ body {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 14px 16px 12px 14px;
+  padding: 10px 12px;
   overflow: hidden;
   background: var(--surface);
-}
-
-.app-shell.macos-native-window .main-content {
-  padding: 10px 12px;
 }
 
 .app-window-controls {
@@ -1510,7 +1506,7 @@ body {
   place-items: center;
   width: 54px;
   height: 100%;
-  min-height: 52px;
+  min-height: 48px;
   padding: 0;
   color: var(--muted);
   background: transparent;
@@ -1537,9 +1533,9 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 52px;
-  margin: -14px -16px 6px -14px;
-  padding: 8px 10px 8px 16px;
+  min-height: 48px;
+  margin: -10px -12px 0 -12px;
+  padding: 7px 8px 7px 12px;
   user-select: none;
   -webkit-app-region: drag;
   background: color-mix(in srgb, var(--surface) 88%, var(--app-bg));
@@ -1547,9 +1543,6 @@ body {
 }
 
 .app-shell.macos-native-window .app-header {
-  min-height: 48px;
-  margin: -10px -12px 0 -12px;
-  padding: 7px 8px 7px 12px;
   border-bottom: 0;
 }
 
@@ -1596,10 +1589,6 @@ body {
   align-items: center;
   flex: 0 0 auto;
   align-self: stretch;
-  margin: -8px -10px -8px 0;
-}
-
-.app-shell.macos-native-window .app-header-window-controls {
   margin: -7px -8px -7px 0;
 }
 
