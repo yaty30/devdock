@@ -158,7 +158,7 @@ function registerIpc(): void {
   ipcMain.handle("window:isMaximized", (event) =>
     withLoggedErrors(
       "window:isMaximized",
-      () => BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false,
+      () => isWindowMaximized(BrowserWindow.fromWebContents(event.sender)),
     ),
   );
   ipcMain.handle("window:minimize", (event) =>
@@ -170,6 +170,11 @@ function registerIpc(): void {
     withLoggedErrors("window:toggleMaximize", () => {
       const window = BrowserWindow.fromWebContents(event.sender);
       if (!window) {
+        return;
+      }
+
+      if (process.platform === "darwin") {
+        window.setFullScreen(!window.isFullScreen());
         return;
       }
 
@@ -1923,19 +1928,36 @@ function escapeXmlAttribute(value: string): string {
   return escapeXmlText(value).replace(/"/g, "&quot;");
 }
 
+function isWindowMaximized(window: BrowserWindow | null): boolean {
+  if (!window) {
+    return false;
+  }
+
+  return process.platform === "darwin"
+    ? window.isFullScreen()
+    : window.isMaximized();
+}
+
 function resolveAppIconPath(): string | undefined {
+  const iconFileName =
+    process.platform === "darwin"
+      ? "icon.icns"
+      : process.platform === "win32"
+        ? "icon.ico"
+        : "icon.png";
   const candidates = [
-    join(process.resourcesPath, "icon.ico"),
-    join(app.getAppPath(), "src", "renderer", "src", "assets", "icon.ico"),
+    join(process.resourcesPath, iconFileName),
+    join(app.getAppPath(), "src", "renderer", "src", "assets", iconFileName),
   ];
 
   return candidates.find((candidate) => existsSync(candidate));
 }
 
 function resolveNotificationIconPath(): string | null {
+  const iconFileName = process.platform === "win32" ? "icon.ico" : "icon.png";
   const candidates = [
-    join(process.resourcesPath, "icon.ico"),
-    join(app.getAppPath(), "src", "renderer", "src", "assets", "icon.ico"),
+    join(process.resourcesPath, iconFileName),
+    join(app.getAppPath(), "src", "renderer", "src", "assets", iconFileName),
   ];
 
   for (const candidate of candidates) {
@@ -2003,7 +2025,7 @@ const createWindow = (): void => {
   const emitMaximizedState = (): void => {
     mainWindow?.webContents.send(
       "window:maximized-changed",
-      mainWindow?.isMaximized() ?? false,
+      isWindowMaximized(mainWindow),
     );
   };
 

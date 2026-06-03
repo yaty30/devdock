@@ -4,6 +4,12 @@ const { FusesPlugin } = require("@electron-forge/plugin-fuses");
 const { FuseV1Options, FuseVersion } = require("@electron/fuses");
 
 const devOnlyPackages = readDevOnlyPackages();
+const assetPath = (...parts) =>
+  path.join(__dirname, "src", "renderer", "src", "assets", ...parts);
+const appIconBasePath = assetPath("icon");
+const optionalExtraResources = [path.join(__dirname, ".env")].filter((filePath) =>
+  fs.existsSync(filePath),
+);
 
 const packageIgnorePatterns = [
   /^\/(?:src|dummy|installer|tools|scripts|out|dist)(?:\/|$)/,
@@ -119,24 +125,12 @@ module.exports = {
       unpack: "**/node_modules/node-pty/**/*",
     },
     prune: true,
-    icon: path.join(
-      __dirname,
-      "src",
-      "renderer",
-      "src",
-      "assets",
-      "icon.ico",
-    ),
+    icon: appIconBasePath,
     extraResource: [
-      path.join(
-        __dirname,
-        "src",
-        "renderer",
-        "src",
-        "assets",
-        "icon.ico",
-      ),
-      path.join(__dirname, ".env"),
+      assetPath("icon.ico"),
+      assetPath("icon.icns"),
+      assetPath("icon.png"),
+      ...optionalExtraResources,
     ],
     ignore: ignoreDevelopmentFiles,
   },
@@ -167,14 +161,7 @@ module.exports = {
 
         setupExe: "DevDock-Setup.exe",
 
-        setupIcon: path.join(
-          __dirname,
-          "src",
-          "renderer",
-          "src",
-          "assets",
-          "icon.ico",
-        ),
+        setupIcon: assetPath("icon.ico"),
 
         // Windows shortcuts
         createStartMenuShortcut: true,
