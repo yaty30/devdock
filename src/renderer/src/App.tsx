@@ -1,40 +1,45 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Check,
-  CheckCircle2,
-  ChefHat,
-  ChevronUp,
-  Grid3X3,
-  List,
-  Minimize2,
-  Moon,
-  Package,
-  PackageCheck,
-  Plus,
-  Send,
-  Sun,
-} from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Send } from "lucide-react";
 import { AddProjectDialog } from "./components/dialogs/AddProjectDialog";
 import { ConfirmDialog } from "./components/dialogs/ConfirmDialog";
+import { InterfaceSettingsModal } from "./components/dialogs/InterfaceSettingsModal";
 import { Modal } from "./components/dialogs/Modal";
 import { AppHeader } from "./components/layout/AppHeader";
 import {
   FontSizeDropdown,
   HeaderActions,
-  HeaderUtilityActions,
 } from "./components/layout/HeaderActions";
-import { AppLogoIcon } from "./components/common/AppLogoIcon";
+import { AppSnackbar } from "./components/common/AppSnackbar";
+import {
+  BuildMiniPanel,
+  getBuildMiniRecordKey,
+  type BuildMiniPanelItem,
+} from "./components/common/BuildMiniPanel";
+import { NotesHeaderActions } from "./components/common/NotesHeaderActions";
+import { ShutdownOverlay } from "./components/common/ShutdownOverlay";
+import { SplashOverlay } from "./components/common/SplashOverlay";
 import { Sidebar } from "./components/layout/Sidebar";
 import {
   DatabaseConnectionModal,
+  DatabaseEmptyState,
+  DatabaseHeaderActions,
   DatabaseWorkspace,
   DatabaseWorkspaceTabs,
+  useDatabaseController,
 } from "./features/databases";
 import { ProjectEnvFilesModal } from "./features/env/ProjectEnvFilesModal";
 import {
   DashboardContent,
   ProjectDashboardContent,
 } from "./features/dashboard/DashboardContent";
+import {
+  applyDashboardEvent,
+  applyDashboardOverviewStatusEvent,
+  createLoadingProjectState,
+  getBuildMiniPanelItems,
+  getSidebarProjectFrontendEnabled,
+  getSidebarProjectStatuses,
+} from "./features/dashboard/dashboardState";
 import { GitTerminalTab } from "./features/git/GitTerminalTab";
 import { MonitorTab } from "./features/monitor/MonitorTab";
 import { NotesTab, type NotesView } from "./features/notes/NotesTab";
@@ -51,45 +56,31 @@ import {
   CryptographicToolTab,
 } from "./features/tools/ConversionTools";
 import {
-  readStoredSelectedSshServerId,
-  readStoredSshServers,
-  getSshEndpoint,
-  getSshHost,
-  getSshUsername,
-  hasValidSshCredential,
-  isValidSshServerCredential,
-  storeSelectedSshServerId,
-  storeSshServers,
-  type SshConnectionStatus,
-  type SftpConnectionStatus,
-  type SshActiveHostContext,
-  type SshServerConfig,
-  type SshToolTab,
-} from "./features/tools/sshFeatureState";
+  ApiTesterHeaderTabs,
+  CompareHeaderTabs,
+  CryptographicHeaderTabs,
+  SingleToolHeaderTabs,
+  type ApiTesterView,
+  type CompareView,
+} from "./features/tools/ToolHeaderTabs";
+import { useSshController } from "./features/tools/useSshController";
 import { ChatFeature } from "./features/chat/ChatDrawer";
+import { usePreferences } from "./hooks/usePreferences";
 import { appendLiveBatch, clearViewport } from "./hooks/useLogStore";
+import { useSnackbar } from "./hooks/useSnackbar";
 import { APP_FEATURE_FLAGS } from "../../shared/appFeatures";
 import { MAX_PROJECTS } from "../../shared/appLimits";
-import { isProjectFrontendEnabled } from "../../shared/projectFrontend";
 import type {
   AppSection,
   BackendType,
   DashboardTab,
-  DashboardEvent,
-  DatabaseConnection,
-  DatabaseExecutionRecord,
-  DatabaseWorkspaceTab,
-  FontSizeMode,
   LogChannel,
   Project,
   ProjectDashboardSummary,
   ProjectRecord,
   ProjectRuntimeState,
   PythonServerType,
-  RecentBuildRecord,
-  ServiceStatusRecord,
   ShutdownEntry,
-  Theme,
   ToolId,
 } from "./types";
 
@@ -99,7 +90,6 @@ const SPLASH_FADE_OUT_MS = 420;
 const SPLASH_LOGO_SIZE = "min(66px, 7vw)";
 const INITIAL_STATE_LOAD_TIMEOUT_MS = 10000;
 const PROJECT_STATE_LOAD_TIMEOUT_MS = 8000;
-const DATABASE_IDLE_DISCONNECT_MS = 2 * 60 * 1000;
 const PROJECT_DASHBOARD_EXIT_LOG_CHANNELS: LogChannel[] = [
   "frontend",
   "build",
@@ -109,132 +99,10 @@ const PROJECT_DASHBOARD_EXIT_LOG_CHANNELS: LogChannel[] = [
 const STANDALONE_NOTEBOOK_PROJECT_ID = "__ivs_standalone_notebook__";
 
 type SplashPhase = "visible" | "exiting" | "hidden";
-type SnackbarState = {
-  message: string;
-  tone: "valid" | "invalid" | "warning";
-};
-type BuildMiniPanelItem = {
-  project: ProjectRecord;
-  build: RecentBuildRecord;
-  debug?: boolean;
-};
-type SshFeatureModule = typeof import("./features/tools/SshTool");
-type DatabaseRuntimeStatus =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "sleeping"
-  | "disconnected"
-  | "reconnecting"
-  | "error";
-type ApiTesterView = "test" | "history" | "saved";
-type CompareView = "compare";
-type AccentColor =
-  | "blue"
-  | "green"
-  | "yellow"
-  | "orange"
-  | "purple"
-  | "pink"
-  | "black";
-
-const ACCENT_OPTIONS: ReadonlyArray<{ value: AccentColor; label: string }> = [
-  { value: "blue", label: "Blue" },
-  { value: "green", label: "Green" },
-  { value: "yellow", label: "Yellow" },
-  { value: "orange", label: "Orange" },
-  { value: "purple", label: "Purple" },
-  { value: "pink", label: "Pink" },
-  { value: "black", label: "Black" },
-];
 
 const IS_MACOS =
   typeof navigator !== "undefined" &&
   navigator.platform.toLowerCase().includes("mac");
-
-function findSshProfileForTerminalHost(
-  context: SshActiveHostContext,
-  servers: SshServerConfig[],
-  selectedServer: SshServerConfig | null,
-  allowSelectedFallback: boolean,
-): SshServerConfig | null {
-  const host = normalizeTerminalHost(context.host);
-  const username = context.username.trim().toLowerCase();
-  const exact = servers.find((server) => {
-    const serverHost = normalizeTerminalHost(getSshHost(server));
-    const serverUser = getSshUsername(server).toLowerCase();
-    return serverHost === host && (!username || serverUser === username);
-  });
-  if (exact) {
-    return exact;
-  }
-  if (allowSelectedFallback && selectedServer) {
-    const selectedUser = getSshUsername(selectedServer).toLowerCase();
-    if (!username || selectedUser === username) {
-      return selectedServer;
-    }
-  }
-  return null;
-}
-
-function normalizeTerminalHost(value: string): string {
-  const trimmed = value
-    .trim()
-    .toLowerCase()
-    .replace(/^\[/, "")
-    .replace(/\]$/, "");
-  const colonIndex = trimmed.lastIndexOf(":");
-  if (colonIndex > 0 && /^\d+$/.test(trimmed.slice(colonIndex + 1))) {
-    return trimmed.slice(0, colonIndex);
-  }
-  return trimmed;
-}
-
-function getTerminalHostProfileKey(context: SshActiveHostContext): string {
-  return `${context.username.trim().toLowerCase()}@${normalizeTerminalHost(
-    context.host,
-  )}`;
-}
-
-function getTerminalHostDirectorySessionId(
-  context: SshActiveHostContext,
-  jumpProfile: SshServerConfig,
-): string {
-  return `${jumpProfile.id}->${getTerminalHostProfileKey(context)}`;
-}
-
-function isSameTerminalHostAndProfile(
-  context: SshActiveHostContext,
-  profile: SshServerConfig,
-): boolean {
-  const contextHost = normalizeTerminalHost(context.host);
-  const profileHost = normalizeTerminalHost(getSshHost(profile));
-  const contextUser = context.username.trim().toLowerCase();
-  const profileUser = getSshUsername(profile).toLowerCase();
-  return (
-    contextHost === profileHost && (!contextUser || contextUser === profileUser)
-  );
-}
-
-function resolveTerminalDirectoryCwd(
-  terminalCwd: string | undefined,
-  backendCwd: string | null | undefined,
-): string | null {
-  const promptCwd = terminalCwd?.trim() ?? "";
-  const resolvedBackendCwd = backendCwd?.trim() || null;
-  if (!promptCwd || promptCwd === "~") {
-    return resolvedBackendCwd;
-  }
-  if (promptCwd.startsWith("~/")) {
-    return resolvedBackendCwd
-      ? `${resolvedBackendCwd.replace(/\/+$/, "")}/${promptCwd.slice(2)}`
-      : null;
-  }
-  if (promptCwd.startsWith("/")) {
-    return promptCwd;
-  }
-  return resolvedBackendCwd ?? promptCwd;
-}
 
 function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<DashboardTab>("dashboard");
@@ -251,53 +119,9 @@ function App(): JSX.Element {
   const [comparingView, setComparingView] = useState<CompareView>("compare");
   const [cryptoActiveTab, setCryptoActiveTab] =
     useState<CryptographicToolTab>("base64");
-  const [sshFeatureModule, setSshFeatureModule] =
-    useState<SshFeatureModule | null>(null);
-  const [sshServers, setSshServers] = useState<SshServerConfig[]>([]);
-  const [selectedSshServerId, setSelectedSshServerId] = useState("");
-  const [sshSettingsOpen, setSshSettingsOpen] = useState(false);
-  const [activeSshTab, setActiveSshTab] = useState<SshToolTab>("ssh");
-  const [sshConnectionStatus, setSshConnectionStatus] =
-    useState<SshConnectionStatus>("idle");
-  const [sshReconnectAttempt, setSshReconnectAttempt] = useState(0);
-  const [sshTerminalConnectionEnabled, setSshTerminalConnectionEnabled] =
-    useState(false);
-  const [sshTerminalConnectionSignal, setSshTerminalConnectionSignal] =
-    useState(0);
-  const [sshActiveSessionId, setSshActiveSessionId] = useState<string | null>(
-    null,
-  );
-  const [sshRemoteCwd, setSshRemoteCwd] = useState<string | null>(null);
-  const [sftpConnectionStatus, setSftpConnectionStatus] =
-    useState<SftpConnectionStatus>("idle");
-  const [sftpConnectionError, setSftpConnectionError] = useState<string | null>(
-    null,
-  );
   const [projects, setProjects] = useState<Project[]>([]);
-  const [databaseConnections, setDatabaseConnections] = useState<
-    DatabaseConnection[]
-  >([]);
-  const [databaseConnectionModal, setDatabaseConnectionModal] = useState<
-    "add" | "edit" | null
-  >(null);
   const [cookieModalOpen, setCookieModalOpen] = useState(false);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [selectedDatabaseConnectionId, setSelectedDatabaseConnectionId] =
-    useState<string | null>(null);
-  const [deleteDatabaseConnectionRequest, setDeleteDatabaseConnectionRequest] =
-    useState<DatabaseConnection | null>(null);
-  const [deletedDatabaseConnectionId, setDeletedDatabaseConnectionId] =
-    useState<string | null>(null);
-  const [activeDatabaseTab, setActiveDatabaseTab] =
-    useState<DatabaseWorkspaceTab>("connection");
-  const [databaseExecutionHistory, setDatabaseExecutionHistory] = useState<
-    DatabaseExecutionRecord[]
-  >([]);
-  const [databaseLastRefreshTime, setDatabaseLastRefreshTime] = useState(() =>
-    new Date().toISOString(),
-  );
-  const [databaseRuntimeStatus, setDatabaseRuntimeStatus] =
-    useState<DatabaseRuntimeStatus>("idle");
   const [projectState, setProjectState] = useState<ProjectRuntimeState | null>(
     null,
   );
@@ -309,13 +133,14 @@ function App(): JSX.Element {
   const [projectStateProjectId, setProjectStateProjectId] = useState<
     string | null
   >(null);
-  const [theme, setTheme] = useState<Theme>(() => readStoredTheme());
-  const [accentColor, setAccentColor] = useState<AccentColor>(() =>
-    readStoredAccentColor(),
-  );
-  const [fontSizeMode, setFontSizeMode] = useState<FontSizeMode>(() =>
-    readStoredFontSizeMode(),
-  );
+  const {
+    theme,
+    accentColor,
+    fontSizeMode,
+    setTheme,
+    setAccentColor,
+    setFontSizeMode,
+  } = usePreferences();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [interfaceSettingsOpen, setInterfaceSettingsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
@@ -333,8 +158,8 @@ function App(): JSX.Element {
     new Set(),
   );
   const [splashPhase, setSplashPhase] = useState<SplashPhase>("visible");
-  const [snackbar, setSnackbar] = useState<SnackbarState | null>(null);
-  const [snackbarClosing, setSnackbarClosing] = useState(false);
+  const { snackbar, snackbarClosing, showSnackbar, dismissSnackbar } =
+    useSnackbar();
   const [chatEnabled, setChatEnabled] = useState(false);
   const [debugEnabled, setDebugEnabled] = useState(false);
   const [macosWindowFullscreen, setMacosWindowFullscreen] = useState(false);
@@ -346,29 +171,31 @@ function App(): JSX.Element {
   const splashSequenceStartedRef = useRef(false);
   const selectedProjectIdRef = useRef<string | null>(null);
   const dashboardOverviewRequestRef = useRef(0);
-  const snackbarDismissTimerRef = useRef<number | null>(null);
-  const snackbarCloseTimerRef = useRef<number | null>(null);
   const buildMiniPanelBuildIdRef = useRef<string | null>(null);
   const buildMiniPanelSessionStartedAtRef = useRef(Date.now());
   const appExitStartedRef = useRef(false);
   const appShellRef = useRef<HTMLDivElement>(null);
   const sidebarTransitionReadyRef = useRef(false);
-  const databaseSleepTimerRef = useRef<number | null>(null);
-  const hadDatabaseConnectionRef = useRef(false);
-  const selectedDatabaseConnectionIdRef = useRef<string | null>(null);
-  const verifyingDatabaseConnectionIdRef = useRef<string | null>(null);
-  const sshReconnectTimerRef = useRef<number | null>(null);
-  const sshManualDisconnectRef = useRef(false);
-  const sshActiveServerIdRef = useRef<string | null>(null);
-  const sshActiveSessionIdRef = useRef<string | null>(null);
-  const sshAutoLoginAttemptedRef = useRef<string | null>(null);
-  const sshCredentialPromptedRef = useRef(false);
-  const sshDirectorySyncRequestRef = useRef(0);
-  const sshTerminalHostProfileMapRef = useRef<Map<string, string>>(new Map());
 
-  useEffect(() => {
-    selectedDatabaseConnectionIdRef.current = selectedDatabaseConnectionId;
-  }, [selectedDatabaseConnectionId]);
+  const handleUnavailableSshRoute = useCallback(() => {
+    setActiveTool("comparing");
+    setActiveSection("dashboard");
+  }, []);
+  const ssh = useSshController({
+    enabled: APP_FEATURE_FLAGS.ssh,
+    routeActive: activeSection === "tools" && activeTool === "ssh",
+    onUnavailableRoute: handleUnavailableSshRoute,
+  });
+  const database = useDatabaseController({
+    activeSection,
+    settingsDirty,
+    settingsOpen,
+    setActiveSection,
+    setPendingNav,
+    setSettingsDirty,
+    setSettingsOpen,
+    showSnackbar,
+  });
 
   useEffect(() => {
     if (!IS_MACOS) {
@@ -380,66 +207,6 @@ function App(): JSX.Element {
       setMacosWindowFullscreen,
     );
   }, []);
-
-  useEffect(() => {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return undefined;
-    }
-
-    let cancelled = false;
-    void import("./features/tools/SshTool")
-      .then((module) => {
-        if (cancelled) {
-          return;
-        }
-        const servers = readStoredSshServers();
-        setSshFeatureModule(module);
-        setSshServers(servers);
-        setSelectedSshServerId(readStoredSelectedSshServerId(servers));
-      })
-      .catch((error) => {
-        console.error("[ssh:feature-load]", error);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!APP_FEATURE_FLAGS.ssh || !sshFeatureModule) {
-      return;
-    }
-    storeSshServers(sshServers);
-    setSelectedSshServerId((current) =>
-      sshServers.some((server) => server.id === current)
-        ? current
-        : (sshServers[0]?.id ?? ""),
-    );
-  }, [sshFeatureModule, sshServers]);
-
-  useEffect(() => {
-    if (!APP_FEATURE_FLAGS.ssh || !sshFeatureModule) {
-      return;
-    }
-    if (selectedSshServerId) {
-      storeSelectedSshServerId(selectedSshServerId);
-    }
-  }, [selectedSshServerId, sshFeatureModule]);
-
-  useEffect(() => {
-    sshActiveSessionIdRef.current = sshActiveSessionId;
-  }, [sshActiveSessionId]);
-
-  useEffect(() => {
-    if (APP_FEATURE_FLAGS.ssh || activeSection !== "tools" || activeTool !== "ssh") {
-      return;
-    }
-    // SSH is experimental and intentionally disabled; direct navigation falls
-    // back to the main dashboard until it returns or moves to a separate app.
-    setActiveTool("comparing");
-    setActiveSection("dashboard");
-  }, [activeSection, activeTool]);
 
   useEffect(() => {
     let cancelled = false;
@@ -459,106 +226,6 @@ function App(): JSX.Element {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    return () => {
-      if (databaseSleepTimerRef.current !== null) {
-        window.clearTimeout(databaseSleepTimerRef.current);
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    const hasConnection = Boolean(selectedDatabaseConnectionId);
-    if (!hasConnection) {
-      hadDatabaseConnectionRef.current = false;
-      if (databaseSleepTimerRef.current !== null) {
-        window.clearTimeout(databaseSleepTimerRef.current);
-        databaseSleepTimerRef.current = null;
-      }
-      setDatabaseRuntimeStatus("idle");
-      return;
-    }
-
-    const selectedConnection = databaseConnections.find(
-      (connection) => connection.id === selectedDatabaseConnectionId,
-    );
-    if (
-      selectedConnection?.status === "error" &&
-      verifyingDatabaseConnectionIdRef.current !== selectedConnection.id
-    ) {
-      if (databaseSleepTimerRef.current !== null) {
-        window.clearTimeout(databaseSleepTimerRef.current);
-        databaseSleepTimerRef.current = null;
-      }
-      setDatabaseRuntimeStatus("error");
-      return;
-    }
-    if (selectedConnection?.status === "disconnected") {
-      if (databaseSleepTimerRef.current !== null) {
-        window.clearTimeout(databaseSleepTimerRef.current);
-        databaseSleepTimerRef.current = null;
-      }
-      setDatabaseRuntimeStatus("disconnected");
-      return;
-    }
-
-    if (activeSection === "database") {
-      if (databaseSleepTimerRef.current !== null) {
-        window.clearTimeout(databaseSleepTimerRef.current);
-        databaseSleepTimerRef.current = null;
-      }
-      setDatabaseRuntimeStatus((current) => {
-        if (current === "connected") {
-          return current;
-        }
-        if (current === "sleeping" || current === "disconnected") {
-          return "reconnecting";
-        }
-        return hadDatabaseConnectionRef.current ? "reconnecting" : "connecting";
-      });
-      return;
-    }
-
-    setDatabaseRuntimeStatus((current) =>
-      current === "connected" ||
-      current === "connecting" ||
-      current === "reconnecting"
-        ? "sleeping"
-        : current,
-    );
-    if (databaseSleepTimerRef.current !== null) {
-      window.clearTimeout(databaseSleepTimerRef.current);
-    }
-    databaseSleepTimerRef.current = window.setTimeout(() => {
-      databaseSleepTimerRef.current = null;
-      setDatabaseRuntimeStatus("disconnected");
-    }, DATABASE_IDLE_DISCONNECT_MS);
-  }, [activeSection, selectedDatabaseConnectionId, databaseConnections]);
-
-  useEffect(() => {
-    if (
-      activeSection !== "database" ||
-      !selectedDatabaseConnectionId ||
-      (databaseRuntimeStatus !== "connecting" &&
-        databaseRuntimeStatus !== "reconnecting")
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-    const connectTimer = window.setTimeout(() => {
-      if (!cancelled) {
-        hadDatabaseConnectionRef.current = true;
-        setDatabaseRuntimeStatus("connected");
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(connectTimer);
-    };
-  }, [activeSection, selectedDatabaseConnectionId, databaseRuntimeStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -582,21 +249,8 @@ function App(): JSX.Element {
         return;
       }
       window.clearTimeout(initialLoadTimeout);
-      const hydratedConnections: DatabaseConnection[] = connections.map(
-        (connection) => ({
-          ...connection,
-          status: connection.autoConnect ? "connected" : "disconnected",
-        }),
-      );
-      const autoConnectConnection = hydratedConnections.find(
-        (connection) => connection.autoConnect,
-      );
       setProjects(snapshot.projects);
-      setDatabaseConnections(hydratedConnections);
-      setDatabaseExecutionHistory(executionHistory);
-      setSelectedDatabaseConnectionId(
-        autoConnectConnection?.id ?? hydratedConnections[0]?.id ?? null,
-      );
+      database.hydrateConnections(connections, executionHistory);
       void refreshDashboardOverview();
       const active =
         snapshot.projects.find(
@@ -624,21 +278,6 @@ function App(): JSX.Element {
       window.clearTimeout(initialLoadTimeout);
     };
   }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem("ivs-dashboard-theme", theme);
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
-  useEffect(() => {
-    window.localStorage.setItem("ivs-dashboard-accent", accentColor);
-    document.documentElement.dataset.accent = accentColor;
-  }, [accentColor]);
-
-  useEffect(() => {
-    window.localStorage.setItem("ivs-dashboard-font-size", fontSizeMode);
-    document.documentElement.dataset.fontSize = fontSizeMode;
-  }, [fontSizeMode]);
 
   useEffect(() => {
     if (!sidebarTransitionReadyRef.current) {
@@ -814,12 +453,6 @@ function App(): JSX.Element {
       if (projectLoadingTimerRef.current !== null) {
         window.clearTimeout(projectLoadingTimerRef.current);
       }
-      if (snackbarDismissTimerRef.current !== null) {
-        window.clearTimeout(snackbarDismissTimerRef.current);
-      }
-      if (snackbarCloseTimerRef.current !== null) {
-        window.clearTimeout(snackbarCloseTimerRef.current);
-      }
     };
   }, []);
 
@@ -835,505 +468,6 @@ function App(): JSX.Element {
     activeProjectState,
     selectedProject?.id ?? null,
   );
-  const selectedDatabaseConnection =
-    databaseConnections.find(
-      (connection) => connection.id === selectedDatabaseConnectionId,
-    ) ??
-    databaseConnections[0] ??
-    null;
-  const selectedDatabaseExecutionHistory = selectedDatabaseConnection
-    ? databaseExecutionHistory.filter(
-        (entry) => entry.connectionId === selectedDatabaseConnection.id,
-      )
-    : [];
-  const selectedSshServer =
-    APP_FEATURE_FLAGS.ssh
-      ? sshServers.find((server) => server.id === selectedSshServerId) ??
-        sshServers[0] ??
-        null
-      : null;
-  const sshHasValidCredential = useMemo(
-    () => APP_FEATURE_FLAGS.ssh && hasValidSshCredential(sshServers),
-    [sshServers],
-  );
-  const sshSettingsRequired =
-    APP_FEATURE_FLAGS.ssh &&
-    activeSection === "tools" &&
-    activeTool === "ssh" &&
-    !sshHasValidCredential;
-
-  useEffect(() => {
-    if (!sshSettingsRequired) {
-      sshCredentialPromptedRef.current = false;
-      return;
-    }
-
-    if (sshCredentialPromptedRef.current) {
-      return;
-    }
-
-    sshCredentialPromptedRef.current = true;
-    setSshSettingsOpen(true);
-  }, [sshSettingsRequired]);
-
-  function saveSshServers(nextServers: SshServerConfig[]): void {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    setSshServers(nextServers);
-    const selectedStillExists = nextServers.some(
-      (server) => server.id === selectedSshServerId,
-    );
-    if (!selectedStillExists) {
-      clearSshReconnectTimer();
-      setSshTerminalConnectionActive(false);
-      void disconnectActiveSshSession();
-      sshManualDisconnectRef.current = false;
-      setSshConnectionStatus("idle");
-      setSshReconnectAttempt(0);
-      setSshRemoteCwd(null);
-      setSelectedSshServerId(nextServers[0]?.id ?? "");
-    }
-    setSshSettingsOpen(false);
-  }
-
-  function closeSshSettings(): void {
-    setSshSettingsOpen(false);
-  }
-
-  function clearSshReconnectTimer(): void {
-    if (sshReconnectTimerRef.current !== null) {
-      window.clearTimeout(sshReconnectTimerRef.current);
-      sshReconnectTimerRef.current = null;
-    }
-  }
-
-  function setSshTerminalConnectionActive(active: boolean): void {
-    setSshTerminalConnectionEnabled(active);
-    setSshTerminalConnectionSignal((current) => current + 1);
-  }
-
-  async function disconnectActiveSshSession(): Promise<void> {
-    const sessionId = sshActiveSessionIdRef.current;
-    sshActiveSessionIdRef.current = null;
-    setSshActiveSessionId(null);
-    setSftpConnectionStatus("idle");
-    setSftpConnectionError(null);
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    if (!sessionId) {
-      return;
-    }
-
-    await window.ivsDashboard.sshDisconnect(sessionId).catch((error) => {
-      console.error("[ssh:disconnect]", error);
-    });
-  }
-
-  async function connectSshServer(
-    server: SshServerConfig,
-    status: SshConnectionStatus,
-    currentAttempt: number,
-  ): Promise<void> {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    if (!isValidSshServerCredential(server)) {
-      return;
-    }
-
-    sshActiveServerIdRef.current = server.id;
-    clearSshReconnectTimer();
-    await disconnectActiveSshSession();
-    setSshConnectionStatus(status);
-    setSftpConnectionStatus("connecting");
-    setSftpConnectionError(null);
-
-    const result = await window.ivsDashboard
-      .sshConnect({
-        serverId: server.id,
-        name: server.name,
-        address: getSshEndpoint(server),
-        username: getSshUsername(server),
-        password: server.password,
-        macs: server.macs,
-        ciphers: server.ciphers,
-      })
-      .catch((error) => ({
-        ok: false,
-        sessionId: null,
-        error:
-          error instanceof Error
-            ? error.message
-            : "SSH backend is not available.",
-      }));
-
-    if (sshActiveServerIdRef.current !== server.id) {
-      if (result.sessionId) {
-        await window.ivsDashboard
-          .sshDisconnect(result.sessionId)
-          .catch((error) => {
-            console.error("[ssh:disconnect-stale]", error);
-          });
-      }
-      return;
-    }
-
-    if (result.ok && result.sessionId) {
-      sshActiveSessionIdRef.current = result.sessionId;
-      setSshActiveSessionId(result.sessionId);
-      setSshRemoteCwd(result.cwd ?? null);
-      setSftpConnectionStatus("ready");
-      setSftpConnectionError(null);
-      setSshConnectionStatus("connected");
-      setSshReconnectAttempt(0);
-      return;
-    }
-
-    setSshActiveSessionId(null);
-    setSftpConnectionStatus("failed");
-    setSftpConnectionError(result.error ?? "Unable to start SFTP session.");
-    if (shouldRetrySshConnection(server, currentAttempt)) {
-      scheduleSshReconnect(server, currentAttempt + 1);
-      return;
-    }
-
-    setSshConnectionStatus("failed");
-  }
-
-  async function syncDirectoryToTerminalHost(
-    context: SshActiveHostContext,
-  ): Promise<void> {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    const hostProfileKey = getTerminalHostProfileKey(context);
-    const mappedProfileId =
-      sshTerminalHostProfileMapRef.current.get(hostProfileKey);
-    const mappedProfile = mappedProfileId
-      ? (sshServers.find((server) => server.id === mappedProfileId) ?? null)
-      : null;
-    const profile =
-      mappedProfile ??
-      findSshProfileForTerminalHost(
-        context,
-        sshServers,
-        selectedSshServer,
-        sshActiveSessionIdRef.current === null,
-      );
-    const jumpProfile =
-      !profile &&
-      selectedSshServer &&
-      isValidSshServerCredential(selectedSshServer) &&
-      !isSameTerminalHostAndProfile(context, selectedSshServer)
-        ? selectedSshServer
-        : null;
-    if ((!profile || !isValidSshServerCredential(profile)) && !jumpProfile) {
-      await disconnectActiveSshSession();
-      setSshRemoteCwd(context.cwd ?? null);
-      setSftpConnectionStatus("failed");
-      setSftpConnectionError(
-        "No saved SSH profile matches this terminal host.",
-      );
-      return;
-    }
-    const targetProfile = profile ?? jumpProfile;
-    if (!targetProfile) {
-      await disconnectActiveSshSession();
-      setSshRemoteCwd(context.cwd ?? null);
-      setSftpConnectionStatus("failed");
-      setSftpConnectionError(
-        "No SSH profile is available for this terminal host.",
-      );
-      return;
-    }
-    const directorySessionServerId = profile
-      ? targetProfile.id
-      : getTerminalHostDirectorySessionId(context, targetProfile);
-
-    if (
-      sshActiveServerIdRef.current === directorySessionServerId &&
-      sshActiveSessionIdRef.current
-    ) {
-      if (profile) {
-        sshTerminalHostProfileMapRef.current.set(hostProfileKey, profile.id);
-      }
-      setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, sshRemoteCwd));
-      setSftpConnectionStatus("ready");
-      setSftpConnectionError(null);
-      setSshConnectionStatus("connected");
-      return;
-    }
-
-    const requestId = sshDirectorySyncRequestRef.current + 1;
-    sshDirectorySyncRequestRef.current = requestId;
-    sshActiveServerIdRef.current = directorySessionServerId;
-    await disconnectActiveSshSession();
-    setSftpConnectionStatus("connecting");
-    setSftpConnectionError(null);
-
-    const result = await window.ivsDashboard
-      .sshConnect({
-        serverId: directorySessionServerId,
-        name: profile
-          ? profile.name
-          : `${targetProfile.name} -> ${context.host}`,
-        address: profile
-          ? getSshEndpoint(targetProfile)
-          : `${context.host.trim()}:22`,
-        username: profile
-          ? getSshUsername(targetProfile)
-          : context.username.trim() || getSshUsername(targetProfile),
-        password: targetProfile.password,
-        macs: targetProfile.macs,
-        ciphers: targetProfile.ciphers,
-        jump: profile
-          ? undefined
-          : {
-              address: getSshEndpoint(targetProfile),
-              username: getSshUsername(targetProfile),
-              password: targetProfile.password,
-              macs: targetProfile.macs,
-              ciphers: targetProfile.ciphers,
-            },
-      })
-      .catch((error) => ({
-        ok: false,
-        sessionId: null,
-        error:
-          error instanceof Error
-            ? error.message
-            : "SSH backend is not available.",
-      }));
-
-    if (sshDirectorySyncRequestRef.current !== requestId) {
-      if (result.sessionId) {
-        await window.ivsDashboard
-          .sshDisconnect(result.sessionId)
-          .catch((error) =>
-            console.error("[ssh:disconnect-stale-directory]", error),
-          );
-      }
-      return;
-    }
-
-    if (result.ok && result.sessionId) {
-      if (profile) {
-        sshTerminalHostProfileMapRef.current.set(hostProfileKey, profile.id);
-      }
-      sshActiveSessionIdRef.current = result.sessionId;
-      setSshActiveSessionId(result.sessionId);
-      setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, result.cwd));
-      setSftpConnectionStatus("ready");
-      setSftpConnectionError(null);
-      setSshConnectionStatus("connected");
-      setSshReconnectAttempt(0);
-      return;
-    }
-
-    setSshActiveSessionId(null);
-    setSshRemoteCwd(resolveTerminalDirectoryCwd(context.cwd, null));
-    setSftpConnectionStatus("failed");
-    setSftpConnectionError(result.error ?? "Unable to start SFTP session.");
-  }
-
-  function handleSshTerminalConnectionStatusChange(
-    status: SshConnectionStatus,
-  ): void {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    clearSshReconnectTimer();
-    if (status === "connecting") {
-      sshManualDisconnectRef.current = false;
-      setSshReconnectAttempt(0);
-      setSshConnectionStatus("connecting");
-      return;
-    }
-    if (status === "connected") {
-      setSshConnectionStatus("connected");
-      return;
-    }
-    if (status === "failed" || status === "disconnected") {
-      setSshTerminalConnectionActive(false);
-      void disconnectActiveSshSession();
-      setSshReconnectAttempt(0);
-      setSshRemoteCwd(null);
-      setSftpConnectionStatus("idle");
-      setSftpConnectionError(null);
-      setSshConnectionStatus(status);
-    }
-  }
-
-  function handleSshTerminalHostChange(context: SshActiveHostContext): void {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    setSshConnectionStatus("connected");
-    void syncDirectoryToTerminalHost(context);
-  }
-
-  function shouldRetrySshConnection(
-    server: SshServerConfig,
-    currentAttempt: number,
-  ): boolean {
-    return (
-      APP_FEATURE_FLAGS.ssh &&
-      server.autoReconnect &&
-      !sshManualDisconnectRef.current &&
-      currentAttempt < server.maxReconnectAttempts &&
-      isValidSshServerCredential(server) &&
-      sshActiveServerIdRef.current === server.id
-    );
-  }
-
-  function scheduleSshReconnect(
-    server: SshServerConfig,
-    nextAttempt: number,
-  ): void {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    setSshReconnectAttempt(nextAttempt);
-    setSshConnectionStatus("reconnecting");
-    sshReconnectTimerRef.current = window.setTimeout(() => {
-      sshReconnectTimerRef.current = null;
-      if (
-        sshManualDisconnectRef.current ||
-        sshActiveServerIdRef.current !== server.id
-      ) {
-        return;
-      }
-      void connectSshServer(server, "reconnecting", nextAttempt);
-    }, server.reconnectDelayMs);
-  }
-
-  function handleSshConnect(server: SshServerConfig): void {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    sshManualDisconnectRef.current = false;
-    setSshTerminalConnectionActive(true);
-    setSshReconnectAttempt(0);
-    sshActiveServerIdRef.current = server.id;
-    void disconnectActiveSshSession();
-    setSshRemoteCwd(null);
-    setSftpConnectionStatus("idle");
-    setSftpConnectionError(null);
-    setSshConnectionStatus("connecting");
-  }
-
-  function handleSshDisconnect(): void {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    sshManualDisconnectRef.current = true;
-    clearSshReconnectTimer();
-    setSshTerminalConnectionActive(false);
-    void disconnectActiveSshSession();
-    setSshReconnectAttempt(0);
-    setSshRemoteCwd(null);
-    setSftpConnectionStatus("idle");
-    setSftpConnectionError(null);
-    setSshConnectionStatus("disconnected");
-  }
-
-  function handleSshConnectionToggle(server: SshServerConfig): void {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    if (
-      sshConnectionStatus === "connected" ||
-      sshConnectionStatus === "connecting" ||
-      sshConnectionStatus === "reconnecting"
-    ) {
-      handleSshDisconnect();
-      return;
-    }
-
-    handleSshConnect(server);
-  }
-
-  async function handleSshCommandSubmit(command: string) {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return {
-        stdout: "",
-        stderr: "",
-        exitCode: null,
-        error: "SSH is currently unavailable.",
-      };
-    }
-    const sessionId = sshActiveSessionIdRef.current;
-    if (sshConnectionStatus !== "connected" || !sessionId) {
-      return {
-        stdout: "",
-        stderr: "",
-        exitCode: null,
-        error: "Not connected. Please connect to the SSH server first.",
-      };
-    }
-
-    try {
-      const result = await window.ivsDashboard.sshExec(sessionId, command);
-      return result;
-    } catch (error) {
-      return {
-        stdout: "",
-        stderr: "",
-        exitCode: null,
-        error:
-          error instanceof Error
-            ? error.message
-            : "SSH backend is not available.",
-      };
-    }
-  }
-
-  // XtermTerminal now owns the visible SSH login flow. This effect only resets
-  // the old guard when leaving the SSH tool so profile changes can start fresh.
-  useEffect(() => {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    const onSshTool = activeSection === "tools" && activeTool === "ssh";
-    if (!onSshTool) {
-      sshAutoLoginAttemptedRef.current = null;
-    }
-  }, [activeSection, activeTool]);
-
-  // Cancel pending SSH activity when selected server changes.
-  useEffect(() => {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return;
-    }
-    if (
-      sshActiveServerIdRef.current !== null &&
-      sshActiveServerIdRef.current !== selectedSshServerId
-    ) {
-      clearSshReconnectTimer();
-      setSshTerminalConnectionActive(false);
-      void disconnectActiveSshSession();
-      sshManualDisconnectRef.current = false;
-      setSshConnectionStatus("idle");
-      setSshReconnectAttempt(0);
-      setSshRemoteCwd(null);
-      setSftpConnectionStatus("idle");
-      setSftpConnectionError(null);
-    }
-    sshActiveServerIdRef.current = selectedSshServerId || null;
-  }, [selectedSshServerId]);
-
-  // Cleanup SSH timers on unmount.
-  useEffect(() => {
-    if (!APP_FEATURE_FLAGS.ssh) {
-      return undefined;
-    }
-    return () => {
-      clearSshReconnectTimer();
-      void disconnectActiveSshSession();
-    };
-  }, []);
   const runningBuildItems = useMemo(
     () =>
       getBuildMiniPanelItems(
@@ -1507,177 +641,6 @@ function App(): JSX.Element {
     });
   }
 
-  function switchDatabaseConnection(connection: DatabaseConnection): void {
-    const doSwitch = (): void => {
-      selectedDatabaseConnectionIdRef.current = connection.id;
-      setSelectedDatabaseConnectionId(connection.id);
-      setDatabaseConnections((current) =>
-        current.map((item) =>
-          item.id === connection.id
-            ? {
-                ...item,
-                status: item.status === "error" ? "error" : "connected",
-              }
-            : item,
-        ),
-      );
-      setActiveDatabaseTab("connection");
-      setSettingsOpen(false);
-      setSettingsDirty(false);
-      setActiveSection("database");
-    };
-
-    if (settingsDirty && settingsOpen) {
-      setPendingNav(() => doSwitch);
-      return;
-    }
-
-    doSwitch();
-  }
-
-  function connectDatabaseConnection(connection: DatabaseConnection): void {
-    if (databaseSleepTimerRef.current !== null) {
-      window.clearTimeout(databaseSleepTimerRef.current);
-      databaseSleepTimerRef.current = null;
-    }
-    selectedDatabaseConnectionIdRef.current = connection.id;
-    setSelectedDatabaseConnectionId(connection.id);
-    setActiveDatabaseTab("connection");
-    setActiveSection("database");
-    void verifyDatabaseConnection(connection, {
-      persistAutoConnect: true,
-      showSuccess: true,
-    });
-  }
-
-  async function verifyDatabaseConnection(
-    connection: DatabaseConnection,
-    options: { persistAutoConnect: boolean; showSuccess: boolean },
-  ): Promise<void> {
-    verifyingDatabaseConnectionIdRef.current = connection.id;
-    hadDatabaseConnectionRef.current = true;
-    setDatabaseRuntimeStatus((current) =>
-      current === "connected" || current === "sleeping"
-        ? "reconnecting"
-        : "connecting",
-    );
-
-    try {
-      const result =
-        await window.ivsDashboard.testDatabaseConnection(connection);
-      if (!result.success) {
-        if (verifyingDatabaseConnectionIdRef.current === connection.id) {
-          verifyingDatabaseConnectionIdRef.current = null;
-        }
-        applyDatabaseConnectionStatus(connection, "error");
-        if (selectedDatabaseConnectionIdRef.current === connection.id) {
-          setDatabaseRuntimeStatus("error");
-        }
-        showSnackbar(
-          result.message || "Database connection failed.",
-          "invalid",
-        );
-        if (options.persistAutoConnect) {
-          await saveDatabaseConnectionRuntimeStatus(connection, "error", false);
-        }
-        return;
-      }
-
-      applyDatabaseConnectionStatus(connection, "connected");
-      if (verifyingDatabaseConnectionIdRef.current === connection.id) {
-        verifyingDatabaseConnectionIdRef.current = null;
-      }
-      if (selectedDatabaseConnectionIdRef.current === connection.id) {
-        setDatabaseRuntimeStatus("connected");
-      }
-      if (options.showSuccess) {
-        showSnackbar(`${connection.name} connected.`, "valid");
-      }
-      if (options.persistAutoConnect) {
-        await saveDatabaseConnectionRuntimeStatus(
-          connection,
-          "connected",
-          true,
-        );
-      }
-    } catch (error) {
-      if (verifyingDatabaseConnectionIdRef.current === connection.id) {
-        verifyingDatabaseConnectionIdRef.current = null;
-      }
-      const message =
-        error instanceof Error ? error.message : "Database connection failed.";
-      applyDatabaseConnectionStatus(connection, "error");
-      if (selectedDatabaseConnectionIdRef.current === connection.id) {
-        setDatabaseRuntimeStatus("error");
-      }
-      showSnackbar(message, "invalid");
-      if (options.persistAutoConnect) {
-        await saveDatabaseConnectionRuntimeStatus(connection, "error", false);
-      }
-    }
-  }
-
-  function applyDatabaseConnectionStatus(
-    connection: DatabaseConnection,
-    status: DatabaseConnection["status"],
-  ): void {
-    setDatabaseConnections((current) =>
-      current.map((item) =>
-        item.id === connection.id ? { ...item, status } : item,
-      ),
-    );
-  }
-
-  async function saveDatabaseConnectionRuntimeStatus(
-    connection: DatabaseConnection,
-    status: DatabaseConnection["status"],
-    autoConnect: boolean,
-  ): Promise<void> {
-    try {
-      const saved = await window.ivsDashboard.updateDatabaseConnectionSettings(
-        connection.id,
-        { autoConnect, status },
-      );
-      setDatabaseConnections((current) =>
-        current.map((item) => (item.id === saved.id ? saved : item)),
-      );
-    } catch (error) {
-      console.error(error);
-      showSnackbar("Connection setting could not be saved.", "invalid");
-    }
-  }
-
-  function disconnectDatabaseConnection(connection: DatabaseConnection): void {
-    if (databaseSleepTimerRef.current !== null) {
-      window.clearTimeout(databaseSleepTimerRef.current);
-      databaseSleepTimerRef.current = null;
-    }
-    if (selectedDatabaseConnectionId === connection.id) {
-      hadDatabaseConnectionRef.current = false;
-      setDatabaseRuntimeStatus("disconnected");
-    }
-    setDatabaseConnections((current) =>
-      current.map((item) =>
-        item.id === connection.id ? { ...item, status: "disconnected" } : item,
-      ),
-    );
-    showSnackbar(`${connection.name} disconnected.`, "warning");
-    void window.ivsDashboard
-      .updateDatabaseConnectionSettings(connection.id, {
-        autoConnect: false,
-        status: "disconnected",
-      })
-      .then((saved) => {
-        setDatabaseConnections((current) =>
-          current.map((item) => (item.id === saved.id ? saved : item)),
-        );
-      })
-      .catch((error) => {
-        console.error(error);
-        showSnackbar("Connection setting could not be saved.", "invalid");
-      });
-  }
-
   function handleSectionChange(section: AppSection): void {
     if (settingsDirty && settingsOpen) {
       setPendingNav(() => () => {
@@ -1727,25 +690,6 @@ function App(): JSX.Element {
     setSettingsOpen(false);
   }
 
-  function showSnackbar(message: string, tone: SnackbarState["tone"]): void {
-    if (snackbarDismissTimerRef.current !== null) {
-      window.clearTimeout(snackbarDismissTimerRef.current);
-    }
-    if (snackbarCloseTimerRef.current !== null) {
-      window.clearTimeout(snackbarCloseTimerRef.current);
-    }
-
-    setSnackbarClosing(false);
-    setSnackbar({ message, tone });
-    snackbarDismissTimerRef.current = window.setTimeout(() => {
-      setSnackbarClosing(true);
-      snackbarCloseTimerRef.current = window.setTimeout(() => {
-        setSnackbar(null);
-        setSnackbarClosing(false);
-      }, 190);
-    }, 3600);
-  }
-
   function showDebugBuildNotification(): void {
     if (!debugEnabled) {
       return;
@@ -1770,118 +714,6 @@ function App(): JSX.Element {
     }
 
     setAddProjectOpen(true);
-  }
-
-  function handleAddDatabaseConnection(): void {
-    setActiveSection("database");
-    setDatabaseConnectionModal("add");
-  }
-
-  function openDatabaseConnectionSettings(): void {
-    if (!selectedDatabaseConnection) {
-      showSnackbar("Select a database connection first.", "invalid");
-      return;
-    }
-
-    setDatabaseConnectionModal("edit");
-  }
-
-  async function handleSaveDatabaseConnection(
-    savedConnection: DatabaseConnection,
-  ): Promise<boolean> {
-    try {
-      const persisted =
-        await window.ivsDashboard.saveDatabaseConnection(savedConnection);
-      if (databaseConnectionModal === "add") {
-        setDatabaseConnections((current) => [...current, persisted]);
-        setSelectedDatabaseConnectionId(persisted.id);
-        setActiveDatabaseTab("connection");
-        setActiveSection("database");
-        setDatabaseConnectionModal(null);
-        showSnackbar("Connection saved", "valid");
-        return true;
-      }
-
-      setDatabaseConnections((current) =>
-        current.map((connection) =>
-          connection.id === persisted.id
-            ? {
-                ...connection,
-                ...persisted,
-                name: persisted.name || connection.name,
-              }
-            : connection,
-        ),
-      );
-      setSelectedDatabaseConnectionId(persisted.id);
-      setDatabaseConnectionModal(null);
-      showSnackbar("Connection settings saved", "valid");
-      return true;
-    } catch (error) {
-      console.error(error);
-      showSnackbar(
-        error instanceof Error
-          ? error.message
-          : "Connection could not be saved",
-        "invalid",
-      );
-      return false;
-    }
-  }
-
-  async function confirmDeleteDatabaseConnection(): Promise<void> {
-    if (!deleteDatabaseConnectionRequest) {
-      return;
-    }
-
-    const deleted = deleteDatabaseConnectionRequest;
-    try {
-      await window.ivsDashboard.deleteDatabaseConnection(deleted.id);
-      const remaining = databaseConnections.filter(
-        (connection) => connection.id !== deleted.id,
-      );
-      setDatabaseConnections(remaining);
-      setDeletedDatabaseConnectionId(deleted.id);
-      setDeleteDatabaseConnectionRequest(null);
-      setDatabaseExecutionHistory((current) =>
-        current.filter((entry) => entry.connectionId !== deleted.id),
-      );
-      if (selectedDatabaseConnectionId === deleted.id) {
-        setSelectedDatabaseConnectionId(remaining[0]?.id ?? null);
-        setActiveDatabaseTab("connection");
-        if (remaining.length === 0) {
-          setActiveSection("database");
-        }
-      }
-      showSnackbar(`${deleted.name} deleted.`, "valid");
-    } catch (error) {
-      console.error(error);
-      showSnackbar(
-        error instanceof Error
-          ? error.message
-          : "Connection could not be deleted",
-        "invalid",
-      );
-    }
-  }
-
-  function handleDatabaseExecution(record: DatabaseExecutionRecord): void {
-    setDatabaseExecutionHistory((current) => {
-      const countsByConnection = new Map<string, number>();
-      return [record, ...current].filter((entry) => {
-        const count = countsByConnection.get(entry.connectionId) ?? 0;
-        if (count >= 1000) {
-          return false;
-        }
-        countsByConnection.set(entry.connectionId, count + 1);
-        return true;
-      });
-    });
-  }
-
-  function refreshDatabaseMetadata(): void {
-    setDatabaseLastRefreshTime(new Date().toISOString());
-    showSnackbar("Database metadata refreshed.", "valid");
   }
 
   async function handleCreateProject(
@@ -1970,50 +802,43 @@ function App(): JSX.Element {
 
   const splashOverlay =
     splashPhase !== "hidden" ? (
-      <div className={`splash-screen ${splashPhase}`} aria-hidden="true">
-        <div className="splash-logo-shell" style={{ width: SPLASH_LOGO_SIZE }}>
-          <AppLogoIcon className="splash-logo" />
-        </div>
-      </div>
+      <SplashOverlay phase={splashPhase} logoSize={SPLASH_LOGO_SIZE} />
     ) : null;
 
   const databaseConnectionDialog = (
     <DatabaseConnectionModal
       open={
-        databaseConnectionModal !== null &&
-        (databaseConnectionModal !== "edit" ||
-          selectedDatabaseConnection !== null)
+        database.connectionModal !== null &&
+        (database.connectionModal !== "edit" ||
+          database.selectedConnection !== null)
       }
-      mode={databaseConnectionModal ?? "add"}
+      mode={database.connectionModal ?? "add"}
       connection={
-        databaseConnectionModal === "edit" ? selectedDatabaseConnection : null
+        database.connectionModal === "edit" ? database.selectedConnection : null
       }
-      connections={databaseConnections}
-      onClose={() => setDatabaseConnectionModal(null)}
-      onSave={handleSaveDatabaseConnection}
+      connections={database.connections}
+      onClose={() => database.closeConnectionModal()}
+      onSave={database.saveConnection}
       onTestStatus={showSnackbar}
-      onDeleteRequest={(connection) => {
-        setDatabaseConnectionModal(null);
-        setDeleteDatabaseConnectionRequest(connection);
-      }}
+      onDeleteRequest={database.requestDeleteConnection}
     />
   );
 
-  const databaseDeleteDialog = deleteDatabaseConnectionRequest ? (
+  const databaseDeleteDialog = database.deleteConnectionRequest ? (
     <ConfirmDialog
       title="Delete Database Connection?"
-      message={`Deleting "${deleteDatabaseConnectionRequest.name}" will remove its saved sheets, query results, metadata cache, and query history from this workspace. Other projects and database connections will not be changed.`}
+      message={`Deleting "${database.deleteConnectionRequest.name}" will remove its saved sheets, query results, metadata cache, and query history from this workspace. Other projects and database connections will not be changed.`}
       confirmLabel="Delete"
       cancelLabel="Cancel"
       variant="danger"
-      onClose={() => setDeleteDatabaseConnectionRequest(null)}
-      onConfirm={() => void confirmDeleteDatabaseConnection()}
+      onClose={() => database.setDeleteConnectionRequest(null)}
+      onConfirm={() => void database.confirmDeleteConnection()}
     />
   ) : null;
-  const SshHeaderActionsComponent = sshFeatureModule?.SshHeaderActions;
-  const SshHeaderTabsComponent = sshFeatureModule?.SshHeaderTabs;
-  const SshSettingsModalComponent = sshFeatureModule?.SshSettingsModal;
-  const SshToolComponent = sshFeatureModule?.SshTool;
+  const SshHeaderActionsComponent = ssh.featureModule?.SshHeaderActions;
+  const SshHeaderTabsComponent = ssh.featureModule?.SshHeaderTabs;
+  const SshSettingsModalComponent = ssh.featureModule?.SshSettingsModal;
+  const SshToolComponent = ssh.featureModule?.SshTool;
   const cookieModal = (
     <ApiTesterCookieModal
       open={cookieModalOpen}
@@ -2027,16 +852,16 @@ function App(): JSX.Element {
   );
   const sshSettingsModal =
     APP_FEATURE_FLAGS.ssh && SshSettingsModalComponent ? (
-    <SshSettingsModalComponent
-      open={sshSettingsOpen}
-      servers={sshServers}
-      selectedServerId={selectedSshServerId}
-      connectionStatus={sshConnectionStatus}
-      credentialRequired={sshSettingsRequired}
-      onSave={saveSshServers}
-      onClose={closeSshSettings}
-    />
-  ) : null;
+      <SshSettingsModalComponent
+        open={ssh.settingsOpen}
+        servers={ssh.servers}
+        selectedServerId={ssh.selectedServerId}
+        connectionStatus={ssh.connectionStatus}
+        credentialRequired={ssh.settingsRequired}
+        onSave={ssh.saveServers}
+        onClose={ssh.closeSettings}
+      />
+    ) : null;
   const chatFeature = chatEnabled ? (
     <ChatFeature onToast={showSnackbar} />
   ) : null;
@@ -2102,9 +927,9 @@ function App(): JSX.Element {
       >
         <Sidebar
           projects={projects}
-          databaseConnections={databaseConnections}
+          databaseConnections={database.connections}
           selectedProjectId=""
-          selectedDatabaseConnectionId={selectedDatabaseConnectionId}
+          selectedDatabaseConnectionId={database.selectedConnectionId}
           activeSection={
             activeSection === "project" ? "dashboard" : activeSection
           }
@@ -2112,13 +937,13 @@ function App(): JSX.Element {
           collapsed={sidebarCollapsed}
           debugEnabled={debugEnabled}
           onProjectChange={switchProject}
-          onDatabaseConnectionChange={switchDatabaseConnection}
-          onDatabaseConnect={connectDatabaseConnection}
-          onDatabaseDisconnect={disconnectDatabaseConnection}
+          onDatabaseConnectionChange={database.switchConnection}
+          onDatabaseConnect={database.connectConnection}
+          onDatabaseDisconnect={database.disconnectConnection}
           onSectionChange={handleSectionChange}
           onToolChange={handleToolChange}
           onAddProject={openAddProjectDialog}
-          onAddDatabaseConnection={handleAddDatabaseConnection}
+          onAddDatabaseConnection={database.openAddConnection}
           onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
           onInterfaceSettings={() => setInterfaceSettingsOpen(true)}
           onDebugBuildNotification={showDebugBuildNotification}
@@ -2152,40 +977,17 @@ function App(): JSX.Element {
                   </>
                 ) : activeSection === "tools" && activeTool === "notebook" ? (
                   <>
-                    <button
-                      className="icon-button secondary header-settings-button"
-                      type="button"
-                      aria-label="Add note"
-                      title="Add note"
-                      onClick={() =>
+                    <NotesHeaderActions
+                      view={notebookView}
+                      onAdd={() =>
                         setNotebookAddRequestId((current) => current + 1)
                       }
-                    >
-                      <Plus size={18} />
-                    </button>
-                    <button
-                      className="icon-button secondary header-settings-button"
-                      type="button"
-                      aria-label={
-                        notebookView === "grid"
-                          ? "Switch to list view"
-                          : "Switch to grid view"
-                      }
-                      title={
-                        notebookView === "grid" ? "List view" : "Grid view"
-                      }
-                      onClick={() =>
+                      onToggleView={() =>
                         setNotebookView((current) =>
                           current === "grid" ? "list" : "grid",
                         )
                       }
-                    >
-                      {notebookView === "grid" ? (
-                        <List size={18} />
-                      ) : (
-                        <Grid3X3 size={18} />
-                      )}
-                    </button>
+                    />
                     <FontSizeDropdown
                       value={fontSizeMode}
                       onChange={setFontSizeMode}
@@ -2196,14 +998,14 @@ function App(): JSX.Element {
                   activeTool === "ssh" &&
                   SshHeaderActionsComponent ? (
                   <SshHeaderActionsComponent
-                    servers={sshServers}
-                    selectedServerId={selectedSshServerId}
+                    servers={ssh.servers}
+                    selectedServerId={ssh.selectedServerId}
                     fontSizeMode={fontSizeMode}
-                    disabled={!sshHasValidCredential}
-                    connectionStatus={sshConnectionStatus}
-                    onServerChange={setSelectedSshServerId}
-                    onConnectionToggle={handleSshConnectionToggle}
-                    onSettingsClick={() => setSshSettingsOpen(true)}
+                    disabled={!ssh.hasValidCredential}
+                    connectionStatus={ssh.connectionStatus}
+                    onServerChange={ssh.setSelectedServerId}
+                    onConnectionToggle={ssh.handleConnectionToggle}
+                    onSettingsClick={() => ssh.openSettings()}
                     onFontSizeChange={setFontSizeMode}
                   />
                 ) : activeSection === "tools" ? (
@@ -2212,24 +1014,24 @@ function App(): JSX.Element {
                     onChange={setFontSizeMode}
                   />
                 ) : activeSection === "database" &&
-                  selectedDatabaseConnection ? (
+                  database.selectedConnection ? (
                   <DatabaseHeaderActions
-                    connection={selectedDatabaseConnection}
-                    databaseStatus={databaseRuntimeStatus}
+                    connection={database.selectedConnection}
+                    databaseStatus={database.runtimeStatus}
                     fontSizeMode={fontSizeMode}
                     onFontSizeChange={setFontSizeMode}
-                    onSettingsClick={openDatabaseConnectionSettings}
+                    onSettingsClick={database.openConnectionSettings}
                   />
                 ) : null}
                 {chatFeature}
               </>
             }
           >
-            {activeSection === "database" && selectedDatabaseConnection ? (
+            {activeSection === "database" && database.selectedConnection ? (
               <DatabaseWorkspaceTabs
-                connectionName={selectedDatabaseConnection.name}
-                activeTab={activeDatabaseTab}
-                onTabChange={setActiveDatabaseTab}
+                connectionName={database.selectedConnection.name}
+                activeTab={database.activeTab}
+                onTabChange={database.setActiveTab}
               />
             ) : activeSection === "tools" && activeTool === "api-tester" ? (
               <ApiTesterHeaderTabs
@@ -2253,8 +1055,8 @@ function App(): JSX.Element {
               activeTool === "ssh" &&
               SshHeaderTabsComponent ? (
               <SshHeaderTabsComponent
-                activeTab={activeSshTab}
-                onTabChange={setActiveSshTab}
+                activeTab={ssh.activeTab}
+                onTabChange={ssh.setActiveTab}
               />
             ) : null}
           </AppHeader>
@@ -2287,26 +1089,26 @@ function App(): JSX.Element {
               activeTool === "ssh" &&
               SshToolComponent ? (
               <SshToolComponent
-                selectedServer={selectedSshServer}
-                activeTab={activeSshTab}
-                disabled={!sshHasValidCredential}
-                connectionStatus={sshConnectionStatus}
-                reconnectAttempt={sshReconnectAttempt}
+                selectedServer={ssh.selectedServer}
+                activeTab={ssh.activeTab}
+                disabled={!ssh.hasValidCredential}
+                connectionStatus={ssh.connectionStatus}
+                reconnectAttempt={ssh.reconnectAttempt}
                 reconnectMaxAttempts={
-                  selectedSshServer?.maxReconnectAttempts ?? 0
+                  ssh.selectedServer?.maxReconnectAttempts ?? 0
                 }
-                terminalConnectionEnabled={sshTerminalConnectionEnabled}
-                terminalConnectionSignal={sshTerminalConnectionSignal}
-                sshSessionId={sshActiveSessionId}
-                remoteCwd={sshRemoteCwd}
-                sftpStatus={sftpConnectionStatus}
-                sftpError={sftpConnectionError}
-                onConfigure={() => setSshSettingsOpen(true)}
-                onCommandSubmit={handleSshCommandSubmit}
+                terminalConnectionEnabled={ssh.terminalConnectionEnabled}
+                terminalConnectionSignal={ssh.terminalConnectionSignal}
+                sshSessionId={ssh.activeSessionId}
+                remoteCwd={ssh.remoteCwd}
+                sftpStatus={ssh.sftpConnectionStatus}
+                sftpError={ssh.sftpConnectionError}
+                onConfigure={() => ssh.openSettings()}
+                onCommandSubmit={ssh.handleCommandSubmit}
                 onTerminalConnectionStatusChange={
-                  handleSshTerminalConnectionStatusChange
+                  ssh.handleTerminalConnectionStatusChange
                 }
-                onTerminalHostChange={handleSshTerminalHostChange}
+                onTerminalHostChange={ssh.handleTerminalHostChange}
               />
             ) : (
               <CryptographicTool
@@ -2315,40 +1117,37 @@ function App(): JSX.Element {
               />
             )
           ) : activeSection === "database" ? (
-            selectedDatabaseConnection ? (
+            database.selectedConnection ? (
               <DatabaseWorkspace
-                connection={selectedDatabaseConnection}
-                activeTab={activeDatabaseTab}
-                databaseStatus={databaseRuntimeStatus}
-                onTabChange={setActiveDatabaseTab}
-                executionHistory={selectedDatabaseExecutionHistory}
-                queryCount={selectedDatabaseExecutionHistory.length}
-                lastRefreshTime={databaseLastRefreshTime}
-                onExecution={handleDatabaseExecution}
-                onRefresh={refreshDatabaseMetadata}
+                connection={database.selectedConnection}
+                activeTab={database.activeTab}
+                databaseStatus={database.runtimeStatus}
+                onTabChange={database.setActiveTab}
+                executionHistory={database.selectedExecutionHistory}
+                queryCount={database.selectedExecutionHistory.length}
+                lastRefreshTime={database.lastRefreshTime}
+                onExecution={database.handleExecution}
+                onRefresh={database.refreshMetadata}
                 onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
-                deletedConnectionId={deletedDatabaseConnectionId}
+                deletedConnectionId={database.deletedConnectionId}
               />
             ) : (
-              <DatabaseEmptyState onCreate={handleAddDatabaseConnection} />
+              <DatabaseEmptyState onCreate={database.openAddConnection} />
             )
           ) : (
             <DashboardContent
               projects={dashboardOverview}
-              databaseConnections={databaseConnections}
+              databaseConnections={database.connections}
               loading={dashboardOverviewLoading}
             />
           )}
         </main>
         {snackbar ? (
-          <div
-            className={`app-snackbar ${snackbar.tone}${
-              snackbarClosing ? " closing" : ""
-            }`}
-            role="status"
-          >
-            {snackbar.message}
-          </div>
+          <AppSnackbar
+            message={snackbar.message}
+            tone={snackbar.tone}
+            closing={snackbarClosing}
+          />
         ) : null}
         {addProjectOpen ? (
           <AddProjectDialog
@@ -2377,9 +1176,9 @@ function App(): JSX.Element {
     >
       <Sidebar
         projects={projects}
-        databaseConnections={databaseConnections}
+        databaseConnections={database.connections}
         selectedProjectId={selectedProject.id}
-        selectedDatabaseConnectionId={selectedDatabaseConnectionId}
+        selectedDatabaseConnectionId={database.selectedConnectionId}
         activeSection={activeSection}
         activeTool={activeTool}
         collapsed={sidebarCollapsed}
@@ -2387,13 +1186,13 @@ function App(): JSX.Element {
         projectFrontendEnabled={sidebarProjectFrontendEnabled}
         debugEnabled={debugEnabled}
         onProjectChange={switchProject}
-        onDatabaseConnectionChange={switchDatabaseConnection}
-        onDatabaseConnect={connectDatabaseConnection}
-        onDatabaseDisconnect={disconnectDatabaseConnection}
+        onDatabaseConnectionChange={database.switchConnection}
+        onDatabaseConnect={database.connectConnection}
+        onDatabaseDisconnect={database.disconnectConnection}
         onSectionChange={handleSectionChange}
         onToolChange={handleToolChange}
         onAddProject={openAddProjectDialog}
-        onAddDatabaseConnection={handleAddDatabaseConnection}
+        onAddDatabaseConnection={database.openAddConnection}
         onCollapseToggle={() => setSidebarCollapsed((current) => !current)}
         onInterfaceSettings={() => setInterfaceSettingsOpen(true)}
         onDebugBuildNotification={showDebugBuildNotification}
@@ -2426,57 +1225,32 @@ function App(): JSX.Element {
                   showSettingsButton={activeTab !== "notes"}
                   utilityActions={
                     activeTab === "notes" ? (
-                      <>
-                        <button
-                          className="icon-button secondary header-settings-button"
-                          type="button"
-                          aria-label="Add note"
-                          title="Add note"
-                          disabled={projectLoading}
-                          onClick={() =>
-                            setNotesAddRequestId((current) => current + 1)
-                          }
-                        >
-                          <Plus size={18} />
-                        </button>
-                        <button
-                          className="icon-button secondary header-settings-button"
-                          type="button"
-                          aria-label={
-                            notesView === "grid"
-                              ? "Switch to list view"
-                              : "Switch to grid view"
-                          }
-                          title={
-                            notesView === "grid" ? "List view" : "Grid view"
-                          }
-                          disabled={projectLoading}
-                          onClick={() =>
-                            setNotesView((current) =>
-                              current === "grid" ? "list" : "grid",
-                            )
-                          }
-                        >
-                          {notesView === "grid" ? (
-                            <List size={18} />
-                          ) : (
-                            <Grid3X3 size={18} />
-                          )}
-                        </button>
-                      </>
+                      <NotesHeaderActions
+                        view={notesView}
+                        disabled={projectLoading}
+                        onAdd={() =>
+                          setNotesAddRequestId((current) => current + 1)
+                        }
+                        onToggleView={() =>
+                          setNotesView((current) =>
+                            current === "grid" ? "list" : "grid",
+                          )
+                        }
+                      />
                     ) : undefined
                   }
                   onServiceWarning={(message) =>
                     showSnackbar(message, "invalid")
                   }
                 />
-              ) : activeSection === "database" && selectedDatabaseConnection ? (
+              ) : activeSection === "database" &&
+                database.selectedConnection ? (
                 <DatabaseHeaderActions
-                  connection={selectedDatabaseConnection}
-                  databaseStatus={databaseRuntimeStatus}
+                  connection={database.selectedConnection}
+                  databaseStatus={database.runtimeStatus}
                   fontSizeMode={fontSizeMode}
                   onFontSizeChange={setFontSizeMode}
-                  onSettingsClick={openDatabaseConnectionSettings}
+                  onSettingsClick={database.openConnectionSettings}
                 />
               ) : activeSection === "tools" && activeTool === "api-tester" ? (
                 <>
@@ -2491,38 +1265,17 @@ function App(): JSX.Element {
                 </>
               ) : activeSection === "tools" && activeTool === "notebook" ? (
                 <>
-                  <button
-                    className="icon-button secondary header-settings-button"
-                    type="button"
-                    aria-label="Add note"
-                    title="Add note"
-                    onClick={() =>
+                  <NotesHeaderActions
+                    view={notebookView}
+                    onAdd={() =>
                       setNotebookAddRequestId((current) => current + 1)
                     }
-                  >
-                    <Plus size={18} />
-                  </button>
-                  <button
-                    className="icon-button secondary header-settings-button"
-                    type="button"
-                    aria-label={
-                      notebookView === "grid"
-                        ? "Switch to list view"
-                        : "Switch to grid view"
-                    }
-                    title={notebookView === "grid" ? "List view" : "Grid view"}
-                    onClick={() =>
+                    onToggleView={() =>
                       setNotebookView((current) =>
                         current === "grid" ? "list" : "grid",
                       )
                     }
-                  >
-                    {notebookView === "grid" ? (
-                      <List size={18} />
-                    ) : (
-                      <Grid3X3 size={18} />
-                    )}
-                  </button>
+                  />
                   <FontSizeDropdown
                     value={fontSizeMode}
                     onChange={setFontSizeMode}
@@ -2533,14 +1286,14 @@ function App(): JSX.Element {
                 activeTool === "ssh" &&
                 SshHeaderActionsComponent ? (
                 <SshHeaderActionsComponent
-                  servers={sshServers}
-                  selectedServerId={selectedSshServerId}
+                  servers={ssh.servers}
+                  selectedServerId={ssh.selectedServerId}
                   fontSizeMode={fontSizeMode}
-                  disabled={!sshHasValidCredential}
-                  connectionStatus={sshConnectionStatus}
-                  onServerChange={setSelectedSshServerId}
-                  onConnectionToggle={handleSshConnectionToggle}
-                  onSettingsClick={() => setSshSettingsOpen(true)}
+                  disabled={!ssh.hasValidCredential}
+                  connectionStatus={ssh.connectionStatus}
+                  onServerChange={ssh.setSelectedServerId}
+                  onConnectionToggle={ssh.handleConnectionToggle}
+                  onSettingsClick={() => ssh.openSettings()}
                   onFontSizeChange={setFontSizeMode}
                 />
               ) : activeSection === "tools" || activeSection === "dashboard" ? (
@@ -2553,11 +1306,11 @@ function App(): JSX.Element {
             </>
           }
         >
-          {activeSection === "database" && selectedDatabaseConnection ? (
+          {activeSection === "database" && database.selectedConnection ? (
             <DatabaseWorkspaceTabs
-              connectionName={selectedDatabaseConnection.name}
-              activeTab={activeDatabaseTab}
-              onTabChange={setActiveDatabaseTab}
+              connectionName={database.selectedConnection.name}
+              activeTab={database.activeTab}
+              onTabChange={database.setActiveTab}
             />
           ) : activeSection === "tools" && activeTool === "api-tester" ? (
             <ApiTesterHeaderTabs
@@ -2581,8 +1334,8 @@ function App(): JSX.Element {
             activeTool === "ssh" &&
             SshHeaderTabsComponent ? (
             <SshHeaderTabsComponent
-              activeTab={activeSshTab}
-              onTabChange={setActiveSshTab}
+              activeTab={ssh.activeTab}
+              onTabChange={ssh.setActiveTab}
             />
           ) : null}
         </AppHeader>
@@ -2590,26 +1343,26 @@ function App(): JSX.Element {
         {activeSection === "dashboard" ? (
           <DashboardContent
             projects={dashboardOverview}
-            databaseConnections={databaseConnections}
+            databaseConnections={database.connections}
             loading={dashboardOverviewLoading}
           />
         ) : activeSection === "database" ? (
-          selectedDatabaseConnection ? (
+          database.selectedConnection ? (
             <DatabaseWorkspace
-              connection={selectedDatabaseConnection}
-              activeTab={activeDatabaseTab}
-              databaseStatus={databaseRuntimeStatus}
-              onTabChange={setActiveDatabaseTab}
-              executionHistory={selectedDatabaseExecutionHistory}
-              queryCount={selectedDatabaseExecutionHistory.length}
-              lastRefreshTime={databaseLastRefreshTime}
-              onExecution={handleDatabaseExecution}
-              onRefresh={refreshDatabaseMetadata}
+              connection={database.selectedConnection}
+              activeTab={database.activeTab}
+              databaseStatus={database.runtimeStatus}
+              onTabChange={database.setActiveTab}
+              executionHistory={database.selectedExecutionHistory}
+              queryCount={database.selectedExecutionHistory.length}
+              lastRefreshTime={database.lastRefreshTime}
+              onExecution={database.handleExecution}
+              onRefresh={database.refreshMetadata}
               onSheetSaved={() => showSnackbar("Sheet saved", "valid")}
-              deletedConnectionId={deletedDatabaseConnectionId}
+              deletedConnectionId={database.deletedConnectionId}
             />
           ) : (
-            <DatabaseEmptyState onCreate={handleAddDatabaseConnection} />
+            <DatabaseEmptyState onCreate={database.openAddConnection} />
           )
         ) : activeSection === "tools" ? (
           activeTool === "api-tester" ? (
@@ -2641,26 +1394,26 @@ function App(): JSX.Element {
             activeTool === "ssh" &&
             SshToolComponent ? (
             <SshToolComponent
-              selectedServer={selectedSshServer}
-              activeTab={activeSshTab}
-              disabled={!sshHasValidCredential}
-              connectionStatus={sshConnectionStatus}
-              reconnectAttempt={sshReconnectAttempt}
+              selectedServer={ssh.selectedServer}
+              activeTab={ssh.activeTab}
+              disabled={!ssh.hasValidCredential}
+              connectionStatus={ssh.connectionStatus}
+              reconnectAttempt={ssh.reconnectAttempt}
               reconnectMaxAttempts={
-                selectedSshServer?.maxReconnectAttempts ?? 0
+                ssh.selectedServer?.maxReconnectAttempts ?? 0
               }
-              terminalConnectionEnabled={sshTerminalConnectionEnabled}
-              terminalConnectionSignal={sshTerminalConnectionSignal}
-              sshSessionId={sshActiveSessionId}
-              remoteCwd={sshRemoteCwd}
-              sftpStatus={sftpConnectionStatus}
-              sftpError={sftpConnectionError}
-              onConfigure={() => setSshSettingsOpen(true)}
-              onCommandSubmit={handleSshCommandSubmit}
+              terminalConnectionEnabled={ssh.terminalConnectionEnabled}
+              terminalConnectionSignal={ssh.terminalConnectionSignal}
+              sshSessionId={ssh.activeSessionId}
+              remoteCwd={ssh.remoteCwd}
+              sftpStatus={ssh.sftpConnectionStatus}
+              sftpError={ssh.sftpConnectionError}
+              onConfigure={() => ssh.openSettings()}
+              onCommandSubmit={ssh.handleCommandSubmit}
               onTerminalConnectionStatusChange={
-                handleSshTerminalConnectionStatusChange
+                ssh.handleTerminalConnectionStatusChange
               }
-              onTerminalHostChange={handleSshTerminalHostChange}
+              onTerminalHostChange={ssh.handleTerminalHostChange}
             />
           ) : (
             <CryptographicTool
@@ -2781,13 +1534,12 @@ function App(): JSX.Element {
       {interfaceSettingsModal}
 
       {snackbar ? (
-        <div
-          className={`app-snackbar ${snackbar.tone}${snackbarClosing ? " closing" : ""}`}
-          role="status"
-          onClick={() => setSnackbar(null)}
-        >
-          {snackbar.message}
-        </div>
+        <AppSnackbar
+          message={snackbar.message}
+          tone={snackbar.tone}
+          closing={snackbarClosing}
+          onClick={dismissSnackbar}
+        />
       ) : null}
 
       {databaseDeleteDialog}
@@ -2806,844 +1558,14 @@ function App(): JSX.Element {
       ) : null}
 
       {shutdownEntries !== null ? (
-        <div className="shutdown-overlay">
-          <div className="shutdown-dialog">
-            <h2>Shutting down servers</h2>
-            <div className="shutdown-service-list">
-              {shutdownEntries.map((entry) => {
-                const key = `${entry.projectId}:${entry.service}`;
-                const stopped = stoppedServices.has(key);
-                return (
-                  <div
-                    key={key}
-                    className={`shutdown-service-item${stopped ? " stopped" : ""}`}
-                  >
-                    <div className="shutdown-service-label">
-                      <strong>
-                        {entry.service === "wildfly"
-                          ? "WildFly"
-                          : entry.service === "python"
-                            ? "Python"
-                            : "Frontend"}
-                      </strong>
-                      <span>{entry.projectName}</span>
-                    </div>
-                    <div className="shutdown-service-status">
-                      {stopped ? (
-                        <CheckCircle2 size={16} />
-                      ) : (
-                        <span className="shutdown-spinner" />
-                      )}
-                      <span>{stopped ? "Stopped" : "Stopping"}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
+        <ShutdownOverlay
+          entries={shutdownEntries}
+          stoppedServices={stoppedServices}
+        />
       ) : null}
       {splashOverlay}
     </div>
   );
 }
 
-function InterfaceSettingsModal({
-  open,
-  theme,
-  accentColor,
-  onThemeChange,
-  onAccentColorChange,
-  onClose,
-}: {
-  open: boolean;
-  theme: Theme;
-  accentColor: AccentColor;
-  onThemeChange: (theme: Theme) => void;
-  onAccentColorChange: (color: AccentColor) => void;
-  onClose: () => void;
-}): JSX.Element {
-  return (
-    <Modal
-      open={open}
-      title="Interface settings"
-      size="sm"
-      className="interface-settings-modal"
-      contentClassName="interface-settings-modal-content"
-      closeLabel="Close interface settings"
-      onClose={onClose}
-    >
-      <div className="interface-settings-panel">
-        <section className="interface-settings-section">
-          <h3>Interface theme</h3>
-          <div className="interface-theme-options" role="group">
-            <button
-              className={`interface-theme-option${theme === "light" ? " active" : ""}`}
-              type="button"
-              aria-pressed={theme === "light"}
-              onClick={() => onThemeChange("light")}
-            >
-              <Sun size={16} />
-              <span>Light</span>
-            </button>
-            <button
-              className={`interface-theme-option${theme === "dark" ? " active" : ""}`}
-              type="button"
-              aria-pressed={theme === "dark"}
-              onClick={() => onThemeChange("dark")}
-            >
-              <Moon size={16} />
-              <span>Dark</span>
-            </button>
-          </div>
-        </section>
-
-        <section className="interface-settings-section">
-          <h3>Accent color</h3>
-          <div className="accent-color-grid" role="group">
-            {ACCENT_OPTIONS.map((option) => {
-              const selected = accentColor === option.value;
-              return (
-                <button
-                  key={option.value}
-                  className={`accent-color-option ${option.value}${selected ? " active" : ""}`}
-                  type="button"
-                  aria-label={`${option.label} accent`}
-                  aria-pressed={selected}
-                  title={option.label}
-                  onClick={() => onAccentColorChange(option.value)}
-                >
-                  <span className="accent-color-swatch" />
-                  <span>{option.label}</span>
-                  {selected ? <Check size={15} /> : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      </div>
-    </Modal>
-  );
-}
-
-function DatabaseHeaderActions({
-  connection,
-  databaseStatus,
-  fontSizeMode,
-  onFontSizeChange,
-  onSettingsClick,
-  disabled = false,
-}: {
-  connection: DatabaseConnection;
-  databaseStatus: DatabaseRuntimeStatus;
-  fontSizeMode: FontSizeMode;
-  onFontSizeChange: (mode: FontSizeMode) => void;
-  onSettingsClick: () => void;
-  disabled?: boolean;
-}): JSX.Element {
-  return (
-    <div className="header-actions database-header-actions">
-      <div className="database-header-context" aria-label="Database context">
-        <span className={`database-status-dot ${databaseStatus}`} />
-        <span>{databaseStatus}</span>
-        <span>-</span>
-        <span>{connection.user}</span>
-        <span>-</span>
-        <strong>{connection.name}</strong>
-      </div>
-      <HeaderUtilityActions
-        fontSizeMode={fontSizeMode}
-        onFontSizeChange={onFontSizeChange}
-        onSettingsClick={onSettingsClick}
-        disabled={disabled}
-        settingsIcon="cog"
-      />
-    </div>
-  );
-}
-
-function DatabaseEmptyState({
-  onCreate,
-}: {
-  onCreate: () => void;
-}): JSX.Element {
-  return (
-    <section className="database-empty-screen resizable-panel-screen">
-      <div className="panel database-empty-panel">
-        <DatabaseConnectionIcon />
-        <h2>No database connections</h2>
-        <p>Saved connections will appear in the database list.</p>
-        <button
-          className="button primary compact"
-          type="button"
-          onClick={onCreate}
-        >
-          New connection
-        </button>
-      </div>
-    </section>
-  );
-}
-
-function DatabaseConnectionIcon(): JSX.Element {
-  return <span className="database-empty-icon">DB</span>;
-}
-
-function BuildMiniPanel({
-  items,
-  minimized,
-  onMinimize,
-  onRestore,
-  onClearCompleted,
-  onOpenProject,
-  onDismissRecord,
-}: {
-  items: BuildMiniPanelItem[];
-  minimized: boolean;
-  onMinimize: () => void;
-  onRestore: () => void;
-  onClearCompleted: () => void;
-  onOpenProject: (project: ProjectRecord) => void;
-  onDismissRecord: (item: BuildMiniPanelItem) => void;
-}): JSX.Element {
-  const now = useAppNow(1000);
-  const buildCount = items.length;
-  const runningCount = items.filter(
-    (item) => item.build.status === "Running",
-  ).length;
-  const showClearCompleted = buildCount > 0 && runningCount === 0;
-  const restoreStatus = getBuildMiniRestoreStatus(items);
-
-  return (
-    <div
-      className={`build-mini-dock${minimized ? " minimized" : " expanded"}`}
-      aria-live="polite"
-    >
-      <button
-        className={`build-mini-restore ${restoreStatus}`}
-        type="button"
-        aria-label="Show build progress"
-        title="Show build progress"
-        onClick={onRestore}
-      >
-        <Package size={18} />
-      </button>
-      <section className="build-mini-panel" aria-label="Build progress">
-        <header className="build-mini-header">
-          <span className="build-mini-icon">
-            <Package size={18} />
-          </span>
-          <div>
-            <h2>{runningCount > 0 ? "Build Running" : "Build Complete"}</h2>
-            <p>{getBuildMiniSummary(buildCount, runningCount)}</p>
-          </div>
-          <div className="build-mini-actions">
-            {showClearCompleted ? (
-              <button
-                className="build-mini-clear"
-                type="button"
-                onClick={onClearCompleted}
-              >
-                Clear
-              </button>
-            ) : null}
-            <button
-              className="build-mini-minimize"
-              type="button"
-              aria-label="Minimize build progress"
-              title="Minimize"
-              onClick={onMinimize}
-            >
-              <Minimize2 size={15} />
-            </button>
-          </div>
-        </header>
-        <div className="build-mini-list">
-          {items.map((item) => {
-            const elapsedLabel = formatBuildMiniElapsed(item.build, now);
-            const title =
-              item.build.outcomeType === "build-and-deploy"
-                ? "Build & Deploy"
-                : "WAR Build";
-
-            return (
-              <button
-                className="build-mini-item"
-                type="button"
-                key={`${item.project.id}-${item.build.id}`}
-                onClick={() => {
-                  onDismissRecord(item);
-                  onOpenProject(item.project);
-                }}
-              >
-                <span
-                  className={`build-mini-item-status ${getBuildMiniStatusClass(
-                    item.build.status,
-                  )}`}
-                />
-                <span className="build-mini-item-copy">
-                  <strong>
-                    {item.project.name}
-                    {item.debug ? " (debug)" : ""}
-                  </strong>
-                  <span>
-                    {title} - {item.build.profile}
-                  </span>
-                </span>
-                <span className="build-mini-item-meta">
-                  <strong>{elapsedLabel}</strong>
-                  <span>{item.build.status}</span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function getBuildMiniSummary(buildCount: number, runningCount: number): string {
-  if (runningCount > 0) {
-    return `${runningCount} active ${runningCount === 1 ? "project" : "projects"}`;
-  }
-  return `${buildCount} recent ${buildCount === 1 ? "record" : "records"}`;
-}
-
-function getBuildMiniRecordKey(item: BuildMiniPanelItem): string {
-  return `${item.project.id}:${item.build.id}`;
-}
-
-function getBuildMiniRestoreStatus(items: BuildMiniPanelItem[]): string {
-  if (items.some((item) => item.build.status === "Running")) {
-    return "running";
-  }
-  if (items.some((item) => item.build.status === "Failed")) {
-    return "failed";
-  }
-  if (items.some((item) => item.build.status === "Stopped")) {
-    return "stopped";
-  }
-  if (items.some((item) => item.build.status === "Success")) {
-    return "success";
-  }
-  return "running";
-}
-
-function getBuildMiniStatusClass(status: RecentBuildRecord["status"]): string {
-  if (status === "Failed") {
-    return "failed";
-  }
-  if (status === "Stopped") {
-    return "stopped";
-  }
-  if (status === "Success") {
-    return "success";
-  }
-  return "running";
-}
-
-function useAppNow(intervalMs: number): number {
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
-    return () => window.clearInterval(timer);
-  }, [intervalMs]);
-
-  return now;
-}
-
-function formatAppElapsed(totalSeconds: number): string {
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m ${seconds}s`;
-  }
-
-  if (minutes > 0) {
-    return `${minutes}m ${seconds}s`;
-  }
-
-  return `${seconds}s`;
-}
-
-function formatBuildMiniElapsed(build: RecentBuildRecord, now: number): string {
-  if (build.status !== "Running") {
-    return build.duration;
-  }
-
-  const startedAt = new Date(build.startedAt).getTime();
-  if (Number.isNaN(startedAt)) {
-    return "--";
-  }
-
-  return formatAppElapsed(Math.max(0, Math.floor((now - startedAt) / 1000)));
-}
-
-function getSidebarProjectStatuses(
-  summaries: ProjectDashboardSummary[],
-  activeProjectState: ProjectRuntimeState | null,
-  activeProjectId: string | null,
-): Record<string, ServiceStatusRecord[]> {
-  const statusesByProjectId: Record<string, ServiceStatusRecord[]> = {};
-
-  summaries.forEach((summary) => {
-    statusesByProjectId[summary.project.id] = summary.statuses;
-  });
-
-  if (activeProjectId && activeProjectState) {
-    statusesByProjectId[activeProjectId] = activeProjectState.statuses;
-  }
-
-  return statusesByProjectId;
-}
-
-function getSidebarProjectFrontendEnabled(
-  summaries: ProjectDashboardSummary[],
-  activeProjectState: ProjectRuntimeState | null,
-  activeProjectId: string | null,
-): Record<string, boolean> {
-  const enabledByProjectId: Record<string, boolean> = {};
-
-  summaries.forEach((summary) => {
-    enabledByProjectId[summary.project.id] = summary.frontendEnabled;
-  });
-
-  if (activeProjectId && activeProjectState) {
-    enabledByProjectId[activeProjectId] = isProjectFrontendEnabled(
-      activeProjectState.settings,
-    );
-  }
-
-  return enabledByProjectId;
-}
-
-function getToolTitle(tool: ToolId): string {
-  if (tool === "api-tester") {
-    return "API Tester";
-  }
-  if (tool === "cryptographic") {
-    return "Cryptographic";
-  }
-  return "Comparing";
-}
-
-function getToolDescription(tool: ToolId): string {
-  if (tool === "api-tester") {
-    return "Simple REST client for testing endpoints and inspecting JSON responses";
-  }
-  if (tool === "cryptographic") {
-    return "Convert Base64, hash values, and translate Unicode code points.";
-  }
-  return "Compare two files or pasted text.";
-}
-
-function getBuildMiniPanelItems(
-  summaries: ProjectDashboardSummary[],
-  projects: Project[],
-  dismissedRecordKeys: Set<string>,
-  sessionStartedAt: number,
-): BuildMiniPanelItem[] {
-  const realItems = summaries
-    .filter((summary) => summary.lastBuild)
-    .map((summary) => ({
-      project: summary.project,
-      build: summary.lastBuild!,
-    }));
-
-  const debugItems = createDebugBuildMiniPanelItems(projects, summaries);
-  const seen = new Set<string>();
-  return [
-    ...realItems,
-    // ...debugItems
-  ].filter((item) => {
-    const key = getBuildMiniRecordKey(item);
-    const startedAt = new Date(item.build.startedAt).getTime();
-    if (
-      item.build.status !== "Running" &&
-      (Number.isNaN(startedAt) || startedAt < sessionStartedAt)
-    ) {
-      return false;
-    }
-    if (item.build.status !== "Running" && dismissedRecordKeys.has(key)) {
-      return false;
-    }
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
-function createDebugBuildMiniPanelItems(
-  projects: Project[],
-  summaries: ProjectDashboardSummary[],
-): BuildMiniPanelItem[] {
-  const now = Date.now();
-  const projectById = new Map(projects.map((project) => [project.id, project]));
-  const candidates = [
-    ...projects,
-    ...summaries.map((summary) => summary.project),
-  ].filter((project, index, allProjects) => {
-    return allProjects.findIndex((item) => item.id === project.id) === index;
-  });
-  const debugProjects = candidates.slice(0, 2);
-
-  return debugProjects.map((project, index) => {
-    const normalizedProject = projectById.get(project.id) ?? project;
-    const startedAt = new Date(now - (index + 2) * 73_000).toISOString();
-    return {
-      project: normalizedProject,
-      debug: true,
-      build: {
-        id: `debug-running-build-${index + 1}`,
-        branch: index === 0 ? "feature/api-tools" : "release/war-debug",
-        commit: index === 0 ? "debug-a1b2c3" : "debug-d4e5f6",
-        commitCleanliness: "clean",
-        profile: index === 0 ? "local-war" : "sit-war",
-        status: "Running",
-        duration: "--:--",
-        completed: "Running",
-        startedAt,
-        outcomeType: index === 0 ? "build-only" : "build-and-deploy",
-      },
-    };
-  });
-}
-
-function applyDashboardEvent(
-  current: ProjectRuntimeState | null,
-  event: DashboardEvent,
-): ProjectRuntimeState | null {
-  if (!current) {
-    return current;
-  }
-
-  if (event.type === "settings") {
-    return { ...current, settings: event.settings };
-  }
-
-  if (event.type === "status") {
-    return {
-      ...current,
-      statuses: [
-        ...current.statuses.filter(
-          (status) => status.service !== event.status.service,
-        ),
-        event.status,
-      ],
-    };
-  }
-
-  if (
-    event.type === "log" ||
-    event.type === "log-batch" ||
-    event.type === "log-clear"
-  ) {
-    // Handled by the log store; never touch React state.
-    return current;
-  }
-  if (event.type === "builds") {
-    return { ...current, recentBuilds: event.builds };
-  }
-
-  if (event.type === "activity") {
-    return { ...current, activityFeed: event.activityFeed };
-  }
-
-  return current;
-}
-
-function applyDashboardOverviewStatusEvent(
-  current: ProjectDashboardSummary[],
-  event: Extract<DashboardEvent, { type: "status" }>,
-): ProjectDashboardSummary[] {
-  let changed = false;
-  const next = current.map((summary) => {
-    if (summary.project.id !== event.projectId) {
-      return summary;
-    }
-
-    changed = true;
-    return {
-      ...summary,
-      statuses: [
-        ...summary.statuses.filter(
-          (status) => status.service !== event.status.service,
-        ),
-        event.status,
-      ],
-    };
-  });
-
-  return changed ? next : current;
-}
-
-function createLoadingProjectState(): ProjectRuntimeState {
-  return {
-    settings: {
-      backendType: "wildfly",
-      appLogFile: "",
-      gitProjectDirectory: "",
-      defaultBranch: "",
-      remote: "",
-      frontend: {
-        enabled: false,
-        path: "",
-        installCommand: "",
-        devCommand: "",
-        buildCommand: "",
-      },
-      python: {
-        enabled: true,
-        serverType: "custom",
-        directory: "",
-        venvPath: "",
-        installCommand: "pip install -r requirements.txt",
-        startCommand: "",
-        appUrl: "http://127.0.0.1:8000",
-        healthCheckUrl: "",
-        autoStart: false,
-        buildCommand: "",
-      },
-      services: {
-        frontend: {
-          enabled: false,
-          workingDirectory: "",
-          command: "",
-          healthUrl: "",
-          appUrl: "",
-          autoStart: false,
-        },
-        wildfly: {
-          enabled: true,
-          workingDirectory: "",
-          command: "",
-          healthUrl: "",
-          appUrl: "",
-          managementUrl: "",
-          autoStart: false,
-        },
-        python: {
-          enabled: true,
-          workingDirectory: "",
-          command: "",
-          healthUrl: "",
-          appUrl: "",
-          autoStart: false,
-        },
-      },
-      maven: {
-        executable: "",
-        settingsXml: "",
-        pomXml: "",
-        skipTests: false,
-      },
-      buildProfiles: [],
-    },
-    statuses: [],
-    recentBuilds: [],
-    activityFeed: [],
-    pythonDependencies: [],
-    gitStatus: {
-      repository: "",
-      branch: "",
-      commit: "",
-      status: "",
-      lines: [],
-    },
-    logs: {
-      frontend: [],
-      wildfly: [],
-      python: [],
-      build: [],
-      tail: [],
-    },
-  };
-}
-
-function ApiTesterHeaderTabs({
-  activeView,
-  onViewChange,
-}: {
-  activeView: ApiTesterView;
-  onViewChange: (view: ApiTesterView) => void;
-}): JSX.Element {
-  return (
-    <div
-      className="tabs api-tester-header-tabs"
-      role="tablist"
-      aria-label="API tester sections"
-    >
-      <button
-        className={`tab${activeView === "test" ? " active" : ""}`}
-        type="button"
-        role="tab"
-        aria-selected={activeView === "test"}
-        onClick={() => onViewChange("test")}
-      >
-        API Test
-      </button>
-      <button
-        className={`tab${activeView === "history" ? " active" : ""}`}
-        type="button"
-        role="tab"
-        aria-selected={activeView === "history"}
-        onClick={() => onViewChange("history")}
-      >
-        History
-      </button>
-      <button
-        className={`tab${activeView === "saved" ? " active" : ""}`}
-        type="button"
-        role="tab"
-        aria-selected={activeView === "saved"}
-        onClick={() => onViewChange("saved")}
-      >
-        Saved
-      </button>
-    </div>
-  );
-}
-
-function CompareHeaderTabs({
-  activeView,
-  onViewChange,
-}: {
-  activeView: CompareView;
-  onViewChange: (view: CompareView) => void;
-}): JSX.Element {
-  return (
-    <div
-      className="tabs compare-header-tabs"
-      role="tablist"
-      aria-label="Compare sections"
-    >
-      <button
-        className={`tab${activeView === "compare" ? " active" : ""}`}
-        type="button"
-        role="tab"
-        aria-selected={activeView === "compare"}
-        onClick={() => onViewChange("compare")}
-      >
-        Compare
-      </button>
-    </div>
-  );
-}
-
-function CryptographicHeaderTabs({
-  activeView,
-  onViewChange,
-}: {
-  activeView: CryptographicToolTab;
-  onViewChange: (view: CryptographicToolTab) => void;
-}): JSX.Element {
-  return (
-    <div
-      className="tabs cryptographic-header-tabs"
-      role="tablist"
-      aria-label="Cryptographic sections"
-    >
-      <button
-        className={`tab${activeView === "base64" ? " active" : ""}`}
-        type="button"
-        role="tab"
-        aria-selected={activeView === "base64"}
-        onClick={() => onViewChange("base64")}
-      >
-        Base64
-      </button>
-
-      <button
-        className={`tab${activeView === "hashing" ? " active" : ""}`}
-        type="button"
-        role="tab"
-        aria-selected={activeView === "hashing"}
-        onClick={() => onViewChange("hashing")}
-      >
-        Hash
-      </button>
-
-      <button
-        className={`tab${activeView === "unicode" ? " active" : ""}`}
-        type="button"
-        role="tab"
-        aria-selected={activeView === "unicode"}
-        onClick={() => onViewChange("unicode")}
-      >
-        Unicode
-      </button>
-    </div>
-  );
-}
-
-function SingleToolHeaderTabs({ label }: { label: string }): JSX.Element {
-  return (
-    <div
-      className="tabs single-tool-header-tabs"
-      role="tablist"
-      aria-label={label}
-    >
-      <button className="tab active" type="button" role="tab" aria-selected>
-        {label}
-      </button>
-    </div>
-  );
-}
-
 export default App;
-
-function readStoredTheme(): Theme {
-  const stored = window.localStorage.getItem("ivs-dashboard-theme");
-  return stored === "dark" ? "dark" : "light";
-}
-
-function readStoredAccentColor(): AccentColor {
-  const stored = window.localStorage.getItem("ivs-dashboard-accent");
-  if (
-    stored === "green" ||
-    stored === "yellow" ||
-    stored === "orange" ||
-    stored === "purple" ||
-    stored === "pink" ||
-    stored === "black"
-  ) {
-    return stored;
-  }
-
-  return "blue";
-}
-
-function readStoredFontSizeMode(): FontSizeMode {
-  const stored = window.localStorage.getItem("ivs-dashboard-font-size");
-  if (
-    stored === "50" ||
-    stored === "70" ||
-    stored === "90" ||
-    stored === "100" ||
-    stored === "120" ||
-    stored === "140" ||
-    stored === "160"
-  ) {
-    return stored;
-  }
-
-  if (stored === "180" || stored === "200") {
-    return "160";
-  }
-
-  if (stored === "small") {
-    return "90";
-  }
-
-  if (stored === "large") {
-    return "120";
-  }
-
-  return "100";
-}
