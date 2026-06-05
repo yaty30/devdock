@@ -100,6 +100,22 @@ export type ProjectFrontendConfig = {
   buildCommand?: string;
 };
 
+export type ProjectGitRepositoryMode = "single" | "separate";
+export type ProjectGitContext = "single" | "frontend" | "backend";
+
+export type ProjectGitRepositoryConfig = {
+  directory: string;
+  remote: string;
+  defaultBranch: string;
+};
+
+export type ProjectGitConfig = {
+  mode: ProjectGitRepositoryMode;
+  single: ProjectGitRepositoryConfig;
+  frontend: ProjectGitRepositoryConfig;
+  backend: ProjectGitRepositoryConfig;
+};
+
 export type MavenConfig = {
   executable: string;
   settingsXml: string;
@@ -122,6 +138,7 @@ export type ProjectSettingsRecord = {
   gitProjectDirectory: string;
   defaultBranch: string;
   remote: string;
+  git: ProjectGitConfig;
   frontend: ProjectFrontendConfig;
   python: PythonWebServerConfig;
   services: Record<ServiceName, ServiceConfig>;
@@ -221,6 +238,9 @@ export type ActivityRecord = {
 
 export type GitStatusRecord = {
   repository: string;
+  context?: ProjectGitContext;
+  contextLabel?: string;
+  valid: boolean;
   branch: string;
   commit: string;
   status: string;
@@ -328,6 +348,9 @@ export type DatabaseConnection = {
   connectionTimeoutMs?: number;
   database?: string;
   sslMode?: DatabaseSslMode;
+  sslCaPath?: string;
+  sslCertPath?: string;
+  sslKeyPath?: string;
   connectionMode?: OracleConnectionMode;
   serviceName?: string;
   sid?: string;
@@ -823,8 +846,15 @@ export type DashboardApi = {
     options?: ApiFetchQueryOptions,
   ) => Promise<ApiFetchQueryResult>;
   refreshStatus: (projectId: string) => Promise<ServiceStatusRecord[]>;
-  getGitStatus: (projectId: string) => Promise<GitStatusRecord>;
-  runGitCommand: (projectId: string, args: string) => Promise<GitStatusRecord>;
+  getGitStatus: (
+    projectId: string,
+    context?: ProjectGitContext,
+  ) => Promise<GitStatusRecord>;
+  runGitCommand: (
+    projectId: string,
+    args: string,
+    context?: ProjectGitContext,
+  ) => Promise<GitStatusRecord>;
   getSheets: (projectId: string) => Promise<Sheet[]>;
   createSheet: (projectId: string, title: string) => Promise<Sheet>;
   updateSheet: (

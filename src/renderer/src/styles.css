@@ -2431,6 +2431,15 @@ body {
   background: var(--accent-soft);
 }
 
+.git-context-dropdown {
+  --build-dropdown-width: 148px;
+}
+
+.git-context-trigger.open {
+  color: var(--text);
+  background: var(--subtle-bg);
+}
+
 .font-size-dropdown {
   --build-dropdown-width: 260px;
   --font-slider-thumb-size: 20px;
@@ -6582,6 +6591,18 @@ select option {
   border-radius: 8px;
 }
 
+.git-context-warning {
+  margin: 0 10px 8px;
+  padding: 8px 10px;
+  color: var(--error);
+  font-family: var(--font-sans);
+  font-size: var(--font-sm);
+  font-weight: 750;
+  background: color-mix(in srgb, var(--error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error) 34%, transparent);
+  border-radius: 6px;
+}
+
 .git-terminal-loading {
   position: absolute;
   inset: 52px 12px 12px;
@@ -7483,6 +7504,15 @@ select option {
   align-content: start;
   gap: 18px;
   min-height: 100%;
+}
+
+.git-settings-layout,
+.git-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 18px;
+  min-height: 0;
 }
 
 .settings-summary {
@@ -13153,6 +13183,28 @@ button.database-tree-item {
   color: var(--accent);
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.database-certificate-path-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.database-certificate-path-field button {
+  min-height: var(--control-md);
+  padding: 0 12px;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 850;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 7px;
+}
+
+.database-certificate-path-field button:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
 .database-connection-field strong {

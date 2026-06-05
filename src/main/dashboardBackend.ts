@@ -18,7 +18,14 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, basename } from "node:path";
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  basename,
+  resolve,
+} from "node:path";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -57,6 +64,7 @@ import type {
   DatabaseWorksheetState,
   DashboardSnapshot,
   GitStatusRecord,
+  ProjectGitContext,
   LogChannel,
   LogLine,
   LogQueryResult,
@@ -100,6 +108,12 @@ import {
   extractPortFromUrl,
   normalizePythonServerType,
   normalizeProjectSettings,
+  DEFAULT_GIT_BRANCH,
+  DEFAULT_GIT_REMOTE,
+  getDefaultProjectGitContext,
+  getProjectGitContextLabel,
+  getProjectGitRepositoryConfig,
+  isProjectUsingSeparateGitRepositories,
 } from "../shared/projectFrontend";
 
 type OracleDbModule = {
@@ -177,7 +191,14 @@ type PostgresClientOptions = {
   password?: string;
   database?: string;
   connectionTimeoutMillis: number;
-  ssl?: boolean | { rejectUnauthorized: boolean };
+  ssl?:
+    | boolean
+    | {
+        rejectUnauthorized: boolean;
+        ca?: string;
+        cert?: string;
+        key?: string;
+      };
 };
 
 type PostgresField = {
@@ -437,6 +458,13 @@ const EMPTY_SHEET_CONTENT: SheetContentJson = {
   content: [{ type: "paragraph" }],
 };
 
+const PYTHON_SERVER_COMMANDS: Record<PythonServerType, string> = {
+  fastapi: "uvicorn app.main:app --reload",
+  "flask-api": "flask --app app run --debug --host 127.0.0.1 --port 8000",
+  "django-rest": "python manage.py runserver 127.0.0.1:8000",
+  custom: "",
+};
+
 const PYTHON_WEB_SERVER_DEFAULTS: Record<
   PythonServerType,
   Pick<
@@ -446,21 +474,21 @@ const PYTHON_WEB_SERVER_DEFAULTS: Record<
 > = {
   fastapi: {
     installCommand: "pip install -r requirements.txt",
-    startCommand: ".\\venv\\Scripts\\activate && uvicorn app.main:app --reload",
+    startCommand: pythonServerStartCommand(PYTHON_SERVER_COMMANDS.fastapi),
     appUrl: "http://127.0.0.1:8000",
     healthCheckUrl: "http://127.0.0.1:8000/health",
   },
   "flask-api": {
     installCommand: "pip install -r requirements.txt",
-    startCommand:
-      ".\\venv\\Scripts\\activate && flask --app app run --debug --host 127.0.0.1 --port 8000",
+    startCommand: pythonServerStartCommand(PYTHON_SERVER_COMMANDS["flask-api"]),
     appUrl: "http://127.0.0.1:8000",
     healthCheckUrl: "http://127.0.0.1:8000",
   },
   "django-rest": {
     installCommand: "pip install -r requirements.txt",
-    startCommand:
-      ".\\venv\\Scripts\\activate && python manage.py runserver 127.0.0.1:8000",
+    startCommand: pythonServerStartCommand(
+      PYTHON_SERVER_COMMANDS["django-rest"],
+    ),
     appUrl: "http://127.0.0.1:8000",
     healthCheckUrl: "http://127.0.0.1:8000",
   },
@@ -2496,9 +2524,12 @@ export class DashboardBackend {
     settings: ProjectSettingsRecord,
   ): string[] {
     const persistedBackendType = this.getProjectBackendType(projectId);
-    const normalizedSettings = normalizeProjectSettings(
+    const normalizedSettings = this.applyDetectedGitSettings(
+      normalizeProjectSettings(
+        settings,
+        this.defaultSettings(projectId, persistedBackendType),
+      ),
       settings,
-      this.defaultSettings(projectId, persistedBackendType),
     );
     const errors = validateProjectIdentity(name.trim(), code.trim());
     if (normalizeBackendType(settings.backendType) !== persistedBackendType) {
@@ -2510,7 +2541,7 @@ export class DashboardBackend {
     const backend = normalizedSettings.services[backendService];
     const frontendDirectory = frontend.workingDirectory.trim();
     const backendDirectory = backend.workingDirectory.trim();
-    const gitProjectDirectory = normalizedSettings.gitProjectDirectory.trim();
+    const gitRepositories = getSettingsGitValidationTargets(normalizedSettings);
 
     if (appLogFile && !isExistingFile(appLogFile)) {
       errors.push(`Application log file does not exist: ${appLogFile}`);
@@ -2568,12 +2599,14 @@ export class DashboardBackend {
       errors.push(...validateMavenConfig(normalizedSettings.maven));
     }
 
-    if (!gitProjectDirectory) {
-      errors.push("Git project directory is required");
-    } else if (!isExistingDirectory(gitProjectDirectory)) {
-      errors.push(
-        `Git project directory does not exist: ${gitProjectDirectory}`,
-      );
+    for (const repository of gitRepositories) {
+      if (!repository.directory) {
+        errors.push(`${repository.label} Git directory is required`);
+      } else if (!isExistingDirectory(repository.directory)) {
+        errors.push(
+          `${repository.label} Git directory does not exist: ${repository.directory}`,
+        );
+      }
     }
 
     return errors;
@@ -2650,9 +2683,12 @@ export class DashboardBackend {
     ) {
       throw new Error("Backend type cannot be changed after project creation.");
     }
-    const normalizedSettings = normalizeProjectSettings(
+    const normalizedSettings = this.applyDetectedGitSettings(
+      normalizeProjectSettings(
+        settings,
+        this.defaultSettings(projectId, previousSettings.backendType),
+      ),
       settings,
-      this.defaultSettings(projectId, previousSettings.backendType),
     );
     const activityEntries = settingsActivityEntries(
       previousSettings,
@@ -3092,9 +3128,17 @@ export class DashboardBackend {
     return statuses;
   }
 
-  getGitStatus(projectId: string): GitStatusRecord {
+  getGitStatus(
+    projectId: string,
+    context?: ProjectGitContext,
+  ): GitStatusRecord {
     const settings = this.getSettings(projectId);
-    return this.readGitStatus(settings.gitProjectDirectory);
+    const gitContext = resolveGitContext(settings, context);
+    const repository = getProjectGitRepositoryConfig(
+      settings,
+      gitContext,
+    ).directory;
+    return this.readGitStatus(repository, gitContext);
   }
 
   getLogFilePath(projectId: string, channel: LogChannel): string {
@@ -3122,26 +3166,26 @@ export class DashboardBackend {
   async runGitCommand(
     projectId: string,
     args: string,
+    context?: ProjectGitContext,
   ): Promise<GitStatusRecord> {
     const settings = this.getSettings(projectId);
-    const repository = settings.gitProjectDirectory;
+    const gitContext = resolveGitContext(settings, context);
+    const repository = getProjectGitRepositoryConfig(
+      settings,
+      gitContext,
+    ).directory;
     const trimmed = args.trim().replace(/^git\s+/, "");
     if (!trimmed) {
-      return this.getGitStatus(projectId);
+      return this.getGitStatus(projectId, gitContext);
     }
 
-    if (!existsSync(repository)) {
-      return {
-        repository,
-        branch: "unavailable",
-        commit: "unavailable",
-        status: `Git Project Directory does not exist: ${repository}`,
-        lines: [stamp(`Git Project Directory does not exist: ${repository}`)],
-      };
+    const currentStatus = this.readGitStatus(repository, gitContext);
+    if (!currentStatus.valid) {
+      return currentStatus;
     }
 
     const lines = await spawnCollect("git", splitCommand(trimmed), repository);
-    const status = this.readGitStatus(repository);
+    const status = this.readGitStatus(repository, gitContext);
     return { ...status, lines };
   }
 
@@ -3629,8 +3673,26 @@ export class DashboardBackend {
       backendType: normalizedBackendType,
       appLogFile: "",
       gitProjectDirectory: "",
-      defaultBranch: "",
-      remote: "",
+      defaultBranch: DEFAULT_GIT_BRANCH,
+      remote: DEFAULT_GIT_REMOTE,
+      git: {
+        mode: "single",
+        single: {
+          directory: "",
+          remote: DEFAULT_GIT_REMOTE,
+          defaultBranch: DEFAULT_GIT_BRANCH,
+        },
+        frontend: {
+          directory: "",
+          remote: DEFAULT_GIT_REMOTE,
+          defaultBranch: DEFAULT_GIT_BRANCH,
+        },
+        backend: {
+          directory: "",
+          remote: DEFAULT_GIT_REMOTE,
+          defaultBranch: DEFAULT_GIT_BRANCH,
+        },
+      },
       frontend: {
         enabled: false,
         path: "",
@@ -3689,9 +3751,10 @@ export class DashboardBackend {
     const configPath = this.projectConfigPath(projectId);
     if (existsSync(configPath)) {
       try {
-        return normalizeProjectSettings(
-          JSON.parse(readFileSync(configPath, "utf8")),
-          defaults,
+        const rawSettings = JSON.parse(readFileSync(configPath, "utf8"));
+        return this.applyDetectedGitSettings(
+          normalizeProjectSettings(rawSettings, defaults),
+          rawSettings,
         );
       } catch (error) {
         console.error(
@@ -3701,8 +3764,9 @@ export class DashboardBackend {
       }
     }
 
-    this.writeProjectConfig(projectId, defaults);
-    return defaults;
+    const detectedDefaults = this.applyDetectedGitSettings(defaults, {});
+    this.writeProjectConfig(projectId, detectedDefaults);
+    return detectedDefaults;
   }
 
   private getPythonDependencies(
@@ -3718,7 +3782,10 @@ export class DashboardBackend {
     const configPath = this.projectConfigPath(projectId);
     mkdirSync(dirname(configPath), { recursive: true });
     const defaults = this.defaultSettings(projectId);
-    const normalizedSettings = normalizeProjectSettings(settings, defaults);
+    const normalizedSettings = this.applyDetectedGitSettings(
+      normalizeProjectSettings(settings, defaults),
+      settings,
+    );
     writeFileSync(
       configPath,
       `${JSON.stringify(normalizedSettings, null, 2)}\n`,
@@ -3728,6 +3795,88 @@ export class DashboardBackend {
 
   private projectConfigPath(projectId: string): string {
     return join(this.dataRoot, "projects", projectId, "app.config");
+  }
+
+  private applyDetectedGitSettings(
+    settings: ProjectSettingsRecord,
+    rawSettings: unknown,
+  ): ProjectSettingsRecord {
+    const frontendEnabled = isProjectFrontendEnabled(settings);
+    const frontendDirectory = getFrontendServiceDirectory(settings);
+    const backendDirectory = getBackendServiceDirectory(settings);
+    const frontendGitRoot = resolveGitRoot(frontendDirectory);
+    const backendGitRoot = resolveGitRoot(backendDirectory);
+    const detectionCertain =
+      frontendEnabled && frontendGitRoot !== null && backendGitRoot !== null;
+    const detectedMode =
+      detectionCertain && frontendGitRoot !== backendGitRoot
+        ? "separate"
+        : "single";
+    const mode =
+      frontendEnabled && !detectionCertain && hasExplicitGitMode(rawSettings)
+        ? settings.git.mode
+        : detectedMode;
+    const normalizedMode = frontendEnabled ? mode : "single";
+
+    const singleDirectory =
+      trimOrFallback(
+        settings.git.single.directory,
+        settings.gitProjectDirectory,
+      ) ||
+      backendGitRoot ||
+      backendDirectory;
+    const frontendRepositoryDirectory =
+      settings.git.frontend.directory.trim() ||
+      frontendGitRoot ||
+      frontendDirectory;
+    const backendRepositoryDirectory =
+      trimOrFallback(
+        settings.git.backend.directory,
+        settings.gitProjectDirectory,
+      ) ||
+      backendGitRoot ||
+      backendDirectory;
+
+    const git: ProjectSettingsRecord["git"] = {
+      mode: normalizedMode,
+      single: {
+        directory: singleDirectory,
+        remote: settings.git.single.remote.trim() || DEFAULT_GIT_REMOTE,
+        defaultBranch:
+          settings.git.single.defaultBranch.trim() || DEFAULT_GIT_BRANCH,
+      },
+      frontend: {
+        directory: frontendRepositoryDirectory,
+        remote: settings.git.frontend.remote.trim() || DEFAULT_GIT_REMOTE,
+        defaultBranch:
+          settings.git.frontend.defaultBranch.trim() || DEFAULT_GIT_BRANCH,
+      },
+      backend: {
+        directory: backendRepositoryDirectory,
+        remote: settings.git.backend.remote.trim() || DEFAULT_GIT_REMOTE,
+        defaultBranch:
+          settings.git.backend.defaultBranch.trim() || DEFAULT_GIT_BRANCH,
+      },
+    };
+
+    const compatibilityConfig =
+      normalizedMode === "separate" ? git.backend : git.single;
+
+    return applyPythonStartCommandDefaults({
+      ...settings,
+      gitProjectDirectory:
+        compatibilityConfig.directory.trim() ||
+        settings.gitProjectDirectory.trim(),
+      remote:
+        compatibilityConfig.remote.trim() ||
+        settings.remote.trim() ||
+        DEFAULT_GIT_REMOTE,
+      defaultBranch:
+        compatibilityConfig.defaultBranch.trim() ||
+        settings.defaultBranch.trim() ||
+        DEFAULT_GIT_BRANCH,
+      git,
+    });
   }
 
   private async startService(
@@ -3797,17 +3946,7 @@ export class DashboardBackend {
 
     this.clearLog(projectId, service);
     this.appendLog(projectId, service, stamp(`$ ${config.command}`));
-    // Python's stdout/stderr is block-buffered when not attached to a TTY,
-    // which hides uvicorn/flask/django access logs until the buffer flushes.
-    // Force line-buffered output and UTF-8 so request logs stream live.
-    const spawnEnv =
-      service === "python"
-        ? {
-            ...process.env,
-            PYTHONUNBUFFERED: "1",
-            PYTHONIOENCODING: "utf-8",
-          }
-        : process.env;
+    const spawnEnv = createServiceEnvironment(service);
     const child = spawn(config.command, {
       cwd: config.workingDirectory,
       shell: true,
@@ -4823,22 +4962,53 @@ export class DashboardBackend {
     this.statusTimers.set(projectId, timer);
   }
 
-  private readGitStatus(repository: string): GitStatusRecord {
+  private readGitStatus(
+    repository: string,
+    context: ProjectGitContext = "single",
+  ): GitStatusRecord {
+    const contextLabel = getProjectGitContextLabel(context);
     if (!repository || !existsSync(repository)) {
+      const message = repository
+        ? `${contextLabel} Git directory does not exist: ${repository}`
+        : `${contextLabel} Git directory is not configured`;
       return {
         repository,
+        context,
+        contextLabel,
+        valid: false,
         branch: "unavailable",
         commit: "unavailable",
-        status: repository
-          ? `Git Project Directory does not exist: ${repository}`
-          : "Git Project Directory is not configured",
-        lines: [
-          stamp(
-            repository
-              ? `Git Project Directory does not exist: ${repository}`
-              : "Git Project Directory is not configured",
-          ),
-        ],
+        status: message,
+        lines: [stamp(message)],
+      };
+    }
+
+    if (!isExistingDirectory(repository)) {
+      const message = `${contextLabel} Git directory is not a directory: ${repository}`;
+      return {
+        repository,
+        context,
+        contextLabel,
+        valid: false,
+        branch: "unavailable",
+        commit: "unavailable",
+        status: message,
+        lines: [stamp(message)],
+      };
+    }
+
+    const gitRoot = resolveGitRoot(repository);
+    if (!gitRoot) {
+      const message = `${contextLabel} Git directory is not a valid Git repository: ${repository}`;
+      return {
+        repository,
+        context,
+        contextLabel,
+        valid: false,
+        branch: "unavailable",
+        commit: "unavailable",
+        status: message,
+        lines: [stamp(message)],
       };
     }
 
@@ -4856,6 +5026,8 @@ export class DashboardBackend {
       const status = spawnSyncText("git", ["status", "--short"], repository);
       const lines = [
         stamp(`Repository: ${repository}`),
+        stamp(`Git root: ${gitRoot}`),
+        stamp(`Context: ${contextLabel}`),
         stamp(`Branch: ${branch || "unavailable"}`),
         stamp(`Commit: ${commit || "unavailable"}`),
         ...(status
@@ -4864,6 +5036,9 @@ export class DashboardBackend {
       ];
       return {
         repository,
+        context,
+        contextLabel,
+        valid: true,
         branch: branch || "unavailable",
         commit: commit || "unavailable",
         status: status ? "Working tree has changes" : "Clean",
@@ -4872,6 +5047,9 @@ export class DashboardBackend {
     } catch (error) {
       return {
         repository,
+        context,
+        contextLabel,
+        valid: false,
         branch: "unavailable",
         commit: "unavailable",
         status: error instanceof Error ? error.message : String(error),
@@ -4885,6 +5063,170 @@ export class DashboardBackend {
       window.webContents.send(CHANNEL_NAME, event);
     }
   }
+}
+
+function resolveGitContext(
+  settings: ProjectSettingsRecord,
+  context: ProjectGitContext | undefined,
+): ProjectGitContext {
+  if (!isProjectUsingSeparateGitRepositories(settings)) {
+    return "single";
+  }
+
+  return context === "frontend" || context === "backend"
+    ? context
+    : getDefaultProjectGitContext(settings);
+}
+
+function resolveGitRoot(startDirectory: string): string | null {
+  const trimmedDirectory = startDirectory.trim();
+  if (!trimmedDirectory || !existsSync(trimmedDirectory)) {
+    return null;
+  }
+
+  let current = resolve(trimmedDirectory);
+  try {
+    if (!statSync(current).isDirectory()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  while (true) {
+    if (existsSync(join(current, ".git"))) {
+      return current;
+    }
+
+    const parent = dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
+function getFrontendServiceDirectory(settings: ProjectSettingsRecord): string {
+  return (
+    settings.services.frontend.workingDirectory.trim() ||
+    settings.frontend.path?.trim() ||
+    ""
+  );
+}
+
+function getBackendServiceDirectory(settings: ProjectSettingsRecord): string {
+  if (settings.backendType === "python") {
+    return (
+      settings.python.directory.trim() ||
+      settings.services.python.workingDirectory.trim()
+    );
+  }
+
+  const pomXml = settings.maven.pomXml.trim();
+  return (
+    (pomXml ? dirname(pomXml) : "") ||
+    settings.services.wildfly.workingDirectory.trim() ||
+    settings.gitProjectDirectory.trim()
+  );
+}
+
+function hasExplicitGitMode(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const git = value.git;
+  return isRecord(git) && (git.mode === "single" || git.mode === "separate");
+}
+
+function getSettingsGitValidationTargets(
+  settings: ProjectSettingsRecord,
+): Array<{ label: string; directory: string }> {
+  if (isProjectUsingSeparateGitRepositories(settings)) {
+    return [
+      { label: "Frontend", directory: settings.git.frontend.directory.trim() },
+      { label: "Backend", directory: settings.git.backend.directory.trim() },
+    ];
+  }
+
+  return [{ label: "Git", directory: settings.git.single.directory.trim() }];
+}
+
+function trimOrFallback(value: string, fallback: string): string {
+  return value.trim() || fallback.trim();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function applyPythonStartCommandDefaults(
+  settings: ProjectSettingsRecord,
+): ProjectSettingsRecord {
+  if (settings.backendType !== "python") {
+    return settings;
+  }
+
+  const command = settings.python.startCommand.trim();
+  const defaultServerCommand =
+    PYTHON_SERVER_COMMANDS[settings.python.serverType] ?? "";
+  let nextCommand = command;
+
+  if (
+    defaultServerCommand &&
+    (isPythonActivationOnlyCommand(command) ||
+      isPythonGeneratedActivationCommand(command, defaultServerCommand))
+  ) {
+    nextCommand = pythonServerStartCommand(
+      defaultServerCommand,
+      settings.python.venvPath,
+    );
+  } else if (process.platform !== "win32" && /^source\s+/i.test(command)) {
+    nextCommand = `. ${command.replace(/^source\s+/i, "")}`;
+  }
+
+  if (nextCommand === settings.python.startCommand) {
+    return settings;
+  }
+
+  return {
+    ...settings,
+    python: {
+      ...settings.python,
+      startCommand: nextCommand,
+    },
+    services: {
+      ...settings.services,
+      python: {
+        ...settings.services.python,
+        command: nextCommand,
+      },
+    },
+  };
+}
+
+function isPythonActivationOnlyCommand(value: string): boolean {
+  const command = value.trim();
+  return (
+    /^(?:source|\.)\s+.+[\\/]bin[\\/]activate$/i.test(command) ||
+    /^.+[\\/]Scripts[\\/]activate(?:\.(?:bat|cmd|ps1))?$/i.test(command)
+  );
+}
+
+function isPythonGeneratedActivationCommand(
+  value: string,
+  serverCommand: string,
+): boolean {
+  const command = value.trim();
+  const serverCommandPattern = escapeRegExp(serverCommand);
+  return new RegExp(
+    `^(?:source|\\.)\\s+.+[\\\\/]bin[\\\\/]activate\\s*&&\\s*${serverCommandPattern}$`,
+    "i",
+  ).test(command);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function composeMavenCommand(
@@ -5246,6 +5588,9 @@ function normalizeDatabaseConnection(
     connectionTimeoutMs: connection.connectionTimeoutMs ?? 10000,
     database,
     sslMode: connection.sslMode ?? "disabled",
+    sslCaPath: connection.sslCaPath?.trim() ?? "",
+    sslCertPath: connection.sslCertPath?.trim() ?? "",
+    sslKeyPath: connection.sslKeyPath?.trim() ?? "",
     connectionMode: connection.connectionMode ?? "serviceName",
     serviceName: connection.serviceName?.trim() ?? "",
     sid: connection.sid?.trim() ?? "",
@@ -5417,7 +5762,6 @@ function toPostgresClientOptions(
 ): PostgresClientOptions {
   const database = connection.database?.trim();
   const includeDatabase = options.includeDatabase ?? true;
-  const sslMode = connection.sslMode ?? "disabled";
   return {
     host: connection.host.trim(),
     port: Number(connection.port) || 5432,
@@ -5425,13 +5769,36 @@ function toPostgresClientOptions(
     password: connection.password ?? "",
     database: includeDatabase && database ? database : undefined,
     connectionTimeoutMillis: connection.connectionTimeoutMs ?? 10000,
-    ssl:
-      sslMode === "required"
-        ? { rejectUnauthorized: true }
-        : sslMode === "preferred"
-          ? { rejectUnauthorized: false }
-          : undefined,
+    ssl: createPostgresSslOptions(connection),
   };
+}
+
+function createPostgresSslOptions(
+  connection: DatabaseConnection,
+): PostgresClientOptions["ssl"] {
+  const sslMode = connection.sslMode ?? "disabled";
+  if (sslMode === "disabled") {
+    return undefined;
+  }
+
+  const sslOptions: Exclude<PostgresClientOptions["ssl"], boolean> = {
+    rejectUnauthorized: sslMode === "required",
+  };
+  const sslCaPath = connection.sslCaPath?.trim();
+  const sslCertPath = connection.sslCertPath?.trim();
+  const sslKeyPath = connection.sslKeyPath?.trim();
+
+  if (sslCaPath) {
+    sslOptions.ca = readFileSync(sslCaPath, "utf8");
+  }
+  if (sslCertPath) {
+    sslOptions.cert = readFileSync(sslCertPath, "utf8");
+  }
+  if (sslKeyPath) {
+    sslOptions.key = readFileSync(sslKeyPath, "utf8");
+  }
+
+  return sslOptions;
 }
 
 async function executePostgresRows(
@@ -7247,6 +7614,114 @@ function formatTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function pythonServerStartCommand(command: string, venvPath = "venv"): string {
+  const normalizedVenvPath = normalizePythonVenvPath(venvPath);
+  if (process.platform === "win32") {
+    return `${shellQuoteIfNeeded(`${normalizedVenvPath}\\Scripts\\activate`)} && ${command}`;
+  }
+
+  return `. ${shellQuotePosix(`${normalizedVenvPath}/bin/activate`)} && ${command}`;
+}
+
+function normalizePythonVenvPath(venvPath: string | undefined): string {
+  return (venvPath ?? "").trim().replace(/[\\/]+$/, "") || "venv";
+}
+
+function shellQuoteIfNeeded(value: string): string {
+  return /\s/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
+function shellQuotePosix(value: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+function createServiceEnvironment(service: ServiceName): NodeJS.ProcessEnv {
+  const pathKey = getPathEnvironmentKey();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+  };
+  env[pathKey] = createServicePath(process.env[pathKey]);
+
+  if (service === "python") {
+    // Python's stdout/stderr is block-buffered when not attached to a TTY,
+    // which hides uvicorn/flask/django access logs until the buffer flushes.
+    // Force line-buffered output and UTF-8 so request logs stream live.
+    env.PYTHONUNBUFFERED = "1";
+    env.PYTHONIOENCODING = "utf-8";
+  }
+
+  return env;
+}
+
+function createServicePath(currentPath: string | undefined): string {
+  const entries = [
+    ...servicePathCandidates(),
+    ...(currentPath?.split(delimiter).filter(Boolean) ?? []),
+  ];
+  const seen = new Set<string>();
+  return entries
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) {
+        return false;
+      }
+      seen.add(entry);
+      return true;
+    })
+    .join(delimiter);
+}
+
+function getPathEnvironmentKey(): string {
+  return (
+    Object.keys(process.env).find((key) => key.toLowerCase() === "path") ??
+    "PATH"
+  );
+}
+
+function servicePathCandidates(): string[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const home = userInfo().homedir;
+  return existingDirectories([
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    join(home, ".volta", "bin"),
+    join(home, ".asdf", "shims"),
+    join(home, ".asdf", "bin"),
+    join(home, ".fnm"),
+    join(home, ".bun", "bin"),
+    join(home, ".local", "bin"),
+    join(home, ".npm-global", "bin"),
+    ...nvmNodeBinCandidates(home),
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ]);
+}
+
+function nvmNodeBinCandidates(home: string): string[] {
+  const versionsDir = join(home, ".nvm", "versions", "node");
+  try {
+    return readdirSync(versionsDir)
+      .map((version) => join(versionsDir, version, "bin"))
+      .filter((candidate) => isExistingDirectory(candidate))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+function existingDirectories(paths: string[]): string[] {
+  return paths.filter((path) => isExistingDirectory(path));
 }
 
 function killProcessByPort(port: number): void {

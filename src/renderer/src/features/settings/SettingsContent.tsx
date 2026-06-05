@@ -16,6 +16,8 @@ import type {
   BuildProfileRecord,
   ConfirmDialogState,
   Project,
+  ProjectGitRepositoryMode,
+  ProjectGitRepositoryConfig,
   ProjectSettingsRecord,
   PythonServerType,
   ServiceName,
@@ -27,6 +29,8 @@ import {
   getPythonServerTypeLabel,
   isProjectFrontendEnabled,
   extractPortFromUrl,
+  DEFAULT_GIT_BRANCH,
+  DEFAULT_GIT_REMOTE,
 } from "../../../../shared/projectFrontend";
 
 function FieldRow({
@@ -90,18 +94,86 @@ function normalizePythonVenvPath(venvPath: string | undefined): string {
   return (venvPath ?? "").trim().replace(/[\\/]+$/, "") || ".venv";
 }
 
+function isWindowsPlatform(): boolean {
+  return /\bWindows\b/i.test(globalThis.navigator?.userAgent ?? "");
+}
+
 function shellQuoteIfNeeded(value: string): string {
   return /\s/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
 }
 
+function shellQuotePosix(value: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function pythonActivationCommand(venvPath: string | undefined): string {
   const normalizedVenvPath = normalizePythonVenvPath(venvPath);
-  return shellQuoteIfNeeded(`${normalizedVenvPath}\\Scripts\\activate`);
+  if (isWindowsPlatform()) {
+    return shellQuoteIfNeeded(`${normalizedVenvPath}\\Scripts\\activate`);
+  }
+
+  return `. ${shellQuotePosix(`${normalizedVenvPath}/bin/activate`)}`;
 }
 
 function formatHealthCheckPort(appUrl: string): string {
   const port = extractPortFromUrl(appUrl);
   return port === null ? "No port detected" : String(port);
+}
+
+function withGitRepositoryDefaults(
+  config: ProjectGitRepositoryConfig,
+  directoryFallback = "",
+): ProjectGitRepositoryConfig {
+  return {
+    directory: config.directory.trim() || directoryFallback,
+    remote: config.remote.trim() || DEFAULT_GIT_REMOTE,
+    defaultBranch: config.defaultBranch.trim() || DEFAULT_GIT_BRANCH,
+  };
+}
+
+function getDraftBackendServiceDirectory(
+  settings: ProjectSettingsRecord,
+): string {
+  if (settings.backendType === "python") {
+    return (
+      settings.python.directory.trim() ||
+      settings.services.python.workingDirectory.trim()
+    );
+  }
+
+  return (
+    settings.gitProjectDirectory.trim() ||
+    settings.services.wildfly.workingDirectory.trim()
+  );
+}
+
+function getDraftGitConfig(
+  settings: ProjectSettingsRecord,
+): ProjectSettingsRecord["git"] {
+  const mode = isProjectFrontendEnabled(settings)
+    ? settings.git.mode
+    : "single";
+  const backendDirectory = getDraftBackendServiceDirectory(settings);
+  const frontendDirectory =
+    settings.services.frontend.workingDirectory.trim() ||
+    settings.frontend.path?.trim() ||
+    "";
+  const singleDirectory =
+    settings.git.single.directory.trim() ||
+    settings.gitProjectDirectory.trim() ||
+    backendDirectory;
+
+  return {
+    mode,
+    single: withGitRepositoryDefaults(settings.git.single, singleDirectory),
+    frontend: withGitRepositoryDefaults(
+      settings.git.frontend,
+      frontendDirectory,
+    ),
+    backend: withGitRepositoryDefaults(settings.git.backend, backendDirectory),
+  };
 }
 
 const PROFILE_ROW_EXIT_MS = 180;
@@ -111,6 +183,17 @@ const PYTHON_SERVER_TYPE_OPTIONS: Array<AppSelectOption<PythonServerType>> = [
   { value: "flask-api", label: "Flask API", dotColor: "#2563eb" },
   { value: "django-rest", label: "Django REST", dotColor: "#16a34a" },
   { value: "custom", label: "Custom", dotColor: "var(--muted)" },
+];
+
+const GIT_REPOSITORY_MODE_OPTIONS: Array<
+  AppSelectOption<ProjectGitRepositoryMode>
+> = [
+  { value: "single", label: "Single repository", dotColor: "#2563eb" },
+  {
+    value: "separate",
+    label: "Separate frontend/backend repositories",
+    dotColor: "#059669",
+  },
 ];
 
 const PYTHON_SERVER_DEFAULTS: Record<
@@ -178,11 +261,41 @@ function isGeneratedPythonStartCommand(
     return true;
   }
 
-  return [venvPath, ""].some(
-    (candidateVenvPath) =>
-      currentValue ===
-      getPythonServerDefaults(serverType, candidateVenvPath).startCommand,
+  return (
+    [venvPath, ""].some(
+      (candidateVenvPath) =>
+        currentValue ===
+        getPythonServerDefaults(serverType, candidateVenvPath).startCommand,
+    ) || isPythonActivationOnlyCommand(currentValue)
   );
+}
+
+function isPythonActivationOnlyCommand(value: string): boolean {
+  const command = value.trim();
+  return (
+    /^(?:source|\.)\s+.+[\\/]bin[\\/]activate$/i.test(command) ||
+    /^.+[\\/]Scripts[\\/]activate(?:\.(?:bat|cmd|ps1))?$/i.test(command)
+  );
+}
+
+function normalizePythonStartCommandForSave(
+  python: ProjectSettingsRecord["python"],
+): string {
+  const currentCommand = python.startCommand.trim();
+  const generatedCommand = getPythonServerDefaults(
+    python.serverType,
+    python.venvPath,
+  ).startCommand;
+
+  if (isPythonActivationOnlyCommand(currentCommand) && generatedCommand) {
+    return generatedCommand;
+  }
+
+  if (!isWindowsPlatform() && /^source\s+/i.test(currentCommand)) {
+    return `. ${currentCommand.replace(/^source\s+/i, "")}`;
+  }
+
+  return currentCommand;
 }
 
 type BuildProfileField = "buttonName" | "profileName" | "goals";
@@ -522,6 +635,10 @@ export function SettingsContent({
   function updateFrontendEnabled(enabled: boolean): void {
     setDraft((current) => ({
       ...current,
+      git: {
+        ...current.git,
+        mode: enabled ? current.git.mode : "single",
+      },
       frontend: {
         ...current.frontend,
         enabled,
@@ -534,6 +651,36 @@ export function SettingsContent({
           autoStart: enabled
             ? (current.services.frontend.autoStart ?? false)
             : false,
+        },
+      },
+    }));
+  }
+
+  function updateGitMode(mode: ProjectGitRepositoryMode): void {
+    setDraft((current) => ({
+      ...current,
+      git: {
+        ...getDraftGitConfig(current),
+        mode,
+      },
+    }));
+  }
+
+  function updateGitRepositoryConfig(
+    scope: keyof Pick<
+      ProjectSettingsRecord["git"],
+      "single" | "frontend" | "backend"
+    >,
+    field: keyof ProjectGitRepositoryConfig,
+    value: string,
+  ): void {
+    setDraft((current) => ({
+      ...current,
+      git: {
+        ...current.git,
+        [scope]: {
+          ...current.git[scope],
+          [field]: value,
         },
       },
     }));
@@ -703,12 +850,18 @@ export function SettingsContent({
 
   function normalizeDraft(): ProjectSettingsRecord {
     const pythonAutoStart = draft.services.python.autoStart ?? false;
+    const pythonStartCommand = normalizePythonStartCommandForSave(draft.python);
+    const git = getDraftGitConfig(draft);
+    const compatibilityGit = git.mode === "separate" ? git.backend : git.single;
     return {
       ...draft,
-      defaultBranch: draft.defaultBranch.trim() || "main",
-      remote: draft.remote.trim() || "origin",
+      gitProjectDirectory: compatibilityGit.directory,
+      defaultBranch: compatibilityGit.defaultBranch,
+      remote: compatibilityGit.remote,
+      git,
       python: {
         ...draft.python,
+        startCommand: pythonStartCommand,
         autoStart: pythonAutoStart,
       },
       frontend: {
@@ -728,6 +881,7 @@ export function SettingsContent({
         },
         python: {
           ...draft.services.python,
+          command: pythonStartCommand,
           autoStart: pythonAutoStart,
         },
       },
@@ -944,6 +1098,47 @@ export function SettingsContent({
         }
       })
       .catch((error) => console.error(error));
+  }
+
+  function renderGitRepositoryFields(
+    scope: keyof Pick<
+      ProjectSettingsRecord["git"],
+      "single" | "frontend" | "backend"
+    >,
+    browseTitle: string,
+  ): JSX.Element {
+    const config = draft.git[scope];
+    return (
+      <>
+        <FieldRow
+          label="Git Directory"
+          value={config.directory}
+          browse
+          onChange={(value) =>
+            updateGitRepositoryConfig(scope, "directory", value)
+          }
+          onBrowse={() =>
+            browseDirectory(browseTitle, config.directory, (value) =>
+              updateGitRepositoryConfig(scope, "directory", value),
+            )
+          }
+        />
+        <FieldRow
+          label="Remote"
+          value={config.remote}
+          onChange={(value) =>
+            updateGitRepositoryConfig(scope, "remote", value)
+          }
+        />
+        <FieldRow
+          label="Default Branch"
+          value={config.defaultBranch}
+          onChange={(value) =>
+            updateGitRepositoryConfig(scope, "defaultBranch", value)
+          }
+        />
+      </>
+    );
   }
 
   return (
@@ -1252,44 +1447,48 @@ export function SettingsContent({
         ) : null}
 
         {activeSettingsTab === "git" ? (
-          <Panel title="Git" className="settings-form-panel full">
-            <FieldRow
-              label="Git Project Directory"
-              value={draft.gitProjectDirectory}
-              browse
-              onChange={(value) =>
-                setDraft((current) => ({
-                  ...current,
-                  gitProjectDirectory: value,
-                }))
-              }
-              onBrowse={() =>
-                browseDirectory(
-                  "Select Git project directory",
-                  draft.gitProjectDirectory,
-                  (value) =>
-                    setDraft((current) => ({
-                      ...current,
-                      gitProjectDirectory: value,
-                    })),
-                )
-              }
-            />
-            <FieldRow
-              label="Default Branch"
-              value={draft.defaultBranch}
-              onChange={(value) =>
-                setDraft((current) => ({ ...current, defaultBranch: value }))
-              }
-            />
-            <FieldRow
-              label="Remote"
-              value={draft.remote}
-              onChange={(value) =>
-                setDraft((current) => ({ ...current, remote: value }))
-              }
-            />
-          </Panel>
+          <div className="git-settings-layout">
+            {isProjectFrontendEnabled(draft) ? (
+              <Panel
+                title="Git Repository Mode"
+                className="settings-form-panel full"
+              >
+                <label className="settings-field-row">
+                  <span>Git Repository Mode</span>
+                  <AppSelect
+                    value={draft.git.mode}
+                    options={GIT_REPOSITORY_MODE_OPTIONS}
+                    onChange={updateGitMode}
+                    ariaLabel="Git repository mode"
+                    minDropdownWidth={260}
+                  />
+                  <span />
+                </label>
+              </Panel>
+            ) : null}
+
+            {isProjectFrontendEnabled(draft) &&
+            draft.git.mode === "separate" ? (
+              <div className="git-settings-grid">
+                <Panel title="Git - Frontend" className="settings-form-panel">
+                  {renderGitRepositoryFields(
+                    "frontend",
+                    "Select frontend Git directory",
+                  )}
+                </Panel>
+                <Panel title="Git - Backend" className="settings-form-panel">
+                  {renderGitRepositoryFields(
+                    "backend",
+                    "Select backend Git directory",
+                  )}
+                </Panel>
+              </div>
+            ) : (
+              <Panel title="Git" className="settings-form-panel full">
+                {renderGitRepositoryFields("single", "Select Git directory")}
+              </Panel>
+            )}
+          </div>
         ) : null}
 
         {activeSettingsTab === "builders" && backendService === "wildfly" ? (

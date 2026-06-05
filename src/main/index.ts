@@ -42,6 +42,7 @@ import type {
   DatabaseConnection,
   DatabaseObjectCollectionName,
   ProjectSettingsRecord,
+  ProjectGitContext,
   ProjectEnvScope,
   ProjectEnvVariable,
   ServiceAction,
@@ -568,16 +569,18 @@ function registerIpc(): void {
       getBackend().refreshStatus(projectId),
     ),
   );
-  ipcMain.handle("dashboard:getGitStatus", (_event, projectId: string) =>
-    withLoggedErrors("dashboard:getGitStatus", () =>
-      getBackend().getGitStatus(projectId),
-    ),
+  ipcMain.handle(
+    "dashboard:getGitStatus",
+    (_event, projectId: string, context?: ProjectGitContext) =>
+      withLoggedErrors("dashboard:getGitStatus", () =>
+        getBackend().getGitStatus(projectId, context),
+      ),
   );
   ipcMain.handle(
     "dashboard:runGitCommand",
-    (_event, projectId: string, args: string) =>
+    (_event, projectId: string, args: string, context?: ProjectGitContext) =>
       withLoggedErrors("dashboard:runGitCommand", () =>
-        getBackend().runGitCommand(projectId, args),
+        getBackend().runGitCommand(projectId, args, context),
       ),
   );
   ipcMain.handle("dashboard:getSheets", (_event, projectId: string) =>

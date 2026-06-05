@@ -1,6 +1,10 @@
 import type {
   BackendServiceName,
   BackendType,
+  ProjectGitConfig,
+  ProjectGitContext,
+  ProjectGitRepositoryConfig,
+  ProjectGitRepositoryMode,
   ProjectFrontendConfig,
   ProjectSettingsRecord,
   PythonServerType,
@@ -19,10 +23,52 @@ const EMPTY_FRONTEND: ProjectFrontendConfig = {
   buildCommand: "",
 };
 
+export const DEFAULT_GIT_REMOTE = "origin";
+export const DEFAULT_GIT_BRANCH = "main";
+
 export function isProjectFrontendEnabled(
   settings: ProjectSettingsRecord,
 ): boolean {
   return settings.frontend.enabled === true;
+}
+
+export function isProjectUsingSeparateGitRepositories(
+  settings: ProjectSettingsRecord,
+): boolean {
+  return isProjectFrontendEnabled(settings) && settings.git.mode === "separate";
+}
+
+export function getDefaultProjectGitContext(
+  settings: ProjectSettingsRecord,
+): ProjectGitContext {
+  return isProjectUsingSeparateGitRepositories(settings) ? "backend" : "single";
+}
+
+export function getProjectGitContextLabel(context: ProjectGitContext): string {
+  if (context === "frontend") {
+    return "Frontend";
+  }
+
+  if (context === "backend") {
+    return "Backend";
+  }
+
+  return "Repository";
+}
+
+export function getProjectGitRepositoryConfig(
+  settings: ProjectSettingsRecord,
+  context: ProjectGitContext = getDefaultProjectGitContext(settings),
+): ProjectGitRepositoryConfig {
+  if (context === "frontend") {
+    return settings.git.frontend;
+  }
+
+  if (context === "backend") {
+    return settings.git.backend;
+  }
+
+  return settings.git.single;
 }
 
 export function getProjectServiceNames(
@@ -215,16 +261,29 @@ export function normalizeProjectSettings(
     },
   );
 
+  const remote = stringValue(raw.remote, defaults.remote || DEFAULT_GIT_REMOTE);
+  const defaultBranch = stringValue(
+    raw.defaultBranch,
+    defaults.defaultBranch || DEFAULT_GIT_BRANCH,
+  );
+  const gitProjectDirectory = stringValue(
+    raw.gitProjectDirectory,
+    defaults.gitProjectDirectory,
+  );
+  const git = normalizeGitConfig(raw.git, defaults.git, {
+    gitProjectDirectory,
+    remote,
+    defaultBranch,
+  });
+
   return {
     ...defaults,
     backendType,
     appLogFile: stringValue(raw.appLogFile, defaults.appLogFile),
-    gitProjectDirectory: stringValue(
-      raw.gitProjectDirectory,
-      defaults.gitProjectDirectory,
-    ),
-    defaultBranch: stringValue(raw.defaultBranch, defaults.defaultBranch),
-    remote: stringValue(raw.remote, defaults.remote),
+    gitProjectDirectory,
+    defaultBranch,
+    remote,
+    git,
     frontend,
     python,
     services: {
@@ -245,6 +304,61 @@ export function normalizeProjectSettings(
       ? raw.buildProfiles
       : defaults.buildProfiles,
   };
+}
+
+function normalizeGitConfig(
+  value: unknown,
+  defaults: ProjectGitConfig,
+  legacy: {
+    gitProjectDirectory: string;
+    remote: string;
+    defaultBranch: string;
+  },
+): ProjectGitConfig {
+  const rawGit = isRecord(value) ? value : {};
+  return {
+    mode: normalizeGitRepositoryMode(rawGit.mode, defaults.mode),
+    single: normalizeGitRepositoryConfig(rawGit.single, defaults.single, {
+      directory: legacy.gitProjectDirectory,
+      remote: legacy.remote,
+      defaultBranch: legacy.defaultBranch,
+    }),
+    frontend: normalizeGitRepositoryConfig(rawGit.frontend, defaults.frontend, {
+      remote: legacy.remote,
+      defaultBranch: legacy.defaultBranch,
+    }),
+    backend: normalizeGitRepositoryConfig(rawGit.backend, defaults.backend, {
+      directory: legacy.gitProjectDirectory,
+      remote: legacy.remote,
+      defaultBranch: legacy.defaultBranch,
+    }),
+  };
+}
+
+function normalizeGitRepositoryConfig(
+  value: unknown,
+  defaults: ProjectGitRepositoryConfig,
+  legacy: Partial<ProjectGitRepositoryConfig> = {},
+): ProjectGitRepositoryConfig {
+  const raw = isRecord(value) ? value : {};
+  return {
+    directory: stringValue(
+      raw.directory,
+      legacy.directory ?? defaults.directory,
+    ),
+    remote: stringValue(raw.remote, legacy.remote ?? defaults.remote),
+    defaultBranch: stringValue(
+      raw.defaultBranch,
+      legacy.defaultBranch ?? defaults.defaultBranch,
+    ),
+  };
+}
+
+function normalizeGitRepositoryMode(
+  value: unknown,
+  fallback: ProjectGitRepositoryMode,
+): ProjectGitRepositoryMode {
+  return value === "separate" || value === "single" ? value : fallback;
 }
 
 function normalizePythonWebServerConfig(
