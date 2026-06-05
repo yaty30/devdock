@@ -177,7 +177,14 @@ type PostgresClientOptions = {
   password?: string;
   database?: string;
   connectionTimeoutMillis: number;
-  ssl?: boolean | { rejectUnauthorized: boolean };
+  ssl?:
+    | boolean
+    | {
+        rejectUnauthorized: boolean;
+        ca?: string;
+        cert?: string;
+        key?: string;
+      };
 };
 
 type PostgresField = {
@@ -5246,6 +5253,9 @@ function normalizeDatabaseConnection(
     connectionTimeoutMs: connection.connectionTimeoutMs ?? 10000,
     database,
     sslMode: connection.sslMode ?? "disabled",
+    sslCaPath: connection.sslCaPath?.trim() ?? "",
+    sslCertPath: connection.sslCertPath?.trim() ?? "",
+    sslKeyPath: connection.sslKeyPath?.trim() ?? "",
     connectionMode: connection.connectionMode ?? "serviceName",
     serviceName: connection.serviceName?.trim() ?? "",
     sid: connection.sid?.trim() ?? "",
@@ -5417,7 +5427,6 @@ function toPostgresClientOptions(
 ): PostgresClientOptions {
   const database = connection.database?.trim();
   const includeDatabase = options.includeDatabase ?? true;
-  const sslMode = connection.sslMode ?? "disabled";
   return {
     host: connection.host.trim(),
     port: Number(connection.port) || 5432,
@@ -5425,13 +5434,36 @@ function toPostgresClientOptions(
     password: connection.password ?? "",
     database: includeDatabase && database ? database : undefined,
     connectionTimeoutMillis: connection.connectionTimeoutMs ?? 10000,
-    ssl:
-      sslMode === "required"
-        ? { rejectUnauthorized: true }
-        : sslMode === "preferred"
-          ? { rejectUnauthorized: false }
-          : undefined,
+    ssl: createPostgresSslOptions(connection),
   };
+}
+
+function createPostgresSslOptions(
+  connection: DatabaseConnection,
+): PostgresClientOptions["ssl"] {
+  const sslMode = connection.sslMode ?? "disabled";
+  if (sslMode === "disabled") {
+    return undefined;
+  }
+
+  const sslOptions: Exclude<PostgresClientOptions["ssl"], boolean> = {
+    rejectUnauthorized: sslMode === "required",
+  };
+  const sslCaPath = connection.sslCaPath?.trim();
+  const sslCertPath = connection.sslCertPath?.trim();
+  const sslKeyPath = connection.sslKeyPath?.trim();
+
+  if (sslCaPath) {
+    sslOptions.ca = readFileSync(sslCaPath, "utf8");
+  }
+  if (sslCertPath) {
+    sslOptions.cert = readFileSync(sslCertPath, "utf8");
+  }
+  if (sslKeyPath) {
+    sslOptions.key = readFileSync(sslKeyPath, "utf8");
+  }
+
+  return sslOptions;
 }
 
 async function executePostgresRows(

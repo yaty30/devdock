@@ -28,6 +28,9 @@ type DatabaseConnectionDraft = {
   connectionTimeoutSeconds: string;
   database: string;
   sslMode: DatabaseSslMode;
+  sslCaPath: string;
+  sslCertPath: string;
+  sslKeyPath: string;
   connectionMode: OracleConnectionMode;
   serviceName: string;
   sid: string;
@@ -155,9 +158,37 @@ export function DatabaseConnectionModal({
       networkAlias: type === "Oracle" ? current.networkAlias : "",
       role: type === "Oracle" ? current.role : "",
       walletPath: type === "Oracle" ? current.walletPath : "",
+      sslCaPath: type === "PostgreSQL" ? current.sslCaPath : "",
+      sslCertPath: type === "PostgreSQL" ? current.sslCertPath : "",
+      sslKeyPath: type === "PostgreSQL" ? current.sslKeyPath : "",
     }));
     setErrors({});
     setTestState({ status: "idle", message: "" });
+  }
+
+  function browseCertificateFile(
+    title: string,
+    key: "sslCaPath" | "sslCertPath" | "sslKeyPath",
+  ): void {
+    window.ivsDashboard
+      .browsePath({
+        kind: "file",
+        title,
+        defaultPath: draft[key] || undefined,
+        filters: [
+          {
+            name: "Certificates and keys",
+            extensions: ["pem", "crt", "cer", "key"],
+          },
+          { name: "All files", extensions: ["*"] },
+        ],
+      })
+      .then((path) => {
+        if (path) {
+          updateDraft(key, path);
+        }
+      })
+      .catch((error) => console.error(error));
   }
 
   function validateDraft(): ConnectionFormErrors {
@@ -402,6 +433,49 @@ export function DatabaseConnectionModal({
                   ariaLabel="SSL mode"
                 />
               </ConnectionField>
+              {draft.type === "PostgreSQL" && draft.sslMode !== "disabled" ? (
+                <>
+                  <ConnectionField label="CA certificate">
+                    <CertificatePathField
+                      value={draft.sslCaPath}
+                      placeholder="Optional CA certificate path"
+                      onChange={(value) => updateDraft("sslCaPath", value)}
+                      onBrowse={() =>
+                        browseCertificateFile(
+                          "Select PostgreSQL CA certificate",
+                          "sslCaPath",
+                        )
+                      }
+                    />
+                  </ConnectionField>
+                  <ConnectionField label="Client certificate">
+                    <CertificatePathField
+                      value={draft.sslCertPath}
+                      placeholder="Optional client certificate path"
+                      onChange={(value) => updateDraft("sslCertPath", value)}
+                      onBrowse={() =>
+                        browseCertificateFile(
+                          "Select PostgreSQL client certificate",
+                          "sslCertPath",
+                        )
+                      }
+                    />
+                  </ConnectionField>
+                  <ConnectionField label="Client key">
+                    <CertificatePathField
+                      value={draft.sslKeyPath}
+                      placeholder="Optional client key path"
+                      onChange={(value) => updateDraft("sslKeyPath", value)}
+                      onBrowse={() =>
+                        browseCertificateFile(
+                          "Select PostgreSQL client key",
+                          "sslKeyPath",
+                        )
+                      }
+                    />
+                  </ConnectionField>
+                </>
+              ) : null}
             </div>
           </section>
         ) : (
@@ -577,6 +651,32 @@ function ConnectionField({
   );
 }
 
+function CertificatePathField({
+  value,
+  placeholder,
+  onChange,
+  onBrowse,
+}: {
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+  onBrowse: () => void;
+}): JSX.Element {
+  return (
+    <span className="database-certificate-path-field">
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <button type="button" onClick={onBrowse}>
+        Browse
+      </button>
+    </span>
+  );
+}
+
 function createConnectionDraft(
   connection?: DatabaseConnection | null,
 ): DatabaseConnectionDraft {
@@ -596,6 +696,9 @@ function createConnectionDraft(
       ),
       database: connection.database ?? connection.schema ?? "",
       sslMode: connection.sslMode ?? "disabled",
+      sslCaPath: connection.sslCaPath ?? "",
+      sslCertPath: connection.sslCertPath ?? "",
+      sslKeyPath: connection.sslKeyPath ?? "",
       connectionMode: connection.connectionMode ?? "serviceName",
       serviceName: connection.serviceName ?? connection.schema ?? "",
       sid: connection.sid ?? "",
@@ -622,6 +725,9 @@ function createConnectionDraft(
     connectionTimeoutSeconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
     database: "",
     sslMode: "disabled",
+    sslCaPath: "",
+    sslCertPath: "",
+    sslKeyPath: "",
     connectionMode: "serviceName",
     serviceName: "XEPDB1",
     sid: "",
@@ -648,6 +754,9 @@ function areConnectionDraftsEqual(
     "connectionTimeoutSeconds",
     "database",
     "sslMode",
+    "sslCaPath",
+    "sslCertPath",
+    "sslKeyPath",
     "connectionMode",
     "serviceName",
     "sid",
@@ -767,6 +876,9 @@ function createConnectionFromDraft(
     database: draft.database.trim(),
     schema,
     sslMode: draft.sslMode,
+    sslCaPath: draft.sslCaPath.trim(),
+    sslCertPath: draft.sslCertPath.trim(),
+    sslKeyPath: draft.sslKeyPath.trim(),
     connectionMode: draft.connectionMode,
     serviceName: draft.serviceName.trim(),
     sid: draft.sid.trim(),

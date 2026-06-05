@@ -13155,6 +13155,28 @@ button.database-tree-item {
   border-color: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
+.database-certificate-path-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.database-certificate-path-field button {
+  min-height: var(--control-md);
+  padding: 0 12px;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 850;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 7px;
+}
+
+.database-certificate-path-field button:hover {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 .database-connection-field strong {
   color: var(--error);
   font-size: var(--font-xs);

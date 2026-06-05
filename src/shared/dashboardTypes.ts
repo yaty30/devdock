@@ -328,6 +328,9 @@ export type DatabaseConnection = {
   connectionTimeoutMs?: number;
   database?: string;
   sslMode?: DatabaseSslMode;
+  sslCaPath?: string;
+  sslCertPath?: string;
+  sslKeyPath?: string;
   connectionMode?: OracleConnectionMode;
   serviceName?: string;
   sid?: string;
