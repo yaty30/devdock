@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppSection,
   DatabaseConnection,
@@ -21,21 +14,13 @@ type DatabaseConnectionModalMode = "add" | "edit" | null;
 
 export function useDatabaseController({
   activeSection,
-  settingsDirty,
-  settingsOpen,
   setActiveSection,
-  setPendingNav,
-  setSettingsDirty,
-  setSettingsOpen,
+  requestSettingsNavigation,
   showSnackbar,
 }: {
   activeSection: AppSection;
-  settingsDirty: boolean;
-  settingsOpen: boolean;
   setActiveSection: (section: AppSection) => void;
-  setPendingNav: Dispatch<SetStateAction<(() => void) | null>>;
-  setSettingsDirty: (dirty: boolean) => void;
-  setSettingsOpen: (open: boolean) => void;
+  requestSettingsNavigation: (action: () => void) => void;
   showSnackbar: (message: string, tone: SnackbarTone) => void;
 }) {
   const [connections, setConnections] = useState<DatabaseConnection[]>([]);
@@ -216,17 +201,10 @@ export function useDatabaseController({
         ),
       );
       setActiveTab("connection");
-      setSettingsOpen(false);
-      setSettingsDirty(false);
       setActiveSection("database");
     };
 
-    if (settingsDirty && settingsOpen) {
-      setPendingNav(() => doSwitch);
-      return;
-    }
-
-    doSwitch();
+    requestSettingsNavigation(doSwitch);
   }
 
   function connectConnection(connection: DatabaseConnection): void {
