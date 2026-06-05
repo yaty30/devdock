@@ -194,8 +194,26 @@ export function createLoadingProjectState(): ProjectRuntimeState {
       backendType: "wildfly",
       appLogFile: "",
       gitProjectDirectory: "",
-      defaultBranch: "",
-      remote: "",
+      defaultBranch: "main",
+      remote: "origin",
+      git: {
+        mode: "single",
+        single: {
+          directory: "",
+          remote: "origin",
+          defaultBranch: "main",
+        },
+        frontend: {
+          directory: "",
+          remote: "origin",
+          defaultBranch: "main",
+        },
+        backend: {
+          directory: "",
+          remote: "origin",
+          defaultBranch: "main",
+        },
+      },
       frontend: {
         enabled: false,
         path: "",
@@ -256,6 +274,9 @@ export function createLoadingProjectState(): ProjectRuntimeState {
     pythonDependencies: [],
     gitStatus: {
       repository: "",
+      context: "single",
+      contextLabel: "Repository",
+      valid: false,
       branch: "",
       commit: "",
       status: "",

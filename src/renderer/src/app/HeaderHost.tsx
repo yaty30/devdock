@@ -6,6 +6,7 @@ import {
   HeaderActions,
 } from "../components/layout/HeaderActions";
 import { NotesHeaderActions } from "../components/common/NotesHeaderActions";
+import { GitRepositorySelector } from "../features/git/GitTerminalTab";
 import {
   DatabaseHeaderActions,
   DatabaseWorkspaceTabs,
@@ -28,6 +29,7 @@ import type {
   DashboardTab,
   FontSizeMode,
   Project,
+  ProjectGitContext,
   ProjectRuntimeState,
   ToolId,
 } from "../types";
@@ -48,6 +50,7 @@ export function HeaderHost({
   cryptoActiveTab,
   database,
   fontSizeMode,
+  gitTerminalContext,
   notebookView,
   notesView,
   projectLoading,
@@ -59,6 +62,7 @@ export function HeaderHost({
   setCryptoActiveTab,
   setEnvFilesOpen,
   setFontSizeMode,
+  setGitTerminalContext,
   setNotebookAddRequestId,
   setNotebookView,
   setNotesAddRequestId,
@@ -77,6 +81,7 @@ export function HeaderHost({
   cryptoActiveTab: CryptographicToolTab;
   database: DatabaseController;
   fontSizeMode: FontSizeMode;
+  gitTerminalContext: ProjectGitContext;
   notebookView: NotesView;
   notesView: NotesView;
   projectLoading: boolean;
@@ -88,6 +93,7 @@ export function HeaderHost({
   setCryptoActiveTab: (tab: CryptographicToolTab) => void;
   setEnvFilesOpen: (open: boolean) => void;
   setFontSizeMode: (fontSizeMode: FontSizeMode) => void;
+  setGitTerminalContext: (context: ProjectGitContext) => void;
   setNotebookAddRequestId: Dispatch<SetStateAction<number>>;
   setNotebookView: Dispatch<SetStateAction<NotesView>>;
   setNotesAddRequestId: Dispatch<SetStateAction<number>>;
@@ -129,7 +135,15 @@ export function HeaderHost({
               onEnvFilesClick={() => setEnvFilesOpen(true)}
               showSettingsButton={activeTab !== "notes"}
               utilityActions={
-                activeTab === "notes" ? (
+                activeTab === "git-terminal" ? (
+                  <GitRepositorySelector
+                    projectId={selectedProject.id}
+                    settings={activeProjectState.settings}
+                    value={gitTerminalContext}
+                    disabled={projectLoading}
+                    onChange={setGitTerminalContext}
+                  />
+                ) : activeTab === "notes" ? (
                   <NotesHeaderActions
                     view={notesView}
                     disabled={projectLoading}

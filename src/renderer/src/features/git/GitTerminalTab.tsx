@@ -1,17 +1,26 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Copy,
+  FolderGit as GitFolder,
   History,
   LoaderCircle,
   PanelRightClose,
   PanelRightOpen,
 } from "lucide-react";
 import { FindControls } from "../../components/common/FindControls";
-import type { GitStatusRecord } from "../../types";
+import type {
+  GitStatusRecord,
+  ProjectGitContext,
+  ProjectSettingsRecord,
+} from "../../types";
 import {
   copyTextToClipboard,
   type CopyFeedback,
 } from "../../utils/copyToClipboard";
+import {
+  getProjectGitContextLabel,
+  isProjectUsingSeparateGitRepositories,
+} from "../../../../shared/projectFrontend";
 
 type GitCommandHistoryItem = {
   id: number;
@@ -36,13 +45,184 @@ const quickGitCommands = [
   "diff",
 ];
 
+type GitRepositorySelectorContext = Extract<
+  ProjectGitContext,
+  "frontend" | "backend"
+>;
+
+export function GitRepositorySelector({
+  projectId,
+  settings,
+  value,
+  disabled = false,
+  onChange,
+}: {
+  projectId: string;
+  settings: ProjectSettingsRecord;
+  value: ProjectGitContext;
+  disabled?: boolean;
+  onChange: (context: ProjectGitContext) => void;
+}): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const [statuses, setStatuses] = useState<
+    Partial<Record<GitRepositorySelectorContext, GitStatusRecord>>
+  >({});
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const separateGitRepositories =
+    isProjectUsingSeparateGitRepositories(settings);
+  const selectedContext =
+    value === "frontend" || value === "backend" ? value : "backend";
+  const selectedLabel = getProjectGitContextLabel(selectedContext);
+
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function closeOnOutsideClick(event: MouseEvent): void {
+      if (!dropdownRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [open]);
+
+  useEffect(() => {
+    if (!separateGitRepositories) {
+      setOpen(false);
+      setStatuses({});
+      return undefined;
+    }
+
+    let cancelled = false;
+    (["frontend", "backend"] as GitRepositorySelectorContext[]).forEach(
+      (context) => {
+        window.ivsDashboard
+          .getGitStatus(projectId, context)
+          .then((status) => {
+            if (cancelled) {
+              return;
+            }
+            setStatuses((current) => ({ ...current, [context]: status }));
+          })
+          .catch(() => {
+            if (cancelled) {
+              return;
+            }
+            setStatuses((current) => ({
+              ...current,
+              [context]: {
+                repository: settings.git[context].directory,
+                context,
+                contextLabel: getProjectGitContextLabel(context),
+                valid: false,
+                branch: "unavailable",
+                commit: "unavailable",
+                status: `${getProjectGitContextLabel(context)} Git directory is not configured or is not a valid Git repository.`,
+                lines: [],
+              },
+            }));
+          });
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, separateGitRepositories, settings.git]);
+
+  if (!separateGitRepositories) {
+    return null;
+  }
+
+  function contextMessage(context: GitRepositorySelectorContext): string {
+    const configuredDirectory = settings.git[context].directory.trim();
+    if (!configuredDirectory) {
+      return `${getProjectGitContextLabel(context)} Git directory is not configured or is not a valid Git repository.`;
+    }
+
+    const status = statuses[context];
+    if (status && !status.valid) {
+      return status.status;
+    }
+
+    return getProjectGitContextLabel(context);
+  }
+
+  function contextDisabled(context: GitRepositorySelectorContext): boolean {
+    if (disabled || !settings.git[context].directory.trim()) {
+      return true;
+    }
+
+    const status = statuses[context];
+    return status ? !status.valid : false;
+  }
+
+  function selectContext(context: GitRepositorySelectorContext): void {
+    if (contextDisabled(context)) {
+      return;
+    }
+
+    onChange(context);
+    setOpen(false);
+  }
+
+  return (
+    <div className="build-dropdown git-context-dropdown" ref={dropdownRef}>
+      <button
+        className={`icon-button secondary header-settings-button git-context-trigger${
+          open ? " open" : ""
+        }`}
+        type="button"
+        aria-label={`Git repository context: ${selectedLabel}`}
+        title={`Git repository context: ${selectedLabel}`}
+        disabled={disabled}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <GitFolder size={18} />
+      </button>
+      <div className={`build-dropdown-popover${open ? " open" : ""}`}>
+        <div className="build-dropdown-menu git-context-menu" role="menu">
+          {(["frontend", "backend"] as GitRepositorySelectorContext[]).map(
+            (context) => {
+              const disabledOption = contextDisabled(context);
+              const label = getProjectGitContextLabel(context);
+              return (
+                <button
+                  type="button"
+                  role="menuitem"
+                  key={context}
+                  className={selectedContext === context ? "active" : undefined}
+                  disabled={disabledOption}
+                  title={disabledOption ? contextMessage(context) : label}
+                  onClick={() => selectContext(context)}
+                >
+                  <GitFolder size={15} />
+                  <span>{label}</span>
+                </button>
+              );
+            },
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function GitTerminalTab({
   projectId,
   gitStatus,
+  settings,
+  gitContext,
   onFeedback,
 }: {
   projectId: string;
   gitStatus: GitStatusRecord;
+  settings: ProjectSettingsRecord;
+  gitContext: ProjectGitContext;
   onFeedback?: CopyFeedback;
 }): JSX.Element {
   const [command, setCommand] = useState("");
@@ -59,11 +239,30 @@ export function GitTerminalTab({
   const historyIdRef = useRef(0);
   const historySentinelRef = useRef<HTMLDivElement>(null);
   const activeLineRef = useRef<HTMLDivElement>(null);
+  const separateGitRepositories =
+    isProjectUsingSeparateGitRepositories(settings);
+  const selectedContext = separateGitRepositories ? gitContext : "single";
+  const selectedContextLabel = getProjectGitContextLabel(selectedContext);
+  const selectedGitValid = status.valid !== false;
 
   useEffect(() => {
-    setStatus(gitStatus);
-    setOutput(gitStatus.lines);
-  }, [gitStatus]);
+    if (selectedContext === (gitStatus.context ?? "single")) {
+      setStatus(gitStatus);
+      setOutput(gitStatus.lines);
+    }
+  }, [gitStatus, selectedContext]);
+
+  useEffect(() => {
+    setRunning(true);
+    window.ivsDashboard
+      .getGitStatus(projectId, selectedContext)
+      .then((nextStatus) => {
+        setStatus(nextStatus);
+        setOutput(nextStatus.lines);
+      })
+      .catch((error) => setOutput((lines) => [...lines, String(error)]))
+      .finally(() => setRunning(false));
+  }, [projectId, selectedContext]);
 
   useEffect(() => {
     setCommand("");
@@ -135,7 +334,7 @@ export function GitTerminalTab({
   function refreshBranch(): void {
     setRunning(true);
     window.ivsDashboard
-      .getGitStatus(projectId)
+      .getGitStatus(projectId, selectedContext)
       .then((nextStatus) => {
         setStatus(nextStatus);
         setOutput(nextStatus.lines);
@@ -171,7 +370,7 @@ export function GitTerminalTab({
     setCommand("");
     setRunning(true);
     window.ivsDashboard
-      .runGitCommand(projectId, args)
+      .runGitCommand(projectId, args, selectedContext)
       .then((nextStatus) => {
         setStatus(nextStatus);
         setOutput(nextStatus.lines);
@@ -235,6 +434,12 @@ export function GitTerminalTab({
             <span>Repository</span>
             <strong>{status.repository || "Unavailable"}</strong>
           </div>
+          {separateGitRepositories ? (
+            <div className="git-status-item">
+              <span>Context</span>
+              <strong>{selectedContextLabel}</strong>
+            </div>
+          ) : null}
           <div className="git-status-item">
             <span>Branch</span>
             <strong>{status.branch}</strong>
@@ -293,6 +498,11 @@ export function GitTerminalTab({
             />
           </div>
           <div className="terminal-output" aria-label="Git terminal output">
+            {!selectedGitValid ? (
+              <div className="git-context-warning" role="status">
+                {status.status}
+              </div>
+            ) : null}
             {output.map((line, index) => {
               const matched = matchIndexes.includes(index);
               const active = index === activeLineIndex;
@@ -334,7 +544,9 @@ export function GitTerminalTab({
               type="button"
               aria-controls="git-command-history-panel"
               aria-expanded={historyOpen}
-              title={historyOpen ? "Hide command history" : "Show command history"}
+              title={
+                historyOpen ? "Hide command history" : "Show command history"
+              }
               onClick={() => setHistoryOpen((current) => !current)}
             >
               {historyOpen ? (
@@ -411,7 +623,11 @@ export function GitTerminalTab({
             }
           }}
         />
-        <button type="button" onClick={runCommand} disabled={running}>
+        <button
+          type="button"
+          onClick={runCommand}
+          disabled={running || !selectedGitValid}
+        >
           {running ? "Running" : "Run"}
         </button>
       </div>
@@ -551,7 +767,9 @@ function gitWorkingTreeStatusClass(
   }
 
   if (
-    /error|failed|fatal|unavailable|not configured|does not exist/i.test(status)
+    /error|failed|fatal|unavailable|not configured|does not exist|not a valid|not a directory/i.test(
+      status,
+    )
   ) {
     return "failed";
   }
@@ -566,7 +784,9 @@ function terminalLineClass(line: string): string {
     lower.includes("error") ||
     lower.includes("failed") ||
     lower.includes("fatal") ||
-    lower.includes("does not exist")
+    lower.includes("does not exist") ||
+    lower.includes("not a valid") ||
+    lower.includes("not a directory")
   ) {
     return "terminal-error";
   }
@@ -585,6 +805,8 @@ function terminalLineClass(line: string): string {
 
   if (
     lower.includes("repository:") ||
+    lower.includes("git root:") ||
+    lower.includes("context:") ||
     lower.includes("branch:") ||
     lower.includes("commit:")
   ) {

@@ -28,6 +28,7 @@ import type {
   AppSection,
   DashboardTab,
   Project,
+  ProjectGitContext,
   ProjectRuntimeState,
   ToolId,
 } from "../types";
@@ -49,6 +50,7 @@ export function MainRouteRenderer({
   cryptoActiveTab,
   dashboard,
   database,
+  gitTerminalContext,
   notesAddRequestId,
   notesView,
   notebookAddRequestId,
@@ -69,6 +71,7 @@ export function MainRouteRenderer({
   cryptoActiveTab: CryptographicToolTab;
   dashboard: DashboardController;
   database: DatabaseController;
+  gitTerminalContext: ProjectGitContext;
   notesAddRequestId: number;
   notesView: NotesView;
   notebookAddRequestId: number;
@@ -211,6 +214,8 @@ export function MainRouteRenderer({
         <GitTerminalTab
           projectId={selectedProject.id}
           gitStatus={activeProjectState.gitStatus}
+          settings={activeProjectState.settings}
+          gitContext={gitTerminalContext}
           onFeedback={showSnackbar}
         />
       ) : (

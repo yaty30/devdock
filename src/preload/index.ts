@@ -24,8 +24,7 @@ const api: DashboardApi = {
   toggleMaximizeWindow: () => ipcRenderer.invoke("window:toggleMaximize"),
   closeWindow: () => ipcRenderer.invoke("window:close"),
   sshConnect: (request) => ipcRenderer.invoke("ssh:connect", request),
-  sshDisconnect: (sessionId) =>
-    ipcRenderer.invoke("ssh:disconnect", sessionId),
+  sshDisconnect: (sessionId) => ipcRenderer.invoke("ssh:disconnect", sessionId),
   sshExec: (sessionId, command) =>
     ipcRenderer.invoke("ssh:exec", sessionId, command),
   sshWrite: (sessionId, data) =>
@@ -57,7 +56,12 @@ const api: DashboardApi = {
   sshUploadFile: (sessionId, localPath, remoteDirectory) =>
     ipcRenderer.invoke("ssh:uploadFile", sessionId, localPath, remoteDirectory),
   sshDownloadFile: (sessionId, remotePath, localDirectory) =>
-    ipcRenderer.invoke("ssh:downloadFile", sessionId, remotePath, localDirectory),
+    ipcRenderer.invoke(
+      "ssh:downloadFile",
+      sessionId,
+      remotePath,
+      localDirectory,
+    ),
   sshPreviewFile: (sessionId, remotePath) =>
     ipcRenderer.invoke("ssh:previewFile", sessionId, remotePath),
   sendApiTesterRequest: (request) =>
@@ -135,10 +139,10 @@ const api: DashboardApi = {
     ipcRenderer.invoke("dashboard:getApiFetches", projectId, options),
   refreshStatus: (projectId) =>
     ipcRenderer.invoke("dashboard:refreshStatus", projectId),
-  getGitStatus: (projectId) =>
-    ipcRenderer.invoke("dashboard:getGitStatus", projectId),
-  runGitCommand: (projectId, args) =>
-    ipcRenderer.invoke("dashboard:runGitCommand", projectId, args),
+  getGitStatus: (projectId, context) =>
+    ipcRenderer.invoke("dashboard:getGitStatus", projectId, context),
+  runGitCommand: (projectId, args, context) =>
+    ipcRenderer.invoke("dashboard:runGitCommand", projectId, args, context),
   getSheets: (projectId) =>
     ipcRenderer.invoke("dashboard:getSheets", projectId),
   createSheet: (projectId, title) =>

@@ -29,9 +29,11 @@ import type {
   BackendType,
   AppSection,
   DashboardTab,
+  ProjectGitContext,
   PythonServerType,
   ToolId,
 } from "../types";
+import { isProjectUsingSeparateGitRepositories } from "../../../shared/projectFrontend";
 
 const SPLASH_LOGO_SIZE = "min(66px, 7vw)";
 function AppShell(): JSX.Element {
@@ -89,6 +91,8 @@ function AppShell(): JSX.Element {
   const [interfaceSettingsOpen, setInterfaceSettingsOpen] = useState(false);
   const [addProjectOpen, setAddProjectOpen] = useState(false);
   const [envFilesOpen, setEnvFilesOpen] = useState(false);
+  const [gitTerminalContext, setGitTerminalContext] =
+    useState<ProjectGitContext>("single");
   const [panelResetVersion, setPanelResetVersion] = useState(0);
   const { snackbar, snackbarClosing, showSnackbar, dismissSnackbar } =
     useSnackbar();
@@ -162,6 +166,23 @@ function AppShell(): JSX.Element {
   useEffect(() => {
     dashboard.dismissCompletedBuildMiniRecordsForProjectRoute();
   }, [dashboard.dismissCompletedBuildMiniRecordsForProjectRoute]);
+
+  useEffect(() => {
+    if (!activeProjectState) {
+      setGitTerminalContext("single");
+      return;
+    }
+
+    setGitTerminalContext((current) => {
+      if (!isProjectUsingSeparateGitRepositories(activeProjectState.settings)) {
+        return "single";
+      }
+
+      return current === "frontend" || current === "backend"
+        ? current
+        : "backend";
+    });
+  }, [activeProjectState?.settings, selectedProject?.id]);
 
   function handleSectionChange(section: AppSection): void {
     requestSettingsNavigation(() => setActiveSection(section));
@@ -347,6 +368,7 @@ function AppShell(): JSX.Element {
             cryptoActiveTab={cryptoActiveTab}
             database={database}
             fontSizeMode={fontSizeMode}
+            gitTerminalContext={gitTerminalContext}
             notebookView={notebookView}
             notesView={notesView}
             projectLoading={projectLoading}
@@ -358,6 +380,7 @@ function AppShell(): JSX.Element {
             setCryptoActiveTab={setCryptoActiveTab}
             setEnvFilesOpen={setEnvFilesOpen}
             setFontSizeMode={setFontSizeMode}
+            setGitTerminalContext={setGitTerminalContext}
             setNotebookAddRequestId={setNotebookAddRequestId}
             setNotebookView={setNotebookView}
             setNotesAddRequestId={setNotesAddRequestId}
@@ -377,6 +400,7 @@ function AppShell(): JSX.Element {
             cryptoActiveTab={cryptoActiveTab}
             dashboard={dashboard}
             database={database}
+            gitTerminalContext={gitTerminalContext}
             notesAddRequestId={notesAddRequestId}
             notesView={notesView}
             notebookAddRequestId={notebookAddRequestId}
@@ -443,6 +467,7 @@ function AppShell(): JSX.Element {
           cryptoActiveTab={cryptoActiveTab}
           database={database}
           fontSizeMode={fontSizeMode}
+          gitTerminalContext={gitTerminalContext}
           notebookView={notebookView}
           notesView={notesView}
           projectLoading={projectLoading}
@@ -454,6 +479,7 @@ function AppShell(): JSX.Element {
           setCryptoActiveTab={setCryptoActiveTab}
           setEnvFilesOpen={setEnvFilesOpen}
           setFontSizeMode={setFontSizeMode}
+          setGitTerminalContext={setGitTerminalContext}
           setNotebookAddRequestId={setNotebookAddRequestId}
           setNotebookView={setNotebookView}
           setNotesAddRequestId={setNotesAddRequestId}
@@ -473,6 +499,7 @@ function AppShell(): JSX.Element {
           cryptoActiveTab={cryptoActiveTab}
           dashboard={dashboard}
           database={database}
+          gitTerminalContext={gitTerminalContext}
           notesAddRequestId={notesAddRequestId}
           notesView={notesView}
           notebookAddRequestId={notebookAddRequestId}
