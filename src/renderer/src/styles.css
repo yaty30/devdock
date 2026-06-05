@@ -1534,8 +1534,8 @@ body {
   justify-content: space-between;
   gap: 12px;
   min-height: 48px;
-  margin: -10px -12px 0 -12px;
-  padding: 9px 8px 4px 0px;
+  margin: -14px -16px 6px -14px;
+  padding: 8px 10px 0px 16px;
   user-select: none;
   -webkit-app-region: drag;
   background: color-mix(in srgb, var(--surface) 88%, var(--app-bg));
@@ -14890,6 +14890,8 @@ button.database-tree-item {
 
 .app-shell.macos-native-window .app-header {
   margin-left: 0;
+  margin: -10px -12px 0 -12px;
+  padding: 9px 8px 4px 0px;
 }
 
 .app-shell.macos-native-window .dashboard-overview-screen {
