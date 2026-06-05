@@ -18,7 +18,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, basename } from "node:path";
+import { delimiter, dirname, isAbsolute, join, basename } from "node:path";
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -453,21 +453,23 @@ const PYTHON_WEB_SERVER_DEFAULTS: Record<
 > = {
   fastapi: {
     installCommand: "pip install -r requirements.txt",
-    startCommand: ".\\venv\\Scripts\\activate && uvicorn app.main:app --reload",
+    startCommand: pythonServerStartCommand("uvicorn app.main:app --reload"),
     appUrl: "http://127.0.0.1:8000",
     healthCheckUrl: "http://127.0.0.1:8000/health",
   },
   "flask-api": {
     installCommand: "pip install -r requirements.txt",
-    startCommand:
-      ".\\venv\\Scripts\\activate && flask --app app run --debug --host 127.0.0.1 --port 8000",
+    startCommand: pythonServerStartCommand(
+      "flask --app app run --debug --host 127.0.0.1 --port 8000",
+    ),
     appUrl: "http://127.0.0.1:8000",
     healthCheckUrl: "http://127.0.0.1:8000",
   },
   "django-rest": {
     installCommand: "pip install -r requirements.txt",
-    startCommand:
-      ".\\venv\\Scripts\\activate && python manage.py runserver 127.0.0.1:8000",
+    startCommand: pythonServerStartCommand(
+      "python manage.py runserver 127.0.0.1:8000",
+    ),
     appUrl: "http://127.0.0.1:8000",
     healthCheckUrl: "http://127.0.0.1:8000",
   },
@@ -3804,17 +3806,7 @@ export class DashboardBackend {
 
     this.clearLog(projectId, service);
     this.appendLog(projectId, service, stamp(`$ ${config.command}`));
-    // Python's stdout/stderr is block-buffered when not attached to a TTY,
-    // which hides uvicorn/flask/django access logs until the buffer flushes.
-    // Force line-buffered output and UTF-8 so request logs stream live.
-    const spawnEnv =
-      service === "python"
-        ? {
-            ...process.env,
-            PYTHONUNBUFFERED: "1",
-            PYTHONIOENCODING: "utf-8",
-          }
-        : process.env;
+    const spawnEnv = createServiceEnvironment(service);
     const child = spawn(config.command, {
       cwd: config.workingDirectory,
       shell: true,
@@ -7279,6 +7271,99 @@ function formatTime(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function pythonServerStartCommand(command: string): string {
+  if (process.platform === "win32") {
+    return `.\\venv\\Scripts\\activate && ${command}`;
+  }
+
+  return `. venv/bin/activate && ${command}`;
+}
+
+function createServiceEnvironment(service: ServiceName): NodeJS.ProcessEnv {
+  const pathKey = getPathEnvironmentKey();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+  };
+  env[pathKey] = createServicePath(process.env[pathKey]);
+
+  if (service === "python") {
+    // Python's stdout/stderr is block-buffered when not attached to a TTY,
+    // which hides uvicorn/flask/django access logs until the buffer flushes.
+    // Force line-buffered output and UTF-8 so request logs stream live.
+    env.PYTHONUNBUFFERED = "1";
+    env.PYTHONIOENCODING = "utf-8";
+  }
+
+  return env;
+}
+
+function createServicePath(currentPath: string | undefined): string {
+  const entries = [
+    ...servicePathCandidates(),
+    ...(currentPath?.split(delimiter).filter(Boolean) ?? []),
+  ];
+  const seen = new Set<string>();
+  return entries
+    .filter((entry) => {
+      if (!entry || seen.has(entry)) {
+        return false;
+      }
+      seen.add(entry);
+      return true;
+    })
+    .join(delimiter);
+}
+
+function getPathEnvironmentKey(): string {
+  return (
+    Object.keys(process.env).find((key) => key.toLowerCase() === "path") ??
+    "PATH"
+  );
+}
+
+function servicePathCandidates(): string[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const home = userInfo().homedir;
+  return existingDirectories([
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    join(home, ".volta", "bin"),
+    join(home, ".asdf", "shims"),
+    join(home, ".asdf", "bin"),
+    join(home, ".fnm"),
+    join(home, ".bun", "bin"),
+    join(home, ".local", "bin"),
+    join(home, ".npm-global", "bin"),
+    ...nvmNodeBinCandidates(home),
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+  ]);
+}
+
+function nvmNodeBinCandidates(home: string): string[] {
+  const versionsDir = join(home, ".nvm", "versions", "node");
+  try {
+    return readdirSync(versionsDir)
+      .map((version) => join(versionsDir, version, "bin"))
+      .filter((candidate) => isExistingDirectory(candidate))
+      .sort()
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+function existingDirectories(paths: string[]): string[] {
+  return paths.filter((path) => isExistingDirectory(path));
 }
 
 function killProcessByPort(port: number): void {

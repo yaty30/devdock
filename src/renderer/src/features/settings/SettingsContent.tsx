@@ -90,13 +90,27 @@ function normalizePythonVenvPath(venvPath: string | undefined): string {
   return (venvPath ?? "").trim().replace(/[\\/]+$/, "") || ".venv";
 }
 
+function isWindowsPlatform(): boolean {
+  return /\bWindows\b/i.test(globalThis.navigator?.userAgent ?? "");
+}
+
 function shellQuoteIfNeeded(value: string): string {
   return /\s/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
 }
 
+function shellQuotePosix(value: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 function pythonActivationCommand(venvPath: string | undefined): string {
   const normalizedVenvPath = normalizePythonVenvPath(venvPath);
-  return shellQuoteIfNeeded(`${normalizedVenvPath}\\Scripts\\activate`);
+  if (isWindowsPlatform()) {
+    return shellQuoteIfNeeded(`${normalizedVenvPath}\\Scripts\\activate`);
+  }
+
+  return `. ${shellQuotePosix(`${normalizedVenvPath}/bin/activate`)}`;
 }
 
 function formatHealthCheckPort(appUrl: string): string {
