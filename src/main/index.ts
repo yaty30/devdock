@@ -175,9 +175,8 @@ function registerIpc(): void {
     }),
   );
   ipcMain.handle("window:isMaximized", (event) =>
-    withLoggedErrors(
-      "window:isMaximized",
-      () => isWindowMaximized(BrowserWindow.fromWebContents(event.sender)),
+    withLoggedErrors("window:isMaximized", () =>
+      isWindowMaximized(BrowserWindow.fromWebContents(event.sender)),
     ),
   );
   ipcMain.handle("window:minimize", (event) =>
@@ -307,12 +306,10 @@ function registerIpc(): void {
           getXtermService().createSession(request ?? {}),
         ),
     );
-    ipcMain.handle(
-      "xterm:input",
-      (_event, sessionId: string, data: string) =>
-        withLoggedErrors("xterm:input", () =>
-          getXtermService().write(sessionId, data),
-        ),
+    ipcMain.handle("xterm:input", (_event, sessionId: string, data: string) =>
+      withLoggedErrors("xterm:input", () =>
+        getXtermService().write(sessionId, data),
+      ),
     );
     ipcMain.handle(
       "xterm:resize",
@@ -803,7 +800,8 @@ async function listLocalDirectory(
       ok: false,
       path: targetPath,
       items: [],
-      error: error instanceof Error ? error.message : "Unable to list directory.",
+      error:
+        error instanceof Error ? error.message : "Unable to list directory.",
     };
   }
 }
@@ -842,7 +840,9 @@ async function renameLocalPath(
   }
 }
 
-async function deleteLocalPath(path: string): Promise<{ ok: boolean; error?: string }> {
+async function deleteLocalPath(
+  path: string,
+): Promise<{ ok: boolean; error?: string }> {
   try {
     await rm(path, { recursive: true, force: false });
     return { ok: true };
@@ -907,11 +907,16 @@ function formatDirectoryActionError(
   };
 }
 
-function getPreviewMetadata(
-  fileName: string,
-): { kind: FilePreviewResult["kind"]; mimeType: string } {
+function getPreviewMetadata(fileName: string): {
+  kind: FilePreviewResult["kind"];
+  mimeType: string;
+} {
   const extension = extname(fileName).toLowerCase();
-  if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(extension)) {
+  if (
+    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"].includes(
+      extension,
+    )
+  ) {
     return { kind: "image", mimeType: getImageMimeType(extension) };
   }
   if (extension === ".pdf") {
@@ -923,7 +928,11 @@ function getPreviewMetadata(
   if ([".xml", ".xsd", ".xsl"].includes(extension)) {
     return { kind: "xml", mimeType: "application/xml" };
   }
-  if ([".txt", ".log", ".md", ".csv", ".ini", ".env", ".yaml", ".yml"].includes(extension)) {
+  if (
+    [".txt", ".log", ".md", ".csv", ".ini", ".env", ".yaml", ".yml"].includes(
+      extension,
+    )
+  ) {
     return { kind: "text", mimeType: "text/plain" };
   }
   const mimeType = getKnownMimeType(extension);
@@ -944,7 +953,10 @@ function resolvePreviewMetadata(
   if (isPreviewableTextMimeType(metadata.mimeType) || looksLikeText(buffer)) {
     return {
       kind: "text",
-      mimeType: metadata.mimeType === "application/octet-stream" ? "text/plain" : metadata.mimeType,
+      mimeType:
+        metadata.mimeType === "application/octet-stream"
+          ? "text/plain"
+          : metadata.mimeType,
     };
   }
   return metadata;
@@ -1001,18 +1013,21 @@ function getKnownMimeType(extension: string): string {
 }
 
 function isPreviewableTextMimeType(mimeType: string): boolean {
-  return mimeType.startsWith("text/") || [
-    "application/json",
-    "application/xml",
-    "application/javascript",
-    "application/typescript",
-    "application/x-yaml",
-    "application/yaml",
-    "application/toml",
-    "application/sql",
-    "application/x-sh",
-    "application/x-shellscript",
-  ].includes(mimeType);
+  return (
+    mimeType.startsWith("text/") ||
+    [
+      "application/json",
+      "application/xml",
+      "application/javascript",
+      "application/typescript",
+      "application/x-yaml",
+      "application/yaml",
+      "application/toml",
+      "application/sql",
+      "application/x-sh",
+      "application/x-shellscript",
+    ].includes(mimeType)
+  );
 }
 
 function looksLikeText(buffer: Buffer): boolean {
@@ -1040,10 +1055,13 @@ function looksLikeUtf16Text(sample: Buffer): boolean {
   if (evenNulls / pairs < 0.3 && oddNulls / pairs < 0.3) {
     return false;
   }
-  const decoded = evenNulls > oddNulls
-    ? swapUtf16ByteOrder(sample).toString("utf16le")
-    : sample.toString("utf16le");
-  return !decoded.includes("\uFFFD") && !containsBinaryControlCharacters(decoded);
+  const decoded =
+    evenNulls > oddNulls
+      ? swapUtf16ByteOrder(sample).toString("utf16le")
+      : sample.toString("utf16le");
+  return (
+    !decoded.includes("\uFFFD") && !containsBinaryControlCharacters(decoded)
+  );
 }
 
 function swapUtf16ByteOrder(sample: Buffer): Buffer {
@@ -1120,9 +1138,9 @@ function formatPreviewBuffer(
   };
 }
 
-function sortDirectoryItems<T extends { name: string; type: "file" | "folder" }>(
-  items: T[],
-): T[] {
+function sortDirectoryItems<
+  T extends { name: string; type: "file" | "folder" },
+>(items: T[]): T[] {
   return [...items].sort((left, right) => {
     if (left.type !== right.type) {
       return left.type === "folder" ? -1 : 1;
@@ -2043,7 +2061,7 @@ const createWindow = (): void => {
     minHeight: 800,
     frame: false,
     titleBarStyle: IS_MACOS ? "hiddenInset" : undefined,
-    trafficLightPosition: IS_MACOS ? { x: 22, y: 18 } : undefined,
+    trafficLightPosition: IS_MACOS ? { x: 12, y: 18 } : undefined,
     title: "DevDock",
     icon: resolveAppIconPath(),
     backgroundColor: "#f3f4f6",

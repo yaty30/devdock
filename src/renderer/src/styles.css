@@ -621,12 +621,12 @@ body {
 }
 
 .app-shell.macos-native-window .sidebar {
-  padding-top: 62px;
+  padding-top: 32px;
   border-right: 0;
 }
 
 .app-shell.macos-native-window.macos-window-fullscreen .sidebar {
-  padding-top: 18px;
+  padding-top: 16px;
 }
 
 .sidebar.collapsed {
@@ -640,7 +640,7 @@ body {
   align-items: center;
   gap: 12px;
   height: 40px;
-  padding: 0 8px 0 6px;
+  padding: 16px 8px 0 6px;
   margin-bottom: 20px;
   font-weight: 720;
   color: var(--text);
@@ -1495,7 +1495,7 @@ body {
 .app-window-controls {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 09px;
   flex: 0 0 auto;
   height: 100%;
   -webkit-app-region: no-drag;
@@ -1535,7 +1535,7 @@ body {
   gap: 12px;
   min-height: 48px;
   margin: -10px -12px 0 -12px;
-  padding: 7px 8px 7px 12px;
+  padding: 9px 8px 4px 0px;
   user-select: none;
   -webkit-app-region: drag;
   background: color-mix(in srgb, var(--surface) 88%, var(--app-bg));
@@ -14829,6 +14829,19 @@ button.database-tree-item {
     padding: 0 12px;
     user-select: none;
   }
+}
+
+/* hide space for mac */
+.app-shell.macos-native-window .main-content {
+  padding-left: 0;
+}
+
+.app-shell.macos-native-window .app-header {
+  margin-left: 0;
+}
+
+.app-shell.macos-native-window .dashboard-overview-screen {
+  padding-left: 0;
 }
 
 @media (max-width: 920px) {
