@@ -443,6 +443,11 @@ const API_FETCH_LIMIT = 1000;
 const STATUS_INTERVAL_MS = 5000;
 const TAIL_INTERVAL_MS = 1000;
 const SERVICE_STARTING_GRACE_MS = 5 * 60 * 1000;
+const SERVICE_PROCESS_FORCE_KILL_MS = 2500;
+const SERVICE_PORT_RELEASE_GRACE_MS = 1500;
+const SERVICE_PORT_FORCE_RELEASE_MS = 2000;
+const SERVICE_PORT_FINAL_RELEASE_MS = 1000;
+const SERVICE_PORT_POLL_MS = 250;
 const WILDFLY_READY_LOG_FRAGMENT = "Admin console listening on";
 const RETENTION_DAYS = 3;
 const DATABASE_EXECUTION_HISTORY_LIMIT = 1000;
@@ -2246,7 +2251,11 @@ export class DashboardBackend {
     this.flushLogBuffer();
 
     for (const [key, processState] of this.serviceProcesses) {
+      const colonIdx = key.indexOf(":");
+      const projectId = key.slice(0, colonIdx);
+      const service = key.slice(colonIdx + 1) as ServiceName;
       terminateProcessTree(processState.child);
+      this.releaseServicePortForShutdown(projectId, service);
       this.serviceProcesses.delete(key);
     }
 
@@ -2297,11 +2306,17 @@ export class DashboardBackend {
     const entries = [...this.serviceProcesses.entries()];
     await Promise.all(
       entries.map(async ([key, processState]) => {
-        await terminateProcessTreeAsync(processState.child);
-        this.serviceProcesses.delete(key);
         const colonIdx = key.indexOf(":");
         const projectId = key.slice(0, colonIdx);
         const service = key.slice(colonIdx + 1) as ServiceName;
+        await terminateProcessTreeAsync(processState.child);
+        await this.releaseServicePortAfterStop(
+          projectId,
+          service,
+          this.getServiceStatusUrl(projectId, service),
+          SERVICE_PORT_RELEASE_GRACE_MS,
+        );
+        this.serviceProcesses.delete(key);
         onServiceStopped(projectId, service);
       }),
     );
@@ -2620,6 +2635,12 @@ export class DashboardBackend {
       const proc = this.serviceProcesses.get(key);
       if (proc) {
         await terminateProcessTreeAsync(proc.child);
+        await this.releaseServicePortAfterStop(
+          projectId,
+          service,
+          serviceStatusUrl(settings.services[service], service),
+          SERVICE_PORT_RELEASE_GRACE_MS,
+        );
         this.serviceProcesses.delete(key);
       }
       const timer = this.statusTimers.get(key);
@@ -3944,6 +3965,15 @@ export class DashboardBackend {
       return status;
     }
 
+    const existingPythonPortStatus = await this.getExistingPythonPortStatus(
+      projectId,
+      service,
+      statusUrl,
+    );
+    if (existingPythonPortStatus) {
+      return existingPythonPortStatus;
+    }
+
     this.clearLog(projectId, service);
     this.appendLog(projectId, service, stamp(`$ ${config.command}`));
     const spawnEnv = createServiceEnvironment(service);
@@ -3951,6 +3981,7 @@ export class DashboardBackend {
       cwd: config.workingDirectory,
       shell: true,
       windowsHide: true,
+      detached: process.platform !== "win32",
       env: spawnEnv,
     }) as ChildProcessWithoutNullStreams;
     const startedAt = new Date().toISOString();
@@ -4065,18 +4096,14 @@ export class DashboardBackend {
         this.serviceProcesses.delete(key);
       }
     } else {
-      // Process not tracked (e.g. started before this session).
-      // Best-effort: kill by the advertised status port.
-      const port = extractPortFromUrl(statusUrl);
-      if (port) {
-        killProcessByPort(port);
-        this.appendLog(
-          projectId,
-          service,
-          stamp("Stop requested (killed by port)"),
-        );
-      }
+      this.appendLog(projectId, service, stamp("Stop requested"));
     }
+    await this.releaseServicePortAfterStop(
+      projectId,
+      service,
+      statusUrl,
+      running ? SERVICE_PORT_RELEASE_GRACE_MS : 0,
+    );
 
     this.explicitlyStoppedServices.add(key);
 
@@ -4095,6 +4122,128 @@ export class DashboardBackend {
     this.clearStoppedServiceDashboardHistory(projectId, service);
     void this.refreshStatus(projectId);
     return status;
+  }
+
+  private async getExistingPythonPortStatus(
+    projectId: string,
+    service: ServiceName,
+    statusUrl: string,
+  ): Promise<ServiceStatusRecord | null> {
+    if (service !== "python") {
+      return null;
+    }
+
+    const port = extractPortFromUrl(statusUrl);
+    if (!port) {
+      return null;
+    }
+
+    const portCheck = await checkPortListening(port);
+    if (!portCheck.listening) {
+      return null;
+    }
+
+    const key = serviceProcessKey(projectId, service);
+    const message = `Port ${port} is already listening; using existing Python server`;
+    const startedAt = new Date().toISOString();
+    this.explicitlyStoppedServices.delete(key);
+    this.clearLog(projectId, service);
+    this.appendLog(projectId, service, stamp(message));
+    const status = this.statusRecord(
+      service,
+      "running",
+      message,
+      statusUrl,
+      startedAt,
+    );
+    this.upsertStatus(projectId, status);
+    return status;
+  }
+
+  private getServiceStatusUrl(projectId: string, service: ServiceName): string {
+    const settings = this.getSettings(projectId);
+    return serviceStatusUrl(settings.services[service], service);
+  }
+
+  private releaseServicePortForShutdown(
+    projectId: string,
+    service: ServiceName,
+  ): void {
+    const port = extractPortFromUrl(
+      this.getServiceStatusUrl(projectId, service),
+    );
+    if (!port) {
+      return;
+    }
+
+    killProcessByPort(port);
+  }
+
+  private async releaseServicePortAfterStop(
+    projectId: string,
+    service: ServiceName,
+    statusUrl: string,
+    graceMs: number,
+  ): Promise<void> {
+    const port = extractPortFromUrl(statusUrl);
+    if (!port) {
+      return;
+    }
+
+    if (graceMs > 0 && (await waitForPortToClose(port, graceMs))) {
+      return;
+    }
+
+    const portCheck = await checkPortListening(port);
+    if (!portCheck.listening) {
+      return;
+    }
+
+    const terminatedCount = killProcessByPort(port);
+    if (terminatedCount > 0) {
+      this.appendLog(
+        projectId,
+        service,
+        stamp(
+          `Port ${port} still in use; requested shutdown for ${terminatedCount} listener${
+            terminatedCount === 1 ? "" : "s"
+          }`,
+        ),
+      );
+    } else {
+      this.appendLog(
+        projectId,
+        service,
+        stamp(`Port ${port} is still in use after stop request`),
+      );
+    }
+
+    if (await waitForPortToClose(port, SERVICE_PORT_FORCE_RELEASE_MS)) {
+      return;
+    }
+
+    const forcedCount = killProcessByPort(port, "SIGKILL");
+    if (forcedCount > 0) {
+      this.appendLog(
+        projectId,
+        service,
+        stamp(
+          `Port ${port} still in use; forced shutdown for ${forcedCount} listener${
+            forcedCount === 1 ? "" : "s"
+          }`,
+        ),
+      );
+      await waitForPortToClose(port, SERVICE_PORT_FINAL_RELEASE_MS);
+    }
+
+    const finalCheck = await checkPortListening(port);
+    if (finalCheck.listening) {
+      this.appendLog(
+        projectId,
+        service,
+        stamp(`Port ${port} is still listening after shutdown cleanup`),
+      );
+    }
   }
 
   private spawnBuild(
@@ -5375,6 +5524,27 @@ function checkPortListening(port: number): Promise<PortCheckResult> {
       });
     });
   });
+}
+
+async function waitForPortToClose(
+  port: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const check = await checkPortListening(port);
+    if (!check.listening) {
+      return true;
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      return false;
+    }
+
+    await delay(Math.min(SERVICE_PORT_POLL_MS, remainingMs));
+  }
 }
 
 function createPortCheckCommand(port: number): {
@@ -7770,10 +7940,20 @@ function existingDirectories(paths: string[]): string[] {
   return paths.filter((path) => isExistingDirectory(path));
 }
 
-function killProcessByPort(port: number): void {
+function delay(ms: number): Promise<void> {
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, ms);
+  });
+}
+
+function killProcessByPort(
+  port: number,
+  signal: NodeJS.Signals = "SIGTERM",
+): number {
   if (process.platform !== "win32") {
-    return;
+    return killPosixProcessByPort(port, signal);
   }
+
   const result = spawnSync("cmd", ["/c", `netstat -ano | findstr :${port}`], {
     windowsHide: true,
     encoding: "utf8",
@@ -7790,15 +7970,71 @@ function killProcessByPort(port: number): void {
       }
     }
   }
+  let killedCount = 0;
   for (const pid of pids) {
-    spawnSync("taskkill", ["/pid", pid, "/T", "/F"], {
+    const result = spawnSync("taskkill", ["/pid", pid, "/T", "/F"], {
       windowsHide: true,
       stdio: "ignore",
     });
+    if (result.status === 0) {
+      killedCount += 1;
+    }
   }
+  return killedCount;
 }
 
-function terminateProcessTree(child: ChildProcessWithoutNullStreams): void {
+function killPosixProcessByPort(port: number, signal: NodeJS.Signals): number {
+  const pids = findPosixListeningPidsByPort(port);
+  let killedCount = 0;
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+      killedCount += 1;
+    } catch {
+      // The listener may have exited after discovery.
+    }
+  }
+  return killedCount;
+}
+
+function findPosixListeningPidsByPort(port: number): number[] {
+  const lsof = spawnSync(
+    "lsof",
+    ["-nP", "-t", `-iTCP:${port}`, "-sTCP:LISTEN"],
+    {
+      encoding: "utf8",
+    },
+  );
+  const lsofPids = parsePidList(`${lsof.stdout ?? ""}\n${lsof.stderr ?? ""}`);
+  if (lsofPids.length > 0) {
+    return lsofPids;
+  }
+
+  const fuser = spawnSync("fuser", [`${port}/tcp`], {
+    encoding: "utf8",
+  });
+  const fuserOutput = `${fuser.stdout ?? ""}\n${fuser.stderr ?? ""}`;
+  const pidText = fuserOutput.includes(":")
+    ? fuserOutput.split(":").slice(1).join(" ")
+    : fuserOutput;
+  return parsePidList(pidText).filter((pid) => pid !== port);
+}
+
+function parsePidList(output: string): number[] {
+  const pids = new Set<number>();
+  for (const match of output.matchAll(/\b\d+\b/g)) {
+    const pid = Number.parseInt(match[0], 10);
+    if (Number.isInteger(pid) && pid > 0) {
+      pids.add(pid);
+    }
+  }
+  return [...pids];
+}
+
+function terminateProcessTree(
+  child: ChildProcessWithoutNullStreams,
+  signal: NodeJS.Signals = "SIGTERM",
+): void {
   if (process.platform === "win32" && child.pid) {
     spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
       windowsHide: true,
@@ -7807,7 +8043,24 @@ function terminateProcessTree(child: ChildProcessWithoutNullStreams): void {
     return;
   }
 
-  child.kill("SIGTERM");
+  if (child.pid && signalProcessGroup(child.pid, signal)) {
+    return;
+  }
+
+  try {
+    child.kill(signal);
+  } catch {
+    // The process may have already exited.
+  }
+}
+
+function signalProcessGroup(pid: number, signal: NodeJS.Signals): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function terminateProcessTreeAsync(
@@ -7818,6 +8071,24 @@ function terminateProcessTreeAsync(
       resolve();
       return;
     }
+
+    let settled = false;
+    let forceTimer: NodeJS.Timeout | null = null;
+    let settleTimer: NodeJS.Timeout | null = null;
+    const resolveOnce = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (forceTimer) {
+        clearTimeout(forceTimer);
+      }
+      if (settleTimer) {
+        clearTimeout(settleTimer);
+      }
+      resolve();
+    };
+
     if (process.platform === "win32" && child.pid) {
       const killer = spawn(
         "taskkill",
@@ -7827,11 +8098,20 @@ function terminateProcessTreeAsync(
           stdio: "ignore",
         },
       );
-      killer.on("close", () => resolve());
-      killer.on("error", () => resolve());
+      killer.on("close", () => resolveOnce());
+      killer.on("error", () => resolveOnce());
     } else {
-      child.once("exit", () => resolve());
-      child.kill("SIGTERM");
+      child.once("exit", () => resolveOnce());
+      forceTimer = setTimeout(() => {
+        if (child.exitCode === null) {
+          terminateProcessTree(child, "SIGKILL");
+        }
+      }, SERVICE_PROCESS_FORCE_KILL_MS);
+      settleTimer = setTimeout(
+        () => resolveOnce(),
+        SERVICE_PROCESS_FORCE_KILL_MS + 1000,
+      );
+      terminateProcessTree(child);
     }
   });
 }
