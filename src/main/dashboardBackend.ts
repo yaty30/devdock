@@ -7049,21 +7049,41 @@ function updateEnvContent(
   content: string,
   variables: ProjectEnvVariable[],
 ): string {
+  validateEnvVariables(variables);
+
   const { lines, lineBreak, trailingLineBreak } = splitEnvLines(content);
   const updates = new Map(
-    variables.map((variable) => [variable.lineIndex, variable]),
+    variables
+      .filter((variable) => variable.lineIndex >= 0)
+      .map((variable) => [variable.lineIndex, variable]),
   );
-  const nextLines = lines.map((line, lineIndex) => {
+  const nextLines = lines.flatMap((line, lineIndex) => {
     const update = updates.get(lineIndex);
     const parsed = parseEnvLine(line);
-    if (!update || !parsed || parsed.name !== update.name) {
-      return line;
+    if (!parsed) {
+      return [line];
     }
 
-    return replaceEnvLineValue(line, update.value);
-  });
+    if (!update) {
+      return [];
+    }
 
-  return nextLines.join(lineBreak) + (trailingLineBreak ? lineBreak : "");
+    return [replaceEnvLineAssignment(line, update)];
+  });
+  const appendedLines = variables
+    .filter((variable) => variable.lineIndex < 0)
+    .map(formatEnvLine);
+
+  if (appendedLines.length === 0) {
+    const nextContent = nextLines.join(lineBreak);
+    return (
+      nextContent + (trailingLineBreak && nextContent.length > 0 ? lineBreak : "")
+    );
+  }
+
+  const existingContent = nextLines.join(lineBreak);
+  const separator = existingContent.length > 0 ? lineBreak : "";
+  return `${existingContent}${separator}${appendedLines.join(lineBreak)}${lineBreak}`;
 }
 
 function splitEnvLines(content: string): {
@@ -7110,16 +7130,18 @@ function readEnvValue(rawValue: string): string {
   return trimmed;
 }
 
-function replaceEnvLineValue(line: string, nextValue: string): string {
+function replaceEnvLineAssignment(
+  line: string,
+  variable: ProjectEnvVariable,
+): string {
   const match = line.match(
-    /^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=)(.*)$/,
+    /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(.*)$/,
   );
   if (!match) {
     return line;
   }
 
-  const rawValue = match[2];
-  const leadingWhitespace = rawValue.match(/^\s*/)?.[0] ?? "";
+  const rawValue = match[4];
   const { valuePart, commentPart } = splitEnvValueAndComment(rawValue);
   const trimmedValue = valuePart.trim();
   const quote = trimmedValue[0];
@@ -7127,10 +7149,34 @@ function replaceEnvLineValue(line: string, nextValue: string): string {
     (quote === `"` || quote === `'`) &&
     trimmedValue.length >= 2 &&
     trimmedValue[trimmedValue.length - 1] === quote
-      ? `${quote}${formatQuotedEnvValue(nextValue, quote)}${quote}`
-      : nextValue;
+      ? `${quote}${formatQuotedEnvValue(variable.value.trim(), quote)}${quote}`
+      : variable.value.trim();
 
-  return `${match[1]}${leadingWhitespace}${formattedValue}${commentPart}`;
+  return `${match[1]}${variable.name.trim()}${match[3]}${formattedValue}${commentPart}`;
+}
+
+function formatEnvLine(variable: ProjectEnvVariable): string {
+  return `${variable.name.trim()}=${variable.value.trim()}`;
+}
+
+function validateEnvVariables(variables: ProjectEnvVariable[]): void {
+  for (const variable of variables) {
+    if (!variable.name.trim()) {
+      throw new Error("Environment variable name is required.");
+    }
+
+    if (!variable.value.trim()) {
+      throw new Error("Environment variable value is required.");
+    }
+
+    if (!isValidEnvVariableName(variable.name)) {
+      throw new Error("Environment variable name is invalid.");
+    }
+  }
+}
+
+function isValidEnvVariableName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
 }
 
 function splitEnvValueAndComment(rawValue: string): {

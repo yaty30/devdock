@@ -219,8 +219,8 @@ export function MainRouteRenderer({
           onFeedback={showSnackbar}
         />
       ) : (
-        <section className="resizable-panel-screen">
-          <div className="panel">
+        <section className="resizable-panel-screen route-loading-screen">
+          <div className="panel route-loading-panel">
             <div />
           </div>
         </section>

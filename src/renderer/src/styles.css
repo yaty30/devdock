@@ -44,7 +44,7 @@
   --field-bg: #ffffff;
   --subtle-bg: #f9fafb;
   --icon-muted: #6b7280;
-  --terminal-bg: #313131;
+  --terminal-bg: #fafafa;
   --terminal-border: #d6d6d6;
   --font-scale: 1;
   --cm-sql-keyword: #1d4ed8;
@@ -1534,8 +1534,8 @@ body {
   justify-content: space-between;
   gap: 12px;
   min-height: 48px;
-  margin: -10px -12px 0 -12px;
-  padding: 9px 8px 4px 0px;
+  margin: -14px -16px 6px -14px;
+  padding: 12px 10px 0px 16px;
   user-select: none;
   -webkit-app-region: drag;
   background: color-mix(in srgb, var(--surface) 88%, var(--app-bg));
@@ -2261,6 +2261,11 @@ body {
 .build-dropdown-trigger {
   width: max-content;
   min-width: var(--build-dropdown-width);
+  border: 1px solid var(--border) !important;
+}
+
+.build-dropdown-trigger:hover {
+  border: 1px solid var(--accent) !important;
 }
 
 .build-dropdown-trigger-label {
@@ -2282,24 +2287,22 @@ body {
 
 .build-dropdown-trigger:not(.stop-build-trigger):disabled,
 .build-dropdown-trigger:not(.stop-build-trigger):disabled:hover {
-  color: #ffffff;
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 24%, transparent);
+  background: rgba(216, 216, 216, 0.555);
+  border-color: none;
   transform: none;
 }
 
 [data-theme="dark"] .build-dropdown-trigger:not(.stop-build-trigger):disabled,
 [data-theme="dark"]
   .build-dropdown-trigger:not(.stop-build-trigger):disabled:hover {
-  background: var(--accent);
-  border-color: var(--accent);
-  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 24%, transparent);
+  background: rgba(12, 12, 12, 0.582);
+  border-color: none;
+  transform: none;
 }
 
 .build-dropdown-trigger.stop-build-trigger {
   color: #ffffff;
-  background: var(--error);
+  background: rgba(220, 38, 38, 0.3);
   border-color: var(--error);
   box-shadow: 0 8px 18px color-mix(in srgb, var(--error) 28%, transparent);
 }
@@ -2993,6 +2996,14 @@ body {
   margin-top: 0;
   padding-top: 4px;
   overflow: visible;
+}
+
+.route-loading-screen {
+  overflow: hidden;
+}
+
+.route-loading-panel {
+  flex: 1 1 auto;
 }
 
 .reset-panels-button {
@@ -6619,6 +6630,7 @@ select option {
   border: 1px solid
     color-mix(in srgb, var(--accent) 28%, var(--terminal-border));
   border-radius: 8px;
+  height: 100%;
 }
 
 .terminal-line {
@@ -7187,7 +7199,9 @@ select option {
 }
 
 .env-table-wrap {
+  display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--border);
@@ -7230,6 +7244,12 @@ select option {
   word-break: break-word;
 }
 
+.env-table th:last-child,
+.env-table td:last-child {
+  width: 52px;
+  text-align: center;
+}
+
 .env-table input {
   width: 100%;
   height: 34px;
@@ -7249,9 +7269,19 @@ select option {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
+.env-table input[aria-invalid="true"] {
+  border-color: var(--error);
+}
+
+.env-variable-delete-button {
+  width: 32px;
+  height: 32px;
+}
+
 .env-files-empty {
   display: grid;
   flex: 1 1 auto;
+  gap: 12px;
   place-items: center;
   min-height: 180px;
   color: var(--muted);
@@ -7266,9 +7296,17 @@ select option {
 .env-files-footer {
   display: flex;
   flex: 0 0 auto;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding-top: 2px;
+}
+
+.env-files-footer-left,
+.env-files-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .interface-settings-modal {
@@ -14890,6 +14928,8 @@ button.database-tree-item {
 
 .app-shell.macos-native-window .app-header {
   margin-left: 0;
+  margin: -10px -12px 0 -12px;
+  padding: 9px 8px 4px 0px;
 }
 
 .app-shell.macos-native-window .dashboard-overview-screen {

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ExternalLink, Plus, Trash2 } from "lucide-react";
 import {
   AppSelect,
   type AppSelectOption,
@@ -38,6 +38,7 @@ export function ProjectEnvFilesModal({
   );
   const [saving, setSaving] = useState(false);
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
 
   const activeGroup = useMemo(
     () => groups.find((group) => group.scope === activeScope) ?? groups[0],
@@ -58,6 +59,7 @@ export function ProjectEnvFilesModal({
   const dirty =
     activeFile !== null &&
     JSON.stringify(draftVariables) !== JSON.stringify(activeFile.variables);
+  const validationMessage = getVariablesValidationMessage(draftVariables);
 
   useEffect(() => {
     if (!open) {
@@ -121,11 +123,39 @@ export function ProjectEnvFilesModal({
     }));
   }
 
-  function updateVariable(lineIndex: number, value: string): void {
+  function updateVariableName(lineIndex: number, name: string): void {
+    setDraftVariables((current) =>
+      current.map((variable) =>
+        variable.lineIndex === lineIndex ? { ...variable, name } : variable,
+      ),
+    );
+  }
+
+  function updateVariableValue(lineIndex: number, value: string): void {
     setDraftVariables((current) =>
       current.map((variable) =>
         variable.lineIndex === lineIndex ? { ...variable, value } : variable,
       ),
+    );
+  }
+
+  function addVariable(): void {
+    setDraftVariables((current) => {
+      const nextLineIndex =
+        Math.min(0, ...current.map((variable) => variable.lineIndex)) - 1;
+      return [...current, { lineIndex: nextLineIndex, name: "", value: "" }];
+    });
+    window.requestAnimationFrame(() => {
+      const tableWrap = tableWrapRef.current;
+      if (tableWrap) {
+        tableWrap.scrollTop = tableWrap.scrollHeight;
+      }
+    });
+  }
+
+  function deleteVariable(lineIndex: number): void {
+    setDraftVariables((current) =>
+      current.filter((variable) => variable.lineIndex !== lineIndex),
     );
   }
 
@@ -153,6 +183,11 @@ export function ProjectEnvFilesModal({
 
   function save(): void {
     if (!activeGroup || !activeFile || !dirty || saving) {
+      return;
+    }
+
+    if (validationMessage) {
+      onFeedback(validationMessage, "invalid");
       return;
     }
 
@@ -257,31 +292,62 @@ export function ProjectEnvFilesModal({
               {!activeFile ? (
                 <div className="env-files-empty">No .env files found.</div>
               ) : draftVariables.length === 0 ? (
-                <div className="env-files-empty">No variables found in this file.</div>
+                <div className="env-files-empty">
+                  <span>No variables found in this file.</span>
+                </div>
               ) : (
-                <div className="env-table-wrap">
+                <div className="env-table-wrap" ref={tableWrapRef}>
                   <table className="env-table">
                     <thead>
                       <tr>
                         <th>Variable Name</th>
                         <th>Value</th>
+                        <th aria-label="Row actions" />
                       </tr>
                     </thead>
                     <tbody>
                       {draftVariables.map((variable) => (
-                        <tr key={`${variable.lineIndex}-${variable.name}`}>
-                          <td>{variable.name}</td>
+                        <tr key={variable.lineIndex}>
                           <td>
                             <input
                               type="text"
-                              value={variable.value}
+                              value={variable.name}
+                              aria-label="Variable name"
+                              aria-invalid={!isValidEnvVariableName(variable.name)}
+                              required
                               onChange={(event) =>
-                                updateVariable(
+                                updateVariableName(
                                   variable.lineIndex,
                                   event.target.value,
                                 )
                               }
                             />
+                          </td>
+                          <td>
+                            <input
+                              type="text"
+                              value={variable.value}
+                              aria-label={`${variable.name || "New variable"} value`}
+                              aria-invalid={variable.value.trim().length === 0}
+                              required
+                              onChange={(event) =>
+                                updateVariableValue(
+                                  variable.lineIndex,
+                                  event.target.value,
+                                )
+                              }
+                            />
+                          </td>
+                          <td>
+                            <button
+                              className="icon-button secondary env-variable-delete-button"
+                              type="button"
+                              aria-label={`Delete ${variable.name || "new variable"}`}
+                              title="Delete variable"
+                              onClick={() => deleteVariable(variable.lineIndex)}
+                            >
+                              <Trash2 size={15} />
+                            </button>
                           </td>
                         </tr>
                       ))}
@@ -292,21 +358,37 @@ export function ProjectEnvFilesModal({
             </div>
 
             <footer className="env-files-footer">
-              <button
-                className="button secondary compact"
-                type="button"
-                onClick={requestClose}
-              >
-                Cancel
-              </button>
-              <button
-                className="button primary compact"
-                type="button"
-                disabled={!dirty || saving || !activeFile}
-                onClick={save}
-              >
-                {saving ? "Saving" : "Save"}
-              </button>
+              <div className="env-files-footer-left">
+                <button
+                  className="button secondary compact"
+                  type="button"
+                  disabled={!activeFile}
+                  onClick={addVariable}
+                >
+                  <Plus size={14} />
+                  Add Variable
+                </button>
+              </div>
+              <div className="env-files-footer-right">
+                <button
+                  className="button secondary compact"
+                  type="button"
+                  onClick={requestClose}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button primary compact"
+                  type="button"
+                  disabled={
+                    !dirty || saving || !activeFile || Boolean(validationMessage)
+                  }
+                  onClick={save}
+                  title={validationMessage ?? undefined}
+                >
+                  {saving ? "Saving" : "Save"}
+                </button>
+              </div>
             </footer>
           </>
         )}
@@ -324,6 +406,28 @@ export function ProjectEnvFilesModal({
       ) : null}
     </Modal>
   );
+}
+
+function getVariablesValidationMessage(
+  variables: ProjectEnvVariable[],
+): string | null {
+  if (variables.some((variable) => variable.name.trim().length === 0)) {
+    return "Variable name is required.";
+  }
+
+  if (variables.some((variable) => variable.value.trim().length === 0)) {
+    return "Variable value is required.";
+  }
+
+  if (variables.some((variable) => !isValidEnvVariableName(variable.name))) {
+    return "Variable name must be a valid .env key.";
+  }
+
+  return null;
+}
+
+function isValidEnvVariableName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name.trim());
 }
 
 function getActiveFile(
