@@ -3832,6 +3832,57 @@ body {
   grid-row: 1 / 4;
 }
 
+.dashboard-grid.python-frontend-stack .frontend-panel {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.dashboard-grid.tail-disabled.python-frontend-stack .frontend-panel {
+  grid-row: 1;
+}
+
+.dashboard-grid.python-frontend-stack .wildfly-panel,
+.dashboard-grid.tail-disabled.python-frontend-stack .wildfly-panel {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.dashboard-grid.python-frontend-stack .python-side-column {
+  grid-column: 5;
+  grid-row: 1 / 4;
+}
+
+.dashboard-grid.tail-disabled.python-frontend-stack .python-side-column {
+  grid-column: 3;
+}
+
+.dashboard-grid.tail-disabled.python-frontend-stack .build-log-panel,
+.dashboard-grid.tail-disabled.python-frontend-stack .build-status-panel {
+  grid-column: 3;
+}
+
+.dashboard-grid.python-frontend-stack .tail-log-panel {
+  grid-column: 3;
+  grid-row: 1 / 4;
+}
+
+.dashboard-grid.tail-disabled.python-frontend-stack .column-splitter-one {
+  display: none;
+}
+
+.dashboard-grid.python-frontend-stack .column-splitter-one,
+.dashboard-grid.python-frontend-stack .column-splitter-two {
+  grid-row: 1 / 4;
+}
+
+.dashboard-grid.tail-disabled.python-frontend-stack .column-splitter-two {
+  grid-column: 2;
+}
+
+.dashboard-grid.python-frontend-stack .row-splitter {
+  grid-column: 1;
+}
+
 .grid-splitter {
   position: relative;
   z-index: 5;
@@ -6662,7 +6713,11 @@ select option {
 .terminal-error,
 .terminal-success,
 .terminal-info,
-.terminal-change {
+.terminal-change,
+.terminal-git-commit,
+.terminal-git-author,
+.terminal-git-date,
+.terminal-git-subject {
   padding-left: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6695,6 +6750,24 @@ select option {
 
 .terminal-change {
   color: var(--change);
+}
+
+.terminal-git-commit {
+  color: var(--accent);
+  font-weight: 750;
+}
+
+.terminal-git-author {
+  color: var(--info);
+}
+
+.terminal-git-date {
+  color: var(--warning);
+}
+
+.terminal-git-subject {
+  color: var(--text);
+  font-weight: 700;
 }
 
 .git-command-row {
@@ -7094,6 +7167,7 @@ select option {
   margin: 0;
   font-size: var(--font-xl);
   line-height: 1.2;
+  user-select: none;
 }
 
 .modal-header p {
@@ -7101,6 +7175,7 @@ select option {
   color: var(--muted);
   font-size: var(--font-sm);
   font-weight: 700;
+  user-select: none;
 }
 
 .modal-header-actions {

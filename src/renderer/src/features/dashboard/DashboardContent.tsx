@@ -1481,6 +1481,10 @@ export function ProjectDashboardContent({
   const tailLogConfigured = Boolean(projectState.settings.appLogFile.trim());
   const showTailLogPanel =
     projectState.settings.backendType !== "python" || tailLogConfigured;
+  const stackPythonServiceLogs =
+    projectState.settings.backendType === "python" && frontendEnabled;
+  const useThreeDashboardColumns =
+    frontendEnabled && (!stackPythonServiceLogs || showTailLogPanel);
   const gridRef = useRef<HTMLDivElement>(null);
   const pythonSideColumnRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -1516,7 +1520,7 @@ export function ProjectDashboardContent({
       const entry = entries[0];
       if (!entry) return;
       const newContentWidth = entry.contentRect.width;
-      const splitterCount = frontendEnabled ? 2 : 1;
+      const splitterCount = useThreeDashboardColumns ? 2 : 1;
       const newAvailableWidth =
         newContentWidth - DASHBOARD_SPLITTER_SIZE * splitterCount;
       const current = layoutRef.current;
@@ -1537,7 +1541,13 @@ export function ProjectDashboardContent({
 
     observer.observe(grid);
     return () => observer.disconnect();
-  }, [frontendEnabled, showBuildPanels, showTailLogPanel]);
+  }, [
+    frontendEnabled,
+    showBuildPanels,
+    showTailLogPanel,
+    stackPythonServiceLogs,
+    useThreeDashboardColumns,
+  ]);
 
   function applyGridLayout(nextLayout: DashboardLayout): void {
     const grid = gridRef.current;
@@ -1547,7 +1557,10 @@ export function ProjectDashboardContent({
 
     grid.style.setProperty(
       "--dashboard-column-template",
-      dashboardColumnTemplate(nextLayout.columnWidths, frontendEnabled),
+      dashboardColumnTemplate(
+        nextLayout.columnWidths,
+        useThreeDashboardColumns,
+      ),
     );
     grid.style.setProperty(
       "--dashboard-row-template",
@@ -1616,7 +1629,7 @@ export function ProjectDashboardContent({
       ? grid.clientWidth -
         gridPaddingLeft -
         gridPaddingRight -
-        DASHBOARD_SPLITTER_SIZE * (frontendEnabled ? 2 : 1)
+        DASHBOARD_SPLITTER_SIZE * (useThreeDashboardColumns ? 2 : 1)
       : 0;
     const availableHeight = grid
       ? grid.clientHeight -
@@ -1632,7 +1645,7 @@ export function ProjectDashboardContent({
           : ".wildfly-panel",
     );
     const columnPanels = [
-      frontendEnabled
+      useThreeDashboardColumns
         ? gridRef.current?.querySelector<HTMLElement>(".frontend-panel")
         : null,
       gridRef.current?.querySelector<HTMLElement>(
@@ -1797,7 +1810,7 @@ export function ProjectDashboardContent({
   const gridStyle = {
     "--dashboard-column-template": dashboardColumnTemplate(
       layout.columnWidths,
-      frontendEnabled,
+      useThreeDashboardColumns,
     ),
     "--dashboard-row-template": dashboardRowTemplate(layout.topRowHeight),
     "--python-side-row-template": pythonSideRowTemplate(
@@ -1808,7 +1821,7 @@ export function ProjectDashboardContent({
   return (
     <section className="resizable-panel-screen">
       <div
-        className={`dashboard-grid${frontendEnabled ? "" : " frontend-disabled"}${showTailLogPanel ? "" : " tail-disabled"}${showBuildPanels ? "" : " python-layout"}`}
+        className={`dashboard-grid${frontendEnabled ? "" : " frontend-disabled"}${showTailLogPanel ? "" : " tail-disabled"}${showBuildPanels ? "" : " python-layout"}${stackPythonServiceLogs ? " python-frontend-stack" : ""}`}
         ref={gridRef}
         style={gridStyle}
       >
@@ -1954,7 +1967,7 @@ export function ProjectDashboardContent({
           onPointerUp={stopResize}
           onPointerCancel={stopResize}
         />
-        {showTailLogPanel ? (
+        {showTailLogPanel || stackPythonServiceLogs ? (
           <div
             className="grid-splitter row-splitter"
             role="separator"

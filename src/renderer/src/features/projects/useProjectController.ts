@@ -278,10 +278,23 @@ export function useProjectController({
 
   const updateSettings = useCallback(
     (settings: ProjectSettingsRecord): void => {
+      const projectId = selectedProjectIdRef.current;
       setProjectState((current) =>
         current ? { ...current, settings } : current,
       );
       void refreshDashboardOverview();
+      if (projectId) {
+        void window.ivsDashboard
+          .getProjectState(projectId)
+          .then((nextState) => {
+            if (selectedProjectIdRef.current !== projectId) {
+              return;
+            }
+            setProjectState(nextState);
+            setProjectStateProjectId(projectId);
+          })
+          .catch((error) => console.error(error));
+      }
     },
     [refreshDashboardOverview],
   );

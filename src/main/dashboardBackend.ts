@@ -181,6 +181,10 @@ type PostgresModule = {
   Client: new (options: PostgresClientOptions) => PostgresClient;
   types?: {
     builtins?: Record<string, number>;
+    setTypeParser?: (
+      oid: number,
+      parser: (value: string) => unknown,
+    ) => void;
   };
 };
 
@@ -223,6 +227,7 @@ type PostgresClient = {
 };
 
 const postgresDriver = require("pg") as PostgresModule;
+let postgresTypeParsersConfigured = false;
 
 const ORACLE_OBJECT_COUNT_KEY_BY_TYPE: Record<
   string,
@@ -5751,9 +5756,37 @@ function createPostgresClient(
   connection: DatabaseConnection,
   options: { includeDatabase?: boolean } = {},
 ): PostgresClient {
+  configurePostgresTypeParsers();
   return new postgresDriver.Client(
     toPostgresClientOptions(connection, options),
   );
+}
+
+function configurePostgresTypeParsers(): void {
+  if (postgresTypeParsersConfigured) {
+    return;
+  }
+
+  postgresTypeParsersConfigured = true;
+  const types = postgresDriver.types;
+  const builtins = types?.builtins;
+  if (!builtins || typeof types.setTypeParser !== "function") {
+    return;
+  }
+
+  for (const typeName of [
+    "DATE",
+    "TIME",
+    "TIMETZ",
+    "TIMESTAMP",
+    "TIMESTAMPTZ",
+    "INTERVAL",
+  ]) {
+    const oid = builtins[typeName];
+    if (typeof oid === "number") {
+      types.setTypeParser(oid, (value) => value);
+    }
+  }
 }
 
 function toPostgresClientOptions(

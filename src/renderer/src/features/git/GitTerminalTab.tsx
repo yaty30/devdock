@@ -515,7 +515,7 @@ export function GitTerminalTab({
                   ref={active ? activeLineRef : undefined}
                 >
                   <span className="terminal-line-number">{index + 1}</span>
-                  <span className={terminalLineClass(line)}>{line}</span>
+                  <span className={terminalLineClass(line, output[index - 1])}>{line}</span>
                 </div>
               );
             })}
@@ -777,7 +777,7 @@ function gitWorkingTreeStatusClass(
   return "warning";
 }
 
-function terminalLineClass(line: string): string {
+function terminalLineClass(line: string, previousLine?: string): string {
   const lower = line.toLowerCase();
 
   if (
@@ -801,6 +801,26 @@ function terminalLineClass(line: string): string {
     line.includes("$ ")
   ) {
     return "terminal-command";
+  }
+
+  if (/^\d{2}:\d{2}:\d{2}\s+commit\s+[0-9a-f]{7,40}\b/i.test(line)) {
+    return "terminal-git-commit";
+  }
+
+  if (/^\d{2}:\d{2}:\d{2}\s+(author|committer):/i.test(line)) {
+    return "terminal-git-author";
+  }
+
+  if (/^\d{2}:\d{2}:\d{2}\s+date:/i.test(line)) {
+    return "terminal-git-date";
+  }
+
+  if (
+    previousLine &&
+    /^\d{2}:\d{2}:\d{2}\s+date:/i.test(previousLine) &&
+    /^\d{2}:\d{2}:\d{2}\s+\S/.test(line)
+  ) {
+    return "terminal-git-subject";
   }
 
   if (
