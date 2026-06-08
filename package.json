@@ -1,6 +1,6 @@
 {
   "name": "devdock",
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "DevDock.",
   "main": "build/main/index.js",
   "productName": "DevDock",
