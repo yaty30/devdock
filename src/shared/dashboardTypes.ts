@@ -326,7 +326,12 @@ export type BrowsePathOptions = {
 
 export type DatabaseConnectionStatus = "connected" | "disconnected" | "error";
 export type DatabaseConnectionType = "MySQL" | "Oracle" | "PostgreSQL";
-export type DatabaseSslMode = "disabled" | "preferred" | "required";
+export type DatabaseSslMode =
+  | "disabled"
+  | "preferred"
+  | "required"
+  | "verify-ca"
+  | "verify-full";
 export type OracleConnectionMode =
   | "serviceName"
   | "sid"

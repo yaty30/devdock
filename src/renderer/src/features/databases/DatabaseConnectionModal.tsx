@@ -62,6 +62,8 @@ const DATABASE_SSL_OPTIONS: Array<AppSelectOption<DatabaseSslMode>> = [
   { value: "disabled", label: "Disabled", dotColor: "var(--muted)" },
   { value: "preferred", label: "Preferred", dotColor: "var(--info)" },
   { value: "required", label: "Required", dotColor: "var(--error)" },
+  { value: "verify-ca", label: "Verify CA", dotColor: "var(--warning)" },
+  { value: "verify-full", label: "Verify full", dotColor: "var(--success)" },
 ];
 
 const ORACLE_CONNECTION_MODES: Array<AppSelectOption<OracleConnectionMode>> = [

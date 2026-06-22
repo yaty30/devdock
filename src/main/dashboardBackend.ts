@@ -196,6 +196,7 @@ type PostgresClientOptions = {
     | boolean
     | {
         rejectUnauthorized: boolean;
+        checkServerIdentity?: () => undefined;
         ca?: string;
         cert?: string;
         key?: string;
@@ -5978,8 +5979,11 @@ function createPostgresSslOptions(
   }
 
   const sslOptions: Exclude<PostgresClientOptions["ssl"], boolean> = {
-    rejectUnauthorized: sslMode === "required",
+    rejectUnauthorized: sslMode === "verify-ca" || sslMode === "verify-full",
   };
+  if (sslMode === "verify-ca") {
+    sslOptions.checkServerIdentity = () => undefined;
+  }
   const sslCaPath = connection.sslCaPath?.trim();
   const sslCertPath = connection.sslCertPath?.trim();
   const sslKeyPath = connection.sslKeyPath?.trim();
