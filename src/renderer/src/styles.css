@@ -1559,6 +1559,7 @@ body {
   flex: 1 1 auto;
   min-width: 0;
   overflow: auto hidden;
+  margin-left: 12px;
 }
 
 .app-header-tabs .tabs {
@@ -2988,6 +2989,14 @@ body {
   background: var(--accent);
 }
 
+.tab:first-child.active::after {
+  left: 1px;
+}
+
+.tab:last-child.active::after {
+  right: 1px;
+}
+
 .resizable-panel-screen {
   display: flex;
   flex: 1 1 auto;
@@ -3706,6 +3715,11 @@ body {
   grid-column: 3;
 }
 
+.dashboard-grid.python-stacked-logs .python-side-column {
+  grid-column: 3;
+  grid-row: 1 / 4;
+}
+
 .dashboard-grid.frontend-disabled .python-side-column > .python-errors-panel,
 .dashboard-grid.frontend-disabled .python-side-column > .python-runtime-panel,
 .dashboard-grid.frontend-disabled
@@ -3828,8 +3842,29 @@ body {
   grid-column: 1;
 }
 
+.dashboard-grid.python-stacked-logs.python-layout .row-splitter {
+  grid-column: 1;
+}
+
 .dashboard-grid.tail-disabled .column-splitter-one {
   grid-row: 1 / 4;
+}
+
+.dashboard-grid.python-stacked-logs.tail-disabled .frontend-panel,
+.dashboard-grid.python-stacked-logs .frontend-panel {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.dashboard-grid.python-stacked-logs.tail-disabled .wildfly-panel,
+.dashboard-grid.python-stacked-logs .wildfly-panel {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.dashboard-grid.python-stacked-logs.tail-disabled .column-splitter-one,
+.dashboard-grid.python-stacked-logs .column-splitter-one {
+  display: none;
 }
 
 .grid-splitter {

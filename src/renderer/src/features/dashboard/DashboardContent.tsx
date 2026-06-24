@@ -90,13 +90,16 @@ const DASHBOARD_MIN_BOTTOM_ROW = 220;
 const DASHBOARD_SPLITTER_SIZE = 16;
 const PYTHON_PANEL_MIN_HEIGHT = 118;
 const PYTHON_PANEL_SPLITTER_SIZE = 12;
-const DEFAULT_PYTHON_PANEL_RATIOS: [number, number, number] = [0.95, 0.92, 1.13];
+const DEFAULT_PYTHON_PANEL_RATIOS: [number, number, number] = [
+  0.95, 0.92, 1.13,
+];
 
 function dashboardColumnTemplate(
   columnWidths: DashboardLayout["columnWidths"],
   frontendEnabled: boolean,
+  stackFrontendLogs = false,
 ): string {
-  if (!frontendEnabled) {
+  if (!frontendEnabled || stackFrontendLogs) {
     return columnWidths === null
       ? `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 2.12fr) ${DASHBOARD_SPLITTER_SIZE}px minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, 0.96fr)`
       : `minmax(${DASHBOARD_MIN_COLUMN_WIDTH}px, ${Math.max(
@@ -1481,6 +1484,8 @@ export function ProjectDashboardContent({
   const tailLogConfigured = Boolean(projectState.settings.appLogFile.trim());
   const showTailLogPanel =
     projectState.settings.backendType !== "python" || tailLogConfigured;
+  const stackFrontendLogs =
+    projectState.settings.backendType === "python" && frontendEnabled;
   const gridRef = useRef<HTMLDivElement>(null);
   const pythonSideColumnRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -1516,7 +1521,7 @@ export function ProjectDashboardContent({
       const entry = entries[0];
       if (!entry) return;
       const newContentWidth = entry.contentRect.width;
-      const splitterCount = frontendEnabled ? 2 : 1;
+      const splitterCount = frontendEnabled && !stackFrontendLogs ? 2 : 1;
       const newAvailableWidth =
         newContentWidth - DASHBOARD_SPLITTER_SIZE * splitterCount;
       const current = layoutRef.current;
@@ -1537,7 +1542,7 @@ export function ProjectDashboardContent({
 
     observer.observe(grid);
     return () => observer.disconnect();
-  }, [frontendEnabled, showBuildPanels, showTailLogPanel]);
+  }, [frontendEnabled, stackFrontendLogs, showBuildPanels, showTailLogPanel]);
 
   function applyGridLayout(nextLayout: DashboardLayout): void {
     const grid = gridRef.current;
@@ -1547,7 +1552,11 @@ export function ProjectDashboardContent({
 
     grid.style.setProperty(
       "--dashboard-column-template",
-      dashboardColumnTemplate(nextLayout.columnWidths, frontendEnabled),
+      dashboardColumnTemplate(
+        nextLayout.columnWidths,
+        frontendEnabled,
+        stackFrontendLogs,
+      ),
     );
     grid.style.setProperty(
       "--dashboard-row-template",
@@ -1616,7 +1625,8 @@ export function ProjectDashboardContent({
       ? grid.clientWidth -
         gridPaddingLeft -
         gridPaddingRight -
-        DASHBOARD_SPLITTER_SIZE * (frontendEnabled ? 2 : 1)
+        DASHBOARD_SPLITTER_SIZE *
+          (frontendEnabled && !stackFrontendLogs ? 2 : 1)
       : 0;
     const availableHeight = grid
       ? grid.clientHeight -
@@ -1632,12 +1642,14 @@ export function ProjectDashboardContent({
           : ".wildfly-panel",
     );
     const columnPanels = [
-      frontendEnabled
+      frontendEnabled && !stackFrontendLogs
         ? gridRef.current?.querySelector<HTMLElement>(".frontend-panel")
         : null,
-      gridRef.current?.querySelector<HTMLElement>(
-        showTailLogPanel ? ".tail-log-panel" : ".wildfly-panel",
-      ),
+      stackFrontendLogs
+        ? gridRef.current?.querySelector<HTMLElement>(".frontend-panel")
+        : gridRef.current?.querySelector<HTMLElement>(
+            showTailLogPanel ? ".tail-log-panel" : ".wildfly-panel",
+          ),
       gridRef.current?.querySelector<HTMLElement>(
         showBuildPanels ? ".build-status-panel" : ".python-side-column",
       ),
@@ -1798,6 +1810,7 @@ export function ProjectDashboardContent({
     "--dashboard-column-template": dashboardColumnTemplate(
       layout.columnWidths,
       frontendEnabled,
+      stackFrontendLogs,
     ),
     "--dashboard-row-template": dashboardRowTemplate(layout.topRowHeight),
     "--python-side-row-template": pythonSideRowTemplate(
@@ -1808,7 +1821,7 @@ export function ProjectDashboardContent({
   return (
     <section className="resizable-panel-screen">
       <div
-        className={`dashboard-grid${frontendEnabled ? "" : " frontend-disabled"}${showTailLogPanel ? "" : " tail-disabled"}${showBuildPanels ? "" : " python-layout"}`}
+        className={`dashboard-grid${frontendEnabled ? "" : " frontend-disabled"}${showTailLogPanel ? "" : " tail-disabled"}${showBuildPanels ? "" : " python-layout"}${stackFrontendLogs ? " python-stacked-logs" : ""}`}
         ref={gridRef}
         style={gridStyle}
       >
