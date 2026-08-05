@@ -850,8 +850,7 @@ export class DashboardBackend {
     if (connection.type === "PostgreSQL") {
       let postgresClient: PostgresClient | null = null;
       try {
-        postgresClient = createPostgresClient(connection);
-        await postgresClient.connect();
+        postgresClient = await connectPostgresClient(connection);
         await postgresClient.query("SELECT 1 AS health_check");
         const latency = `${Math.max(1, performance.now() - startedAt).toFixed(1)} ms`;
         return {
@@ -1185,10 +1184,9 @@ export class DashboardBackend {
   private async getPostgresDatabaseMetadata(
     connection: DatabaseConnection,
   ): Promise<DatabaseMetadata> {
-    const postgresClient = createPostgresClient(connection, {
+    const postgresClient = await connectPostgresClient(connection, {
       includeDatabase: true,
     });
-    await postgresClient.connect();
     try {
       const schemaRows = await executePostgresRows(
         postgresClient,
@@ -1455,10 +1453,9 @@ export class DashboardBackend {
     connection: DatabaseConnection,
     collection: DatabaseObjectCollectionName,
   ): Promise<string[]> {
-    const postgresClient = createPostgresClient(connection, {
+    const postgresClient = await connectPostgresClient(connection, {
       includeDatabase: true,
     });
-    await postgresClient.connect();
     try {
       const schemaRows = await executePostgresRows(
         postgresClient,
@@ -1872,9 +1869,8 @@ export class DashboardBackend {
     connection: DatabaseConnection,
     statements: string[],
   ): Promise<DatabaseExecutionBatchResult> {
-    const postgresClient = createPostgresClient(connection);
+    const postgresClient = await connectPostgresClient(connection);
     const results: DatabaseStatementExecutionResult[] = [];
-    await postgresClient.connect();
     try {
       for (const statement of statements) {
         const trimmedStatement = statement.trim();
@@ -5735,14 +5731,19 @@ function normalizeDatabaseConnection(
   connection: DatabaseConnection,
 ): DatabaseConnection {
   const database = connection.database?.trim() ?? "";
+  const explicitSchema = connection.schema?.trim() ?? "";
   const schema =
-    connection.schema?.trim() ||
-    database ||
-    connection.serviceName?.trim() ||
-    connection.sid?.trim() ||
-    connection.networkAlias?.trim() ||
-    connection.connectString?.trim() ||
-    "";
+    connection.type === "PostgreSQL"
+      ? explicitSchema && explicitSchema !== database
+        ? explicitSchema
+        : ""
+      : explicitSchema ||
+        database ||
+        connection.serviceName?.trim() ||
+        connection.sid?.trim() ||
+        connection.networkAlias?.trim() ||
+        connection.connectString?.trim() ||
+        "";
 
   return {
     id: connection.id?.trim() || randomUUID(),
@@ -5927,6 +5928,38 @@ function createPostgresClient(
   return new postgresDriver.Client(
     toPostgresClientOptions(connection, options),
   );
+}
+
+async function connectPostgresClient(
+  connection: DatabaseConnection,
+  options: { includeDatabase?: boolean } = {},
+): Promise<PostgresClient> {
+  const postgresClient = createPostgresClient(connection, options);
+  await postgresClient.connect();
+  await configurePostgresSearchPath(postgresClient, connection);
+  return postgresClient;
+}
+
+async function configurePostgresSearchPath(
+  postgresClient: PostgresClient,
+  connection: DatabaseConnection,
+): Promise<void> {
+  const schema = connection.schema?.trim();
+  if (!schema) {
+    return;
+  }
+
+  const searchPath =
+    schema.toLowerCase() === "public"
+      ? "public"
+      : `${quotePostgresIdentifier(schema)}, public`;
+  await postgresClient.query("SELECT set_config('search_path', $1, false)", [
+    searchPath,
+  ]);
+}
+
+function quotePostgresIdentifier(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
 }
 
 function configurePostgresResultTypeParsers(): void {
