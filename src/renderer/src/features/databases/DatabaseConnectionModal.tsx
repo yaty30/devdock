@@ -27,6 +27,7 @@ type DatabaseConnectionDraft = {
   autoConnect: boolean;
   connectionTimeoutSeconds: string;
   database: string;
+  defaultSchema: string;
   sslMode: DatabaseSslMode;
   sslCaPath: string;
   sslCertPath: string;
@@ -160,6 +161,7 @@ export function DatabaseConnectionModal({
       networkAlias: type === "Oracle" ? current.networkAlias : "",
       role: type === "Oracle" ? current.role : "",
       walletPath: type === "Oracle" ? current.walletPath : "",
+      defaultSchema: type === "PostgreSQL" ? current.defaultSchema : "",
       sslCaPath: type === "PostgreSQL" ? current.sslCaPath : "",
       sslCertPath: type === "PostgreSQL" ? current.sslCertPath : "",
       sslKeyPath: type === "PostgreSQL" ? current.sslKeyPath : "",
@@ -416,16 +418,41 @@ export function DatabaseConnectionModal({
               {draft.type} options
             </h3>
             <div className="database-connection-form-grid">
-              <ConnectionField label="Default database/schema">
-                <input
-                  type="text"
-                  value={draft.database}
-                  placeholder="sakila"
-                  onChange={(event) =>
-                    updateDraft("database", event.target.value)
-                  }
-                />
-              </ConnectionField>
+              {draft.type === "PostgreSQL" ? (
+                <>
+                  <ConnectionField label="Database">
+                    <input
+                      type="text"
+                      value={draft.database}
+                      placeholder="devabsivs"
+                      onChange={(event) =>
+                        updateDraft("database", event.target.value)
+                      }
+                    />
+                  </ConnectionField>
+                  <ConnectionField label="Default schema">
+                    <input
+                      type="text"
+                      value={draft.defaultSchema}
+                      placeholder="email_automation"
+                      onChange={(event) =>
+                        updateDraft("defaultSchema", event.target.value)
+                      }
+                    />
+                  </ConnectionField>
+                </>
+              ) : (
+                <ConnectionField label="Default database/schema">
+                  <input
+                    type="text"
+                    value={draft.database}
+                    placeholder="sakila"
+                    onChange={(event) =>
+                      updateDraft("database", event.target.value)
+                    }
+                  />
+                </ConnectionField>
+              )}
               <ConnectionField label="SSL mode">
                 <AppSelect
                   className="database-form-select"
@@ -696,7 +723,13 @@ function createConnectionDraft(
       connectionTimeoutSeconds: String(
         Math.round((connection.connectionTimeoutMs ?? 10000) / 1000),
       ),
-      database: connection.database ?? connection.schema ?? "",
+      database:
+        connection.database ??
+        (connection.type === "PostgreSQL" ? "" : connection.schema ?? ""),
+      defaultSchema:
+        connection.type === "PostgreSQL"
+          ? getPostgresDefaultSchemaDraft(connection)
+          : "",
       sslMode: connection.sslMode ?? "disabled",
       sslCaPath: connection.sslCaPath ?? "",
       sslCertPath: connection.sslCertPath ?? "",
@@ -726,6 +759,7 @@ function createConnectionDraft(
     autoConnect: false,
     connectionTimeoutSeconds: DEFAULT_CONNECTION_TIMEOUT_SECONDS,
     database: "",
+    defaultSchema: "",
     sslMode: "disabled",
     sslCaPath: "",
     sslCertPath: "",
@@ -738,6 +772,16 @@ function createConnectionDraft(
     role: "",
     walletPath: "",
   };
+}
+
+function getPostgresDefaultSchemaDraft(connection: DatabaseConnection): string {
+  const schema = connection.schema?.trim() ?? "";
+  const database = connection.database?.trim() ?? "";
+  if (!schema || schema === database) {
+    return "";
+  }
+
+  return schema;
 }
 
 function areConnectionDraftsEqual(
@@ -755,6 +799,7 @@ function areConnectionDraftsEqual(
     "autoConnect",
     "connectionTimeoutSeconds",
     "database",
+    "defaultSchema",
     "sslMode",
     "sslCaPath",
     "sslCertPath",
@@ -856,7 +901,7 @@ function createConnectionFromDraft(
             ? draft.networkAlias.trim()
             : draft.serviceName.trim()
       : draft.type === "PostgreSQL"
-        ? draft.database.trim()
+        ? draft.defaultSchema.trim()
         : draft.database.trim();
 
   // TODO: store saved passwords in secure Electron/OS credential storage.

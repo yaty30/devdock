@@ -468,6 +468,16 @@ function normalizeIdentifier(value: string): string {
   return trimmed;
 }
 
+function getInitialSelectedSchema(connection: DatabaseConnection): string {
+  if (connection.type !== "PostgreSQL") {
+    return connection.database || connection.schema || "";
+  }
+
+  const schema = connection.schema?.trim() ?? "";
+  const database = connection.database?.trim() ?? "";
+  return schema && schema !== database ? schema : "";
+}
+
 function quoteSqlIdentifier(
   value: string,
   connectionType: DatabaseConnectionType,
@@ -1104,7 +1114,7 @@ function ConnectionActionWorkspace({
   const [selectedSchemaByConnection, setSelectedSchemaByConnection] = useState<
     Record<string, string>
   >(() => ({
-    [connection.id]: connection.database || connection.schema || "",
+    [connection.id]: getInitialSelectedSchema(connection),
   }));
   const [autoSaveError, setAutoSaveError] = useState<string | null>(null);
   const [loadedWorksheetConnectionIds, setLoadedWorksheetConnectionIds] =
@@ -1143,7 +1153,7 @@ function ConnectionActionWorkspace({
         ? current
         : {
             ...current,
-            [connection.id]: connection.database || connection.schema || "",
+            [connection.id]: getInitialSelectedSchema(connection),
           },
     );
   }, [connection.id]);
@@ -1255,15 +1265,20 @@ function ConnectionActionWorkspace({
 
   const selectedSchema =
     selectedSchemaByConnection[connection.id] ??
-    connection.database ??
-    connection.schema ??
-    "";
+    getInitialSelectedSchema(connection);
   const effectiveConnection = useMemo(
-    () => ({
-      ...connection,
-      schema: selectedSchema || connection.schema,
-      database: selectedSchema || connection.database,
-    }),
+    () =>
+      connection.type === "PostgreSQL"
+        ? {
+            ...connection,
+            schema: selectedSchema,
+            database: connection.database,
+          }
+        : {
+            ...connection,
+            schema: selectedSchema || connection.schema,
+            database: selectedSchema || connection.database,
+          },
     [connection, selectedSchema],
   );
 
